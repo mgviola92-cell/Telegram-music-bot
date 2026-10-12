@@ -6,12 +6,13 @@ Standalone Telegram voice-chat music bot. It is NOT part of the existing Game Bo
 
 - Assistant user account joins an existing group voice chat through PyTgCalls.
 - `/play` as a reply to a Telegram MP3/audio message.
-- `/play https://...` for direct HTTPS audio on explicitly allowed hosts only.
+- `/vplay` as a reply to a Telegram MP4/video message (initial 360p experimental mode).
+- `/play https://...` and `/vplay https://...` for direct HTTPS media on explicitly allowed hosts only.
 - Per-group playback queue, `/queue`, `/skip`, `/pause`, `/resume`, `/stop`.
 - `/start`, `/help`, `/ping` and HTTP `/health` for Render/UptimeRobot.
 - Automatic next track on stream end (best effort); leave when the queue runs out.
 
-Song-title search and arbitrary YouTube/Spotify link handling are not implemented in this first milestone.
+Song-title search and arbitrary YouTube/Spotify link handling are not implemented in this first milestone. The `/vplay` route is not yet verified by a live group-call test.
 
 ## Render deployment
 
@@ -60,6 +61,7 @@ maintenance, resource limits, and restarts can still disconnect the assistant.
 - All code changes and deploys are scoped to this repository and Music Bot Render service.
 - Game Bot code, database, UptimeRobot monitor, and Render service must not be changed.
 - Render Free may restart and its filesystem is ephemeral; queues and temporary audio are in-memory/local only.
-- This MVP limits queued tracks to 10 per group and audio messages to 25 MB.
+- This MVP limits queued tracks to 10 per group and Telegram audio/video messages to 25 MB; video is experimental and limited to one concurrent stream.
+- Video is CPU-intensive; Render Free 0.1 CPU/512 MB cannot guarantee smooth video or multiple concurrent voice chats.
 - Downloaded Telegram files are temporary; use only audio you are authorized to share.
 - No automatic deployment until the new bot credentials are set and manual testing succeeds.

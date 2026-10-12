@@ -224,7 +224,7 @@ async def main() -> None:
             except Exception:
                 log.warning("Could not revoke temporary invite for chat %s", chat_id)
 
-    async def advance(chat_id: int) -> None:
+    async def advance(chat_id: int, progress: Message | None = None) -> None:
         """Caller holds this chat's lock. Moves to next track or leaves VC."""
         player = players[chat_id]
         clean_temp(player.temp_file)
@@ -236,13 +236,22 @@ async def main() -> None:
             local_file = None
             try:
                 source = song.source
-                if song.telegram_file:
+                if song.youtube:
+                    local_file, title = await asyncio.wait_for(
+                        asyncio.to_thread(download_song, source, song.video),
+                        timeout=110,
+                    )
+                    source = local_file
+                    song.title = title
+                elif song.telegram_file:
                     target = str(
                         Path(tempfile.gettempdir())
                         / ("music_" + uuid.uuid4().hex + (".mp4" if song.video else ".mp3"))
                     )
                     local_file = target
-                    downloaded = await bot.download_media(source, file_name=target)
+                    downloaded = await asyncio.wait_for(
+                        bot.download_media(source, file_name=target), timeout=70
+                    )
                     if not downloaded:
                         raise RuntimeError("Telegram audio download failed")
                     local_file = downloaded
@@ -266,19 +275,40 @@ async def main() -> None:
                 player.current = song
                 player.temp_file = local_file
                 player.started_at = time.monotonic()
+                notice = ("🎬 " if song.video else "🎵 ") + "Now playing: " + song.title
                 try:
-                    await bot.send_message(chat_id, ("🎬 " if song.video else "🎵 ") + "Now playing: " + song.title)
+                    if progress:
+                        await progress.edit_text(notice)
+                        progress = None
+                    else:
+                        await bot.send_message(chat_id, notice)
                 except Exception:
-                    log.warning("Could not send now-playing notice to %s", chat_id)
+                    log.warning("Could not announce now playing in chat %s", chat_id)
                 return
-            except Exception:
+            except Exception as exc:
                 clean_temp(local_file)
                 log.exception("Could not play track in chat %s", chat_id)
-                await bot.send_message(
-                    chat_id,
-                    "⚠️ ဒီသီချင်းဖွင့်မရဘူး။ VC ဖွင့်ထားပြီး "
-                    "Assistant Account ကို Group ထဲထည့်ထားလား စစ်ပါ။",
-                )
+                if type(exc).__name__ == "NoActiveGroupCall":
+                    error_message = ("🎙 Group Voice Chat ကို Admin က ဖွင့်ပေးပါ။ "
+                                     "Assistant က /play နဲ့ အလိုအလျောက် ဝင်ပေးမယ်။")
+                elif isinstance(exc, (TimeoutError, asyncio.TimeoutError)):
+                    error_message = ("⚠️ Media Download Timeout ဖြစ်တယ်။ "
+                                     "အခြားသီချင်းနဲ့ ပြန်စမ်းပေးပါ။")
+                elif song.youtube:
+                    error_message = ("⚠️ သီချင်းရှာ/Download လုပ်မရဘူး။ "
+                                     "YouTube က Cloud Server ကို ကန့်သတ်ထားတာလည်း "
+                                     "ဖြစ်နိုင်တယ်။ နောက်တစ်ပုဒ် ပြန်စမ်းပါ။")
+                else:
+                    error_message = ("⚠️ VC သို့မဟုတ် Media Error တက်နေတယ်။ "
+                                     "Group Voice Chat ဖွင့်ထားလား စစ်ပါ။")
+                try:
+                    if progress:
+                        await progress.edit_text(error_message)
+                        progress = None
+                    else:
+                        await bot.send_message(chat_id, error_message)
+                except Exception:
+                    log.warning("Could not announce track error in chat %s", chat_id)
 
         try:
             await calls.leave_call(chat_id)
@@ -289,8 +319,10 @@ async def main() -> None:
     async def help_command(_: Client, msg: Message) -> None:
         await msg.reply_text(
             "🎧 Telegram VC Music Bot\n\n"
-            "Group VC ဖွင့်ပြီး Audio ကို reply လုပ်ကာ /play ရိုက်ပါ။\n"
-            "MP4 Video ကို reply လုပ်ကာ /vplay ရိုက်ပါ။\n"
+            "Group VC ဖွင့်ပြီး /play Faded လို့ သီချင်းနာမည် ရိုက်နိုင်တယ်။\n"
+            "Audio File ကို Reply လုပ်ပြီး /play လည်းရတယ်။\n"
+            "Video အတွက် /vplay <name> (သို့) MP4 reply /vplay သုံးပါ။\n"
+            "Private Group: Music Bot ကို Admin + Invite Users ပေးထားပါ။\n"
             "/play /vplay /queue /skip /pause /resume /stop\n"
             "/ping — bot online ဖြစ်မဖြစ် စစ်မယ်။\n\n"
             "Direct HTTPS audio link တွေအတွက် server-side host allowlist လိုတယ်။"
@@ -325,18 +357,26 @@ async def main() -> None:
             )
             track = Track(str(title)[:100], media.file_id, telegram_file=True, video=video_mode)
         elif len(msg.command) >= 2:
-            url = msg.text.split(maxsplit=1)[1].strip()
-            if not allowed_url(url, allowed_hosts):
-                await msg.reply_text(
-                    "⚠️ ဒီ HTTPS Media Host ကို ခွင့်မပြုထားသေးဘူး။ "
-                    "Telegram Media ကို reply လုပ်ပြီး /play ဒါမှမဟုတ် /vplay ရိုက်နိုင်တယ်။"
-                )
+            query = msg.text.split(maxsplit=1)[1].strip()
+            if not query or len(query) > 120:
+                await msg.reply_text("⚠️ သီချင်းနာမည် 1–120 စာလုံးအတွင်း ထည့်ပေးပါ။")
                 return
-            track = Track("Direct video" if video_mode else "Direct audio", url, video=video_mode)
+            if query.startswith(("https://", "http://")):
+                if is_youtube_url(query):
+                    track = Track("YouTube video" if video_mode else "YouTube audio",
+                                  query, video=video_mode, youtube=True)
+                elif allowed_url(query, allowed_hosts):
+                    track = Track("Direct video" if video_mode else "Direct audio",
+                                  query, video=video_mode)
+                else:
+                    await msg.reply_text("⚠️ YouTube Link သို့မဟုတ် /play <song name> ထည့်ပေးပါ။")
+                    return
+            else:
+                track = Track(query, query, video=video_mode, youtube=True)
         else:
             await msg.reply_text(
-                "🎬 Video ကို reply လုပ်ပြီး /vplay ရိုက်ပါ။"
-                if video_mode else "🎵 Audio ကို reply လုပ်ပြီး /play ရိုက်ပါ။"
+                "🎬 /vplay <video name> သို့မဟုတ် MP4 ကို reply /vplay"
+                if video_mode else "🎵 /play Faded လို့ သီချင်းနာမည် ထည့်ပါ။"
             )
             return
 
@@ -351,34 +391,29 @@ async def main() -> None:
             log.exception("Assistant auto-join failed in chat %s", msg.chat.id)
             await progress.edit_text("⚠️ Assistant Auto Join မရသေးဘူး။ Admin / Invite Settings စစ်ပါ။")
             return
-        try:
-            await progress.delete()
-        except Exception:
-            pass
+        await progress.edit_text("🔎 သီချင်းရှာ/Download လုပ်ပြီး VC ချိတ်နေတယ်...")
         async with player.lock:
             if len(player.queue) >= MAX_QUEUE:
-                await msg.reply_text("⚠️ Queue ပြည့်နေပြီ (10 tracks)။")
+                await progress.edit_text("⚠️ Queue ပြည့်နေပြီ (10 tracks)။")
                 return
             if video_mode and sum(
                 p.current is not None and p.current.video for p in players.values()
             ) >= 1:
-                await msg.reply_text("⚠️ Video Streaming တစ်ခုသာ စမ်းသပ်ခွင့်ပြုထားတယ်။")
+                await progress.edit_text("⚠️ Video Streaming တစ်ခုသာ စမ်းသပ်ခွင့်ပြုထားတယ်။")
                 return
             if player.current is None and sum(
                 p.current is not None for p in players.values()
             ) >= max_groups:
-                await msg.reply_text(
+                await progress.edit_text(
                     "⚠️ လောလောဆယ် VC တွေပြည့်နေပြီ။ နောက်မှထပ်စမ်းပါ။"
                 )
                 return
 
             player.queue.append(track)
             if player.current is None:
-                await advance(msg.chat.id)
+                await advance(msg.chat.id, progress)
             else:
-                await msg.reply_text(
-                    "✅ Queue ထဲထည့်ပြီးပြီ — " + track.title
-                )
+                await progress.edit_text("✅ Queue ထဲထည့်ပြီးပြီ — " + track.title)
 
     @bot.on_message(filters.command("queue") & filters.group)
     async def queue_command(_: Client, msg: Message) -> None:

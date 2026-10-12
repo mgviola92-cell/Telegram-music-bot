@@ -19,7 +19,7 @@ from pyrogram import Client, filters
 from pyrogram.types import Message
 from pytgcalls import PyTgCalls
 from pytgcalls import filters as call_filters
-from pytgcalls.types import StreamEnded
+from pytgcalls.types import AudioQuality, MediaStream, StreamEnded, VideoQuality
 
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO"),
@@ -29,6 +29,7 @@ log = logging.getLogger("telegram_music")
 
 MAX_QUEUE = 10
 MAX_AUDIO_BYTES = 25 * 1024 * 1024
+MAX_VIDEO_BYTES = 25 * 1024 * 1024
 
 
 @dataclass
@@ -36,6 +37,7 @@ class Track:
     title: str
     source: str
     telegram_file: bool = False
+    video: bool = False
 
 
 @dataclass
@@ -118,7 +120,7 @@ async def main() -> None:
                 if song.telegram_file:
                     target = str(
                         Path(tempfile.gettempdir())
-                        / ("music_" + uuid.uuid4().hex + ".mp3")
+                        / ("music_" + uuid.uuid4().hex + (".mp4" if song.video else ".mp3"))
                     )
                     local_file = target
                     downloaded = await bot.download_media(source, file_name=target)
@@ -127,12 +129,26 @@ async def main() -> None:
                     local_file = downloaded
                     source = local_file
 
-                await calls.play(chat_id, source)
+                if song.video:
+                    # Conservative video quality for the initial Render Free test.
+                    stream = MediaStream(
+                        source,
+                        AudioQuality.MEDIUM,
+                        VideoQuality.SD_360p,
+                    )
+                else:
+                    # Never try to create a video camera for audio-only media.
+                    stream = MediaStream(
+                        source,
+                        AudioQuality.HIGH,
+                        video_flags=MediaStream.Flags.IGNORE,
+                    )
+                await calls.play(chat_id, stream)
                 player.current = song
                 player.temp_file = local_file
                 player.started_at = time.monotonic()
                 try:
-                    await bot.send_message(chat_id, "🎵 Now playing: " + song.title)
+                    await bot.send_message(chat_id, ("🎬 " if song.video else "🎵 ") + "Now playing: " + song.title)
                 except Exception:
                     log.warning("Could not send now-playing notice to %s", chat_id)
                 return
@@ -154,8 +170,9 @@ async def main() -> None:
     async def help_command(_: Client, msg: Message) -> None:
         await msg.reply_text(
             "🎧 Telegram VC Music Bot\n\n"
-            "Group VC ဖွင့်ပြီး MP3/Audio message ကို reply လုပ်ကာ /play ရိုက်ပါ။\n"
-            "/play /queue /skip /pause /resume /stop\n"
+            "Group VC ဖွင့်ပြီး Audio ကို reply လုပ်ကာ /play ရိုက်ပါ။\n"
+            "MP4 Video ကို reply လုပ်ကာ /vplay ရိုက်ပါ။\n"
+            "/play /vplay /queue /skip /pause /resume /stop\n"
             "/ping — bot online ဖြစ်မဖြစ် စစ်မယ်။\n\n"
             "Direct HTTPS audio link တွေအတွက် server-side host allowlist လိုတယ်။"
         )
@@ -164,38 +181,55 @@ async def main() -> None:
     async def ping_command(_: Client, msg: Message) -> None:
         await msg.reply_text("🏓 Pong — Music Bot online!")
 
-    @bot.on_message(filters.command("play") & filters.group)
+    @bot.on_message(filters.command(["play", "vplay"]) & filters.group)
     async def play_command(_: Client, msg: Message) -> None:
+        video_mode = msg.command[0].lower() == "vplay"
         replied = msg.reply_to_message
-        media = replied.audio if replied and replied.audio else None
-        if not media and replied and replied.document:
-            doc = replied.document
-            if (doc.mime_type or "").startswith("audio/"):
-                media = doc
+        media = None
+        if replied:
+            media = replied.video if video_mode else replied.audio
+            if not media and replied.document:
+                doc = replied.document
+                allowed_mime = "video/mp4" if video_mode else "audio/"
+                if (doc.mime_type or "").startswith(allowed_mime):
+                    media = doc
 
         if media:
-            if media.file_size and media.file_size > MAX_AUDIO_BYTES:
-                await msg.reply_text("⚠️ 25 MB ထက်ကြီးတဲ့ audio ကို လောလောဆယ် မထောက်ပံ့သေးဘူး။")
+            byte_limit = MAX_VIDEO_BYTES if video_mode else MAX_AUDIO_BYTES
+            if media.file_size and media.file_size > byte_limit:
+                await msg.reply_text("⚠️ လောလောဆယ် 25 MB အောက် Media File ကိုပဲ လက်ခံတယ်။")
                 return
-            title = getattr(media, "title", None) or media.file_name or "Telegram audio"
-            track = Track(str(title)[:100], media.file_id, telegram_file=True)
+            title = (
+                getattr(media, "title", None)
+                or getattr(media, "file_name", None)
+                or ("Telegram video" if video_mode else "Telegram audio")
+            )
+            track = Track(str(title)[:100], media.file_id, telegram_file=True, video=video_mode)
         elif len(msg.command) >= 2:
             url = msg.text.split(maxsplit=1)[1].strip()
             if not allowed_url(url, allowed_hosts):
                 await msg.reply_text(
-                    "⚠️ ဒီ HTTPS audio host ကို ခွင့်မပြုထားသေးဘူး။ "
-                    "Telegram audio ကို reply လုပ်ပြီး /play ရိုက်နိုင်တယ်။"
+                    "⚠️ ဒီ HTTPS Media Host ကို ခွင့်မပြုထားသေးဘူး။ "
+                    "Telegram Media ကို reply လုပ်ပြီး /play ဒါမှမဟုတ် /vplay ရိုက်နိုင်တယ်။"
                 )
                 return
-            track = Track("Direct audio stream", url)
+            track = Track("Direct video" if video_mode else "Direct audio", url, video=video_mode)
         else:
-            await msg.reply_text("🎵 Audio message ကို reply လုပ်ပြီး /play ရိုက်ပါ။")
+            await msg.reply_text(
+                "🎬 Video ကို reply လုပ်ပြီး /vplay ရိုက်ပါ။"
+                if video_mode else "🎵 Audio ကို reply လုပ်ပြီး /play ရိုက်ပါ။"
+            )
             return
 
         player = players[msg.chat.id]
         async with player.lock:
             if len(player.queue) >= MAX_QUEUE:
                 await msg.reply_text("⚠️ Queue ပြည့်နေပြီ (10 tracks)။")
+                return
+            if video_mode and sum(
+                p.current is not None and p.current.video for p in players.values()
+            ) >= 1:
+                await msg.reply_text("⚠️ Video Streaming တစ်ခုသာ စမ်းသပ်ခွင့်ပြုထားတယ်။")
                 return
             if player.current is None and sum(
                 p.current is not None for p in players.values()
@@ -269,6 +303,10 @@ async def main() -> None:
         if player is None:
             return
         async with player.lock:
+            # The video track can produce separate audio/video end events.
+            # Move queue only for the audio stream to avoid double-advance.
+            if update.stream_type != StreamEnded.Type.AUDIO:
+                return
             # Ignore delayed end events caused by replacing a stream.
             if player.current and time.monotonic() - player.started_at >= 2:
                 await advance(update.chat_id)

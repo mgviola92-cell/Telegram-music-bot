@@ -6,6 +6,7 @@ Secrets must be configured as Render environment variables.
 import asyncio
 import logging
 import os
+import shutil
 import tempfile
 import time
 import uuid
@@ -30,6 +31,8 @@ log = logging.getLogger("telegram_music")
 MAX_QUEUE = 10
 MAX_AUDIO_BYTES = 25 * 1024 * 1024
 MAX_VIDEO_BYTES = 25 * 1024 * 1024
+MAX_YOUTUBE_BYTES = 40 * 1024 * 1024
+MAX_MEDIA_SECONDS = 600
 
 
 @dataclass
@@ -38,6 +41,7 @@ class Track:
     source: str
     telegram_file: bool = False
     video: bool = False
+    youtube: bool = False
 
 
 @dataclass
@@ -52,7 +56,12 @@ class Player:
 def clean_temp(path: str | None) -> None:
     if path:
         try:
-            Path(path).unlink(missing_ok=True)
+            p = Path(path)
+            temp_root = Path(tempfile.gettempdir())
+            if p.parent.parent == temp_root and p.parent.name.startswith("mudyar_media_"):
+                shutil.rmtree(p.parent, ignore_errors=True)
+            else:
+                p.unlink(missing_ok=True)
         except OSError:
             log.warning("Temporary audio file cleanup failed")
 
@@ -70,6 +79,72 @@ def allowed_url(value: str, allowed_hosts: set[str]) -> bool:
         )
     except ValueError:
         return False
+
+
+def is_youtube_url(value: str) -> bool:
+    """Only video URLs from known YouTube domains may reach yt-dlp."""
+    try:
+        parsed = urlsplit(value)
+        return (
+            parsed.scheme == "https"
+            and not parsed.username
+            and not parsed.password
+            and (parsed.hostname or "").lower() in {
+                "youtube.com", "www.youtube.com", "music.youtube.com",
+                "m.youtube.com", "youtu.be",
+            }
+        )
+    except ValueError:
+        return False
+
+
+def download_song(query: str, video: bool) -> tuple[str, str]:
+    """Search and download a single item in a worker thread."""
+    from yt_dlp import YoutubeDL
+
+    directory = Path(tempfile.mkdtemp(prefix="mudyar_media_"))
+    target = query if is_youtube_url(query) else "ytsearch1:" + query
+    opts = {
+        "format": (
+            "best[ext=mp4][height<=360]/best[height<=360]/best[ext=mp4]"
+            if video else "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio"
+        ),
+        "outtmpl": str(directory / "%(id)s.%(ext)s"),
+        "noplaylist": True,
+        "quiet": True,
+        "no_warnings": True,
+        "socket_timeout": 12,
+        "retries": 1,
+        "fragment_retries": 1,
+        "max_filesize": MAX_YOUTUBE_BYTES,
+        "extract_flat": False,
+    }
+    try:
+        with YoutubeDL(opts) as downloader:
+            result = downloader.extract_info(target, download=True)
+        if not result:
+            raise ValueError("No playable search result")
+        if result.get("_type") == "playlist":
+            entries = [entry for entry in result.get("entries", []) if entry]
+            if not entries:
+                raise ValueError("No playable search result")
+            result = entries[0]
+        duration = result.get("duration")
+        if duration is not None and float(duration) > MAX_MEDIA_SECONDS:
+            raise ValueError("Track exceeds the 10-minute limit")
+        files = [
+            p for p in directory.iterdir()
+            if p.is_file() and not p.name.endswith((".part", ".ytdl"))
+        ]
+        if not files:
+            raise ValueError("No downloaded media file")
+        media_path = max(files, key=lambda p: p.stat().st_size)
+        if media_path.stat().st_size > MAX_YOUTUBE_BYTES:
+            raise ValueError("Track exceeds the 40 MB limit")
+        return str(media_path), str(result.get("title") or query)[:100]
+    except Exception:
+        shutil.rmtree(directory, ignore_errors=True)
+        raise
 
 
 async def main() -> None:

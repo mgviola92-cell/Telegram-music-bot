@@ -1,0 +1,2 @@
+py-tgcalls[pyrogram]==2.3.3
+aiohttp>=3.10,<4

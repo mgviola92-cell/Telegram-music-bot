@@ -16,4 +16,4 @@ jobs:
       - name: Install music dependencies
         run: python -m pip install -r requirements.txt
       - name: Verify PyTgCalls / Pyrogram compatibility
-        run: python -c "from pyrogram.errors import GroupcallForbidden; from pytgcalls import PyTgCalls; from pytgcalls.types import MediaStream, StreamEnded, GroupCallConfig; from yt_dlp import YoutubeDL; from main import is_youtube_url; assert is_youtube_url(\u0027https://www.youtube.com/watch?v=demo\u0027) and not is_youtube_url(\u0027http://127.0.0.1/test\u0027)"
+        run: python -c "from pyrogram.errors import GroupcallForbidden; from pytgcalls import PyTgCalls; from pytgcalls.types import MediaStream, StreamEnded, GroupCallConfig; from yt_dlp import YoutubeDL; from main import is_youtube_url; assert is_youtube_url('https://www.youtube.com/watch?v=demo') and not is_youtube_url('http://127.0.0.1/test')"

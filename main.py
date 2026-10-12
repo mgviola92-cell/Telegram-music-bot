@@ -19,7 +19,7 @@ from pyrogram import Client, filters
 from pyrogram.types import Message
 from pytgcalls import PyTgCalls
 from pytgcalls import filters as call_filters
-from pytgcalls.types import AudioQuality, MediaStream, StreamEnded, VideoQuality
+from pytgcalls.types import AudioQuality, GroupCallConfig, MediaStream, StreamEnded, VideoQuality
 
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO"),
@@ -105,6 +105,50 @@ async def main() -> None:
     )
     calls = PyTgCalls(assistant, workers=2)
 
+    async def ensure_assistant_in_group(chat: object) -> None:
+        """Join automatically. Private groups need bot admin + invite rights."""
+        chat_id = chat.id
+        try:
+            await assistant.get_chat_member(chat_id, "me")
+            return
+        except Exception:
+            pass
+        # Public groups can be joined by their public username.
+        username = getattr(chat, "username", None)
+        if username:
+            try:
+                await assistant.join_chat(username)
+                await assistant.get_chat_member(chat_id, "me")
+                return
+            except Exception:
+                log.info("Assistant public join failed for chat %s", chat_id)
+
+        # Create a one-use link without revoking the group's main invite link.
+        try:
+            invite = await bot.create_chat_invite_link(
+                chat_id, name="Mudyar Music Assistant", member_limit=1
+            )
+        except Exception as exc:
+            log.warning("Assistant invite unavailable: %s", type(exc).__name__)
+            raise RuntimeError(
+                "Private Group မှာ Music Bot ကို Admin + Invite Users permission "
+                "ပေးပါ။ ပြီးရင် /play ပြန်စမ်းပါ။"
+            ) from exc
+        try:
+            await assistant.join_chat(invite.invite_link)
+            await assistant.get_chat_member(chat_id, "me")
+        except Exception as exc:
+            log.warning("Assistant join failed: %s", type(exc).__name__)
+            raise RuntimeError(
+                "Assistant Auto Join မရသေးဘူး။ Group Join Restriction "
+                "နဲ့ Ban Settings စစ်ပါ။"
+            ) from exc
+        finally:
+            try:
+                await bot.revoke_chat_invite_link(chat_id, invite.invite_link)
+            except Exception:
+                log.warning("Could not revoke temporary invite for chat %s", chat_id)
+
     async def advance(chat_id: int) -> None:
         """Caller holds this chat's lock. Moves to next track or leaves VC."""
         player = players[chat_id]
@@ -143,7 +187,7 @@ async def main() -> None:
                         AudioQuality.HIGH,
                         video_flags=MediaStream.Flags.IGNORE,
                     )
-                await calls.play(chat_id, stream)
+                await calls.play(chat_id, stream, GroupCallConfig(auto_start=False))
                 player.current = song
                 player.temp_file = local_file
                 player.started_at = time.monotonic()
@@ -222,6 +266,20 @@ async def main() -> None:
             return
 
         player = players[msg.chat.id]
+        progress = await msg.reply_text("⏳ Assistant အလိုအလျောက်ဝင်ပြီး VC ချိတ်နေတယ်...")
+        try:
+            await ensure_assistant_in_group(msg.chat)
+        except RuntimeError as exc:
+            await progress.edit_text("⚠️ " + str(exc))
+            return
+        except Exception:
+            log.exception("Assistant auto-join failed in chat %s", msg.chat.id)
+            await progress.edit_text("⚠️ Assistant Auto Join မရသေးဘူး။ Admin / Invite Settings စစ်ပါ။")
+            return
+        try:
+            await progress.delete()
+        except Exception:
+            pass
         async with player.lock:
             if len(player.queue) >= MAX_QUEUE:
                 await msg.reply_text("⚠️ Queue ပြည့်နေပြီ (10 tracks)။")
@@ -328,6 +386,10 @@ async def main() -> None:
 
     try:
         await calls.start()  # Starts the assistant MTProto client.
+        identity = await assistant.get_me()
+        if identity.is_bot:
+            raise RuntimeError("SESSION_STRING is a bot session, not a user session.")
+        log.info("Assistant session verified: user account")
         await bot.start()
         ready = True
         log.info("Music Bot started; maximum active voice chats: %s", max_groups)

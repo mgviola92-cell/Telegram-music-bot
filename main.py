@@ -93,7 +93,6 @@ async def main() -> None:
         api_hash=api_hash,
         session_string=os.environ["SESSION_STRING"],
         in_memory=True,
-        no_updates=True,
     )
     bot = Client(
         "music_bot",
@@ -102,7 +101,7 @@ async def main() -> None:
         bot_token=os.environ["BOT_TOKEN"],
         in_memory=True,
     )
-    calls = PyTgCalls(assistant)
+    calls = PyTgCalls(assistant, workers=2)
 
     async def advance(chat_id: int) -> None:
         """Caller holds this chat's lock. Moves to next track or leaves VC."""
@@ -121,16 +120,21 @@ async def main() -> None:
                         Path(tempfile.gettempdir())
                         / ("music_" + uuid.uuid4().hex + ".mp3")
                     )
-                    local_file = await bot.download_media(source, file_name=target)
-                    if not local_file:
+                    local_file = target
+                    downloaded = await bot.download_media(source, file_name=target)
+                    if not downloaded:
                         raise RuntimeError("Telegram audio download failed")
+                    local_file = downloaded
                     source = local_file
 
                 await calls.play(chat_id, source)
                 player.current = song
                 player.temp_file = local_file
                 player.started_at = time.monotonic()
-                await bot.send_message(chat_id, "🎵 Now playing: " + song.title)
+                try:
+                    await bot.send_message(chat_id, "🎵 Now playing: " + song.title)
+                except Exception:
+                    log.warning("Could not send now-playing notice to %s", chat_id)
                 return
             except Exception:
                 clean_temp(local_file)

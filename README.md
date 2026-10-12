@@ -4,15 +4,16 @@ Standalone Telegram voice-chat music bot. It is NOT part of the existing Game Bo
 
 ## MVP capabilities
 
-- Assistant user account joins an existing group voice chat through PyTgCalls.
-- `/play` as a reply to a Telegram MP3/audio message.
-- `/vplay` as a reply to a Telegram MP4/video message (initial 360p experimental mode).
+- Assistant user account automatically joins the group on the first /play request when allowed by chat permissions.
+- `/play Alan Walker Faded` searches and attempts to play a track (YouTube/yt-dlp).
+- `/vplay <title>` searches for a video (experimental 360p).
+- Reply to a Telegram audio message with `/play`, or a Telegram MP4/video message with `/vplay`.
 - `/play https://...` and `/vplay https://...` for direct HTTPS media on explicitly allowed hosts only.
 - Per-group playback queue, `/queue`, `/skip`, `/pause`, `/resume`, `/stop`.
 - `/start`, `/help`, `/ping` and HTTP `/health` for Render/UptimeRobot.
 - Automatic next track on stream end (best effort); leave when the queue runs out.
 
-Song-title search and arbitrary YouTube/Spotify link handling are not implemented in this first milestone. The `/vplay` route is not yet verified by a live group-call test.
+Song-title search and YouTube links are experimental and may fail when YouTube restricts cloud-server IP addresses or requires additional JavaScript support. Spotify direct playback is not implemented. Real voice/video playback has not yet been verified by a live test; passing Python syntax checks does not confirm playback.
 
 ## Render deployment
 
@@ -38,8 +39,15 @@ Optional variables:
 
 ### Assistant session
 
-The Assistant Telegram account must be a member of each group where music is requested.
-It must have permission to join/speak in the active voice chat.
+You do NOT need to add your assistant account manually to every group.
+When a group member requests `/play`, the bot attempts to join the assistant account to that group automatically.
+For a public group with a username, the assistant tries joining by username.
+For a private group, make the music bot an administrator with **Invite Users** permission: it will create a one-use, temporary link for the assistant, join the assistant, and revoke that link.
+If an assistant is banned or user auto-join is restricted, a group administrator must adjust those settings.
+
+Telegram group Voice Chat must already be active; the bot cannot use bot-only API methods to create a call.
+An administrator starts the Voice Chat. The assistant then joins the call automatically when `/play` succeeds.
+If the bot has no invite permission in a private group, it explains what setting is missing.
 
 Create its session string on your own local computer (never inside GitHub):
 
@@ -63,5 +71,6 @@ maintenance, resource limits, and restarts can still disconnect the assistant.
 - Render Free may restart and its filesystem is ephemeral; queues and temporary audio are in-memory/local only.
 - This MVP limits queued tracks to 10 per group and Telegram audio/video messages to 25 MB; video is experimental and limited to one concurrent stream.
 - Video is CPU-intensive; Render Free 0.1 CPU/512 MB cannot guarantee smooth video or multiple concurrent voice chats.
-- Downloaded Telegram files are temporary; use only audio you are authorized to share.
-- No automatic deployment until the new bot credentials are set and manual testing succeeds.
+- Downloaded Telegram and YouTube files are temporary. Only share media you have permission to play.
+- No automatic deploy: commits are deployed manually after GitHub workflow checks, and then VC is tested with users.
+- The default `MAX_ACTIVE_GROUPS=2` is a test cap, not evidence of stable concurrent streaming.

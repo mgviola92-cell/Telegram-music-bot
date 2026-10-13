@@ -948,7 +948,12 @@ async def main() -> None:
         if not await is_chat_admin(chat_id, cb.from_user.id if cb.from_user else None):
             await cb.answer("🛡 Group Admin တွေကပဲ Control နှိပ်နိုင်တယ်။", show_alert=True)
             return
-        # A cancelable child ensures a new /stop does not poison bot handlers.
+        # Answer promptly; music downloads or reconnection may last >30 seconds.
+        # Calling cb.answer() after that makes Telegram return QUERY_ID_INVALID.
+        try:
+            await cb.answer("⏳ " + action.title())
+        except Exception as exc:
+            log.info("Player callback acknowledgement expired: %s", type(exc).__name__)
         if action == "stop":
             cancel_active_loading(player)
             async with player.lock:
@@ -964,11 +969,9 @@ async def main() -> None:
                     await asyncio.wait_for(calls.leave_call(chat_id), timeout=12)
                 except Exception as exc:
                     log.info("Button stop leave status %s: %s", chat_id, type(exc).__name__)
-            await cb.answer("⏹ Stopped.")
             return
         async with player.lock:
             if player.current is None:
-                await cb.answer("သီချင်း မဖွင့်ထားဘူး။", show_alert=True)
                 return
             try:
                 if action == "pause":
@@ -983,13 +986,14 @@ async def main() -> None:
                     await asyncio.create_task(advance(chat_id))
                 await update_player_panel(chat_id, player)
             except asyncio.CancelledError:
-                await cb.answer("⏹ Cancelled.")
                 return
             except Exception as exc:
                 log.warning("Panel %s failed in chat %s: %s", action, chat_id, type(exc).__name__)
-                await cb.answer("⚠️ VC Control မအောင်မြင်ဘူး။", show_alert=True)
+                try:
+                    await bot.send_message(chat_id, "⚠️ VC Control မအောင်မြင်ဘူး။ /play ပြန်စမ်းပါ။")
+                except Exception:
+                    pass
                 return
-        await cb.answer("✅ " + action.title())
 
     @calls.on_update(call_filters.stream_end())
     async def stream_end(_: PyTgCalls, update: StreamEnded) -> None:

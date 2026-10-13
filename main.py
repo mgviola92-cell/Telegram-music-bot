@@ -154,13 +154,45 @@ async def download_bot_api_file(
         ) from None
 
 
-def soundcloud_results(query: str, max_tracks: int = 6) -> list[str]:
-    """Retrieve several SoundCloud search results without downloading them.
+def suitable_recording(title: str, query: str, artist: str = "") -> bool:
+    """Avoid playing covers/remixes instead of the requested original.
 
-    A single first match is often DRM-protected. Never bypass DRM; simply
-    try other publicly playable matches and reveal the actual title.
+    This heuristic cannot verify recording ownership or a music license.
+    It only rejects obviously altered or unrelated uploads.
+    """
+    import re
+
+    terms = set(re.findall(r"[a-z0-9]+", query.casefold()))
+    title_words = set(re.findall(r"[a-z0-9]+", title.casefold()))
+    artist_words = set(re.findall(r"[a-z0-9]+", artist.casefold()))
+    variant_terms = {
+        "cover", "reverb", "slowed", "remix", "nightcore", "karaoke",
+        "instrumental", "acoustic", "sped", "lofi", "mashup", "bootleg",
+        "unofficial", "piano", "8d", "chopped",
+    }
+    variants = variant_terms & title_words
+    if variants - terms:
+        return False
+    if "live" in title_words and "live" not in terms:
+        return False
+    if "bass boosted" in title.casefold() and "bass" not in terms:
+        return False
+    # With an artist and title supplied, require most query keywords.
+    # For short ambiguous queries such as "baby", no identity guarantee.
+    if len(terms) >= 2:
+        matched = terms & (title_words | artist_words)
+        return len(matched) >= max(2, len(terms) - 1)
+    return True
+
+
+def soundcloud_results(query: str, max_tracks: int = 6) -> list[str]:
+    """Rank several publicly playable SoundCloud matches, skipping variants.
+
+    A track not labelled remix/cover is not necessarily the original; show
+    the real source/title and avoid claiming otherwise.
     """
     from yt_dlp import YoutubeDL
+    import re
 
     opts = {
         "quiet": True,
@@ -178,13 +210,14 @@ def soundcloud_results(query: str, max_tracks: int = 6) -> list[str]:
         log.warning("SoundCloud search unavailable: %s", type(exc).__name__)
         return []
 
-    import re
-    words = set(re.findall(r"[\\w]+", query.casefold()))
+    words = set(re.findall(r"[a-z0-9]+", query.casefold()))
     ranked = sorted(
         enumerate(entries),
         key=lambda pair: (
             -len(words & set(re.findall(
-                r"[\\w]+", str((pair[1] or {}).get("title") or "").casefold()
+                r"[a-z0-9]+",
+                (str((pair[1] or {}).get("title") or "") + " " +
+                 str((pair[1] or {}).get("uploader") or "")).casefold(),
             ))),
             pair[0],
         ),
@@ -192,6 +225,10 @@ def soundcloud_results(query: str, max_tracks: int = 6) -> list[str]:
     urls: list[str] = []
     for _, entry in ranked:
         if not isinstance(entry, dict) or entry.get("is_drm"):
+            continue
+        title = str(entry.get("title") or "")
+        artist = str(entry.get("uploader") or "")
+        if not suitable_recording(title, query, artist):
             continue
         link = entry.get("webpage_url") or entry.get("url")
         if not isinstance(link, str):
@@ -207,7 +244,6 @@ def soundcloud_results(query: str, max_tracks: int = 6) -> list[str]:
         if len(urls) >= max_tracks:
             break
     return urls
-
 
 def download_song(query: str, video: bool) -> tuple[str, str]:
     """Download a playable candidate; SoundCloud handles audio-search fallback."""
@@ -265,6 +301,10 @@ def download_song(query: str, video: bool) -> tuple[str, str]:
             if media_path.stat().st_size > MAX_YOUTUBE_BYTES:
                 raise ValueError("Track exceeds the 40 MB limit")
             title = str(result.get("title") or query)[:85]
+            if not video and not is_youtube_url(query) and not suitable_recording(
+                title, query, str(result.get("uploader") or "")
+            ):
+                raise ValueError("Non-matching or altered recording")
             log.info("Resolved music through %s (track title may differ from query)", provider)
             return str(media_path), f"{title} · {provider}"
         except Exception as exc:

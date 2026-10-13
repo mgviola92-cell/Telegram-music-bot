@@ -8,6 +8,7 @@ import logging
 import os
 import shutil
 import tempfile
+import threading
 import time
 import uuid
 from collections import defaultdict, deque
@@ -51,6 +52,19 @@ class Player:
     temp_file: str | None = None
     started_at: float = 0.0
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    loading_task: asyncio.Task | None = None
+    cancel_download: threading.Event | None = None
+
+
+def cancel_active_loading(player: Player) -> bool:
+    """Let /stop interrupt the loader before waiting on its chat lock."""
+    if player.cancel_download is not None:
+        player.cancel_download.set()
+    task = player.loading_task
+    if task is not None and not task.done() and task is not asyncio.current_task():
+        task.cancel()
+        return True
+    return False
 
 
 def clean_temp(path: str | None) -> None:
@@ -185,7 +199,7 @@ def suitable_recording(title: str, query: str, artist: str = "") -> bool:
     return True
 
 
-def soundcloud_results(query: str, max_tracks: int = 6) -> list[str]:
+def soundcloud_results(query: str, max_tracks: int = 6, cancel_signal: threading.Event | None = None) -> list[str]:
     """Rank several publicly playable SoundCloud matches, skipping variants.
 
     A track not labelled remix/cover is not necessarily the original; show
@@ -203,9 +217,13 @@ def soundcloud_results(query: str, max_tracks: int = 6) -> list[str]:
         "retries": 0,
     }
     try:
+        if cancel_signal is not None and cancel_signal.is_set():
+            return []
         with YoutubeDL(opts) as searcher:
             result = searcher.extract_info("scsearch10:" + query, download=False)
             entries = list((result or {}).get("entries") or [])
+        if cancel_signal is not None and cancel_signal.is_set():
+            return []
     except Exception as exc:
         log.warning("SoundCloud search unavailable: %s", type(exc).__name__)
         return []
@@ -245,7 +263,7 @@ def soundcloud_results(query: str, max_tracks: int = 6) -> list[str]:
             break
     return urls
 
-def download_song(query: str, video: bool) -> tuple[str, str]:
+def download_song(query: str, video: bool, cancel_signal: threading.Event | None = None) -> tuple[str, str]:
     """Download a playable candidate; SoundCloud handles audio-search fallback."""
     from yt_dlp import YoutubeDL
 
@@ -255,12 +273,17 @@ def download_song(query: str, video: bool) -> tuple[str, str]:
         candidates = [("YouTube", "ytsearch1:" + query)]
     else:
         candidates = [
-            ("SoundCloud", url) for url in soundcloud_results(query)
+            ("SoundCloud", url) for url in soundcloud_results(query, cancel_signal=cancel_signal)
         ]
         candidates.append(("YouTube", "ytsearch1:" + query))
 
+    def abort_if_stopped(_: dict | None = None) -> None:
+        if cancel_signal is not None and cancel_signal.is_set():
+            raise InterruptedError("Download cancelled by stop")
+
     failures: list[str] = []
     for provider, target in candidates:
+        abort_if_stopped()
         directory = Path(tempfile.mkdtemp(prefix="mudyar_media_"))
         opts = {
             "format": (
@@ -272,6 +295,8 @@ def download_song(query: str, video: bool) -> tuple[str, str]:
             "playlist_items": "1",
             "quiet": True,
             "no_warnings": True,
+            "noprogress": True,
+            "progress_hooks": [abort_if_stopped],
             "socket_timeout": 10,
             "retries": 0,
             "fragment_retries": 0,
@@ -280,6 +305,7 @@ def download_song(query: str, video: bool) -> tuple[str, str]:
         try:
             with YoutubeDL(opts) as downloader:
                 result = downloader.extract_info(target, download=True)
+            abort_if_stopped()
             if not result:
                 raise ValueError("No playable result")
             if result.get("_type") == "playlist":
@@ -309,6 +335,7 @@ def download_song(query: str, video: bool) -> tuple[str, str]:
             return str(media_path), f"{title} · {provider}"
         except Exception as exc:
             shutil.rmtree(directory, ignore_errors=True)
+            abort_if_stopped()
             failures.append(provider)
             log.warning(
                 "Audio source %s candidate unavailable (%s): %s",

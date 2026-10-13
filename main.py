@@ -424,118 +424,142 @@ async def main() -> None:
     async def advance(chat_id: int, progress: Message | None = None) -> None:
         """Caller holds this chat's lock. Moves to next track or leaves VC."""
         player = players[chat_id]
-        clean_temp(player.temp_file)
-        player.temp_file = None
-        player.current = None
-
-        while player.queue:
-            song: Track = player.queue.popleft()
-            local_file = None
-            try:
-                source = song.source
-                if song.youtube:
-                    local_file, title = await asyncio.wait_for(
-                        asyncio.to_thread(download_song, source, song.video),
-                        timeout=110,
-                    )
-                    source = local_file
-                    song.title = title
-                elif song.telegram_file:
-                    target = str(
-                        Path(tempfile.gettempdir())
-                        / ("music_" + uuid.uuid4().hex + (".mp4" if song.video else ".mp3"))
-                    )
-                    local_file = target
-                    try:
-                        downloaded = await download_bot_api_file(
-                            source, target,
-                            MAX_VIDEO_BYTES if song.video else MAX_AUDIO_BYTES,
-                            os.environ["BOT_TOKEN"],
-                        )
-                        log.info("Telegram media downloaded via HTTPS Bot API in chat %s", chat_id)
-                    except RuntimeError as exc:
-                        log.warning(
-                            "Bot API media fetch unavailable in chat %s (%s); "
-                            "trying MTProto with short timeout",
-                            chat_id, type(exc).__name__,
-                        )
-                        Path(target).unlink(missing_ok=True)
-                        try:
-                            downloaded = await asyncio.wait_for(
-                                bot.download_media(source, file_name=target), timeout=25
-                            )
-                        except Exception as mtproto_exc:
-                            raise RuntimeError(
-                                "Telegram HTTPS and MTProto downloads both unavailable "
-                                f"({type(mtproto_exc).__name__})"
-                            ) from None
-                    if not downloaded:
-                        raise RuntimeError("Telegram file download returned no media")
-                    local_file = downloaded
-                    source = local_file
-
-                if song.video:
-                    # Conservative video quality for the initial Render Free test.
-                    stream = MediaStream(
-                        source,
-                        AudioQuality.MEDIUM,
-                        VideoQuality.SD_360p,
-                    )
-                else:
-                    # Never try to create a video camera for audio-only media.
-                    stream = MediaStream(
-                        source,
-                        AudioQuality.HIGH,
-                        video_flags=MediaStream.Flags.IGNORE,
-                    )
-                await calls.play(chat_id, stream, GroupCallConfig(auto_start=False))
-                player.current = song
-                player.temp_file = local_file
-                player.started_at = time.monotonic()
-                notice = ("🎬 " if song.video else "🎵 ") + "Now playing: " + song.title
-                try:
-                    if progress:
-                        await progress.edit_text(notice)
-                        progress = None
-                    else:
-                        await bot.send_message(chat_id, notice)
-                except Exception:
-                    log.warning("Could not announce now playing in chat %s", chat_id)
-                return
-            except Exception as exc:
-                clean_temp(local_file)
-                log.exception("Could not play track in chat %s", chat_id)
-                if type(exc).__name__ == "NoActiveGroupCall":
-                    error_message = ("🎙 Group Voice Chat ကို Admin က ဖွင့်ပေးပါ။ "
-                                     "Assistant က /play နဲ့ အလိုအလျောက် ဝင်ပေးမယ်။")
-                elif isinstance(exc, (TimeoutError, asyncio.TimeoutError)) or (
-                    song.telegram_file and "download" in str(exc).lower()
-                ):
-                    error_message = ("⚠️ Telegram Media Download မအောင်မြင်ဘူး။ "
-                                     "HTTPS Bot API နဲ့ MTProto နှစ်ခုစလုံးမရနိုင်တာပါ။ "
-                                     "နောက်မှ ပြန်စမ်းပေးပါ။")
-                elif song.youtube:
-                    error_message = ("⚠️ Music source တွေက ဒီသီချင်းကို Download "
-                                     "မပေးနိုင်သေးဘူး။ YouTube Login Check "
-                                     "သို့မဟုတ် SoundCloud Access Error ဖြစ်နိုင်တယ်။ "
-                                     "အခြားသီချင်း၊ သို့မဟုတ် Audio File ကို "
-                                     "Reply လုပ်ပြီး /play စမ်းပါ။")
-                else:
-                    error_message = ("⚠️ VC သို့မဟုတ် Media Error တက်နေတယ်။ "
-                                     "Group Voice Chat ဖွင့်ထားလား စစ်ပါ။")
-                try:
-                    if progress:
-                        await progress.edit_text(error_message)
-                        progress = None
-                    else:
-                        await bot.send_message(chat_id, error_message)
-                except Exception:
-                    log.warning("Could not announce track error in chat %s", chat_id)
-
+        task = asyncio.current_task()
+        player.loading_task = task
+        cancel_signal = threading.Event()
+        player.cancel_download = cancel_signal
         try:
-            await calls.leave_call(chat_id)
-        except Exception:
-            pass  # It may already have left or never joined the call.
+            clean_temp(player.temp_file)
+            player.temp_file = None
+            player.current = None
+
+            while player.queue:
+                song: Track = player.queue.popleft()
+                local_file = None
+                try:
+                    source = song.source
+                    if song.youtube:
+                        local_file, title = await asyncio.wait_for(
+                            asyncio.to_thread(download_song, source, song.video, cancel_signal),
+                            timeout=110,
+                        )
+                        if cancel_signal.is_set():
+                            clean_temp(local_file)
+                            return
+                        source = local_file
+                        song.title = title
+                    elif song.telegram_file:
+                        target = str(
+                            Path(tempfile.gettempdir())
+                            / ("music_" + uuid.uuid4().hex + (".mp4" if song.video else ".mp3"))
+                        )
+                        local_file = target
+                        try:
+                            downloaded = await download_bot_api_file(
+                                source, target,
+                                MAX_VIDEO_BYTES if song.video else MAX_AUDIO_BYTES,
+                                os.environ["BOT_TOKEN"],
+                            )
+                            log.info("Telegram media downloaded via HTTPS Bot API in chat %s", chat_id)
+                        except RuntimeError as exc:
+                            log.warning(
+                                "Bot API media fetch unavailable in chat %s (%s); "
+                                "trying MTProto with short timeout",
+                                chat_id, type(exc).__name__,
+                            )
+                            Path(target).unlink(missing_ok=True)
+                            try:
+                                downloaded = await asyncio.wait_for(
+                                    bot.download_media(source, file_name=target), timeout=25
+                                )
+                            except Exception as mtproto_exc:
+                                raise RuntimeError(
+                                    "Telegram HTTPS and MTProto downloads both unavailable "
+                                    f"({type(mtproto_exc).__name__})"
+                                ) from None
+                        if not downloaded:
+                            raise RuntimeError("Telegram file download returned no media")
+                        local_file = downloaded
+                        source = local_file
+
+                    if song.video:
+                        # Conservative video quality for the initial Render Free test.
+                        stream = MediaStream(
+                            source,
+                            AudioQuality.MEDIUM,
+                            VideoQuality.SD_360p,
+                        )
+                    else:
+                        # Never try to create a video camera for audio-only media.
+                        stream = MediaStream(
+                            source,
+                            AudioQuality.HIGH,
+                            video_flags=MediaStream.Flags.IGNORE,
+                        )
+                    if cancel_signal.is_set():
+                        raise asyncio.CancelledError()
+                    log.info("VC play requested chat %s", chat_id)
+                    await asyncio.wait_for(
+                        calls.play(chat_id, stream, GroupCallConfig(auto_start=False)),
+                        timeout=45,
+                    )
+                    log.info("VC play success chat %s", chat_id)
+                    player.current = song
+                    player.temp_file = local_file
+                    player.started_at = time.monotonic()
+                    notice = ("🎬 " if song.video else "🎵 ") + "Now playing: " + song.title
+                    try:
+                        if progress:
+                            await progress.edit_text(notice)
+                            progress = None
+                        else:
+                            await bot.send_message(chat_id, notice)
+                    except Exception:
+                        log.warning("Could not announce now playing in chat %s", chat_id)
+                    return
+                except asyncio.CancelledError:
+                    cancel_signal.set()
+                    clean_temp(local_file)
+                    log.info("Playback loading canceled chat %s", chat_id)
+                    raise
+                except Exception as exc:
+                    clean_temp(local_file)
+                    log.exception("Could not play track in chat %s", chat_id)
+                    if type(exc).__name__ == "NoActiveGroupCall":
+                        error_message = ("🎙 Group Voice Chat ကို Admin က ဖွင့်ပေးပါ။ "
+                                         "Assistant က /play နဲ့ အလိုအလျောက် ဝင်ပေးမယ်။")
+                    elif isinstance(exc, (TimeoutError, asyncio.TimeoutError)) or (
+                        song.telegram_file and "download" in str(exc).lower()
+                    ):
+                        error_message = ("⚠️ Telegram Media Download မအောင်မြင်ဘူး။ "
+                                         "HTTPS Bot API နဲ့ MTProto နှစ်ခုစလုံးမရနိုင်တာပါ။ "
+                                         "နောက်မှ ပြန်စမ်းပေးပါ။")
+                    elif song.youtube:
+                        error_message = ("⚠️ Music source တွေက ဒီသီချင်းကို Download "
+                                         "မပေးနိုင်သေးဘူး။ YouTube Login Check "
+                                         "သို့မဟုတ် SoundCloud Access Error ဖြစ်နိုင်တယ်။ "
+                                         "အခြားသီချင်း၊ သို့မဟုတ် Audio File ကို "
+                                         "Reply လုပ်ပြီး /play စမ်းပါ။")
+                    else:
+                        error_message = ("⚠️ VC သို့မဟုတ် Media Error တက်နေတယ်။ "
+                                         "Group Voice Chat ဖွင့်ထားလား စစ်ပါ။")
+                    try:
+                        if progress:
+                            await progress.edit_text(error_message)
+                            progress = None
+                        else:
+                            await bot.send_message(chat_id, error_message)
+                    except Exception:
+                        log.warning("Could not announce track error in chat %s", chat_id)
+
+            try:
+                await calls.leave_call(chat_id)
+            except Exception:
+                pass  # It may already have left or never joined the call.
+        finally:
+            if player.loading_task is task:
+                player.loading_task = None
+                player.cancel_download = None
 
     @bot.on_message(filters.command(["start", "help"]))
     async def help_command(_: Client, msg: Message) -> None:
@@ -614,6 +638,15 @@ async def main() -> None:
             await progress.edit_text("⚠️ Assistant Auto Join မရသေးဘူး။ Admin / Invite Settings စစ်ပါ။")
             return
         await progress.edit_text("🔎 သီချင်းရှာ/Download လုပ်ပြီး VC ချိတ်နေတယ်...")
+        # Do not make another /play wait for a long download to release
+        # the chat lock; safely append while an existing loader owns it.
+        if player.loading_task is not None and not player.loading_task.done():
+            if len(player.queue) >= MAX_QUEUE:
+                await progress.edit_text("⚠️ Queue ပြည့်နေပြီ (10 tracks)။")
+                return
+            player.queue.append(track)
+            await progress.edit_text("✅ Queue ထဲထည့်ပြီးပြီ — " + track.title)
+            return
         async with player.lock:
             if len(player.queue) >= MAX_QUEUE:
                 await progress.edit_text("⚠️ Queue ပြည့်နေပြီ (10 tracks)။")
@@ -633,7 +666,14 @@ async def main() -> None:
 
             player.queue.append(track)
             if player.current is None:
-                await advance(msg.chat.id, progress)
+                try:
+                    await advance(msg.chat.id, progress)
+                except asyncio.CancelledError:
+                    try:
+                        await progress.edit_text("⏹ /stop လုပ်ထားလို့ ရပ်လိုက်ပြီ။")
+                    except Exception:
+                        pass
+                    return
             else:
                 await progress.edit_text("✅ Queue ထဲထည့်ပြီးပြီ — " + track.title)
 
@@ -658,16 +698,22 @@ async def main() -> None:
     @bot.on_message(filters.command("stop") & filters.group)
     async def stop_command(_: Client, msg: Message) -> None:
         player = players[msg.chat.id]
+        # Preempt any ongoing search or VC join before acquiring the lock.
+        was_loading = cancel_active_loading(player)
+        if was_loading:
+            log.info("Stop interrupted loading chat %s", msg.chat.id)
         async with player.lock:
             player.queue.clear()
             player.current = None
+            player.started_at = 0.0
             clean_temp(player.temp_file)
             player.temp_file = None
             try:
-                await calls.leave_call(msg.chat.id)
-            except Exception:
-                pass
-        await msg.reply_text("⏹ Stopped and left VC.")
+                await asyncio.wait_for(calls.leave_call(msg.chat.id), timeout=12)
+            except Exception as exc:
+                log.info("VC leave status chat %s: %s", msg.chat.id, type(exc).__name__)
+        log.info("Stop completed; queue cleared chat %s", msg.chat.id)
+        await msg.reply_text("⏹ Stopped and left VC. /play နဲ့ ပြန်ဖွင့်နိုင်တယ်။")
 
     @bot.on_message(filters.command(["pause", "resume"]) & filters.group)
     async def pause_resume_command(_: Client, msg: Message) -> None:

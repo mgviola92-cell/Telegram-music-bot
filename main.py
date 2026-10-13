@@ -311,6 +311,16 @@ def soundcloud_results(query: str, max_tracks: int = 6, cancel_signal: threading
             break
     return urls
 
+def audius_source_enabled() -> bool:
+    """Opt in when the owner has configured official Audius API access."""
+    setting = os.getenv("AUDIUS_ENABLED", "auto").lower()
+    if setting == "0":
+        return False
+    if setting == "1":
+        return True
+    return bool(os.getenv("AUDIUS_API_KEY"))
+
+
 def source_candidates(
     query: str, video: bool, cancel_signal: threading.Event | None = None
 ):
@@ -330,13 +340,13 @@ def source_candidates(
     priority = os.getenv("MUSIC_SOURCE_PRIORITY", "youtube").lower()
     if priority != "soundcloud":
         yield youtube
-        if os.getenv("AUDIUS_ENABLED", "1") != "0":
+        if audius_source_enabled():
             yield ("Audius", query)
     if cancel_signal is None or not cancel_signal.is_set():
         for url in soundcloud_results(query, max_tracks=3, cancel_signal=cancel_signal):
             yield ("SoundCloud", url)
     if priority == "soundcloud":
-        if os.getenv("AUDIUS_ENABLED", "1") != "0":
+        if audius_source_enabled():
             yield ("Audius", query)
         yield youtube
 

@@ -13,7 +13,7 @@ Standalone Telegram voice-chat music bot. It is NOT part of the existing Game Bo
 - `/start`, `/help`, `/ping` and HTTP `/health` for Render/UptimeRobot.
 - Automatic next track on stream end (best effort); leave when the queue runs out.
 
-Song-title audio requests now try YouTube search for an official recording first; if YouTube refuses access, the engine lazily tests up to three suitably matched SoundCloud results. Set `MUSIC_SOURCE_PRIORITY=soundcloud` to restore the original SoundCloud-first behavior. These sources may still fail due to provider checks, licensing/DRM, or server routing. A 15-minute local cache (two tracks, 36 MB overall and 24 MB per entry) can accelerate repeated songs on the same running instance; set `MUSIC_CACHE_ENABLED=0` to disable it. No login-cookies, proxy bypasses, or new third-party download APIs are installed. The matching SoundCloud upload can be a remix, cover, or otherwise different from the requested recording; the response includes the actual title and its source. YouTube may refuse requests from Render cloud IPs with a sign-in challenge, and SoundCloud may also fail. Spotify direct playback is not implemented. A Telegram MP3 reply and a SoundCloud song have been confirmed to play in a real group VC; the revised controls still require a live smoke test. Passing Python tests alone does not confirm all playback controls.
+Song-title audio requests now try YouTube search for an official recording first; if YouTube refuses access, the engine can optionally try Audius with configured developer API access, then tests up to three suitably matched SoundCloud results. Set `MUSIC_SOURCE_PRIORITY=soundcloud` to restore the original SoundCloud-first behavior. These sources may still fail due to provider checks, licensing/DRM, or server routing. A 15-minute local cache (two tracks, 36 MB overall and 24 MB per entry) can accelerate repeated songs on the same running instance; set `MUSIC_CACHE_ENABLED=0` to disable it. No login-cookies, proxy bypasses, or new third-party download APIs are installed. The matching SoundCloud upload can be a remix, cover, or otherwise different from the requested recording; the response includes the actual title and its source. YouTube may refuse requests from Render cloud IPs with a sign-in challenge, and SoundCloud may also fail. Spotify direct playback is not implemented. A Telegram MP3 reply and a SoundCloud song have been confirmed to play in a real group VC; the revised controls still require a live smoke test. Passing Python tests alone does not confirm all playback controls.
 
 ## Render deployment
 
@@ -105,6 +105,16 @@ Not yet adapted: Spotify or Apple Music audio playback (their metadata APIs do n
 | `/start`, `/help`, `/cmd` | Everyone | Music help and group-add button |
 
 The inline player buttons are attached only to the active Now Playing message and ignore old/stale cards.
+
+## Current music source strategy and speed notes (October 2026)
+
+- **Original YouTube recordings are not guaranteed.** Render's cloud IP has received YouTube's sign-in verification response; code cannot promise to stream protected YouTube audio.
+- For song-title audio requests, search YouTube first, then optionally the documented **Audius** public streaming API, then SoundCloud matches. Explicit YouTube links remain YouTube-only, to avoid silently replacing the user's exact recording with a different upload.
+- Audius search succeeds in the live GitHub Runner probe, but **public stream attempts returned HTTP 403** without a configured official API key. The fallback is therefore **disabled by default**, not advertised as working. To try it with authorized Audius developer access, set `AUDIUS_API_KEY` privately in the Music Bot's Render environment; it enables Audius automatically. `AUDIUS_ENABLED=0` always disables it, `AUDIUS_ENABLED=1` enables it explicitly. Some tracks may still disallow third-party streaming. Never paste API keys in Telegram, GitHub source or chats.
+- Each Audius response is checked against allowed HTTPS redirect hosts, maximum media length and size, and public stream flags; unsupported/unavailable content goes to the next provider.
+- **TgCrypto 1.2.5** is a Python encryption speed-up for Pyrogram/MTProto, not a cure for YouTube verification and not a solution to Render Free audio CPU limits. The failed proof-token browser plugins were removed to keep the runtime lightweight.
+- A short-lived two-song cache is available. The provider search and stream may still take time, and Render Free may sleep/restart despite periodic HTTP checks.
+
 
 ## Playback stability improvements (October 2026)
 

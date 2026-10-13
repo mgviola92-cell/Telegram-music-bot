@@ -9,11 +9,11 @@ Standalone Telegram voice-chat music bot. It is NOT part of the existing Game Bo
 - `/vplay <title>` searches for a video (experimental 360p).
 - Reply to a Telegram audio message with `/play`, or a Telegram MP4/video message with `/vplay`.
 - `/play https://...` and `/vplay https://...` for direct HTTPS media on explicitly allowed hosts only.
-- Per-group playback queue, `/queue`, `/skip`, `/pause`, `/resume`, `/stop`.
+- Per-group playback queue, `/queue`, `/now`, `/skip`/`/next`, `/pause`, `/resume`, `/stop`/`/end`.\n- Admin-only `/shuffle`, `/remove <position>`, `/clear`, and `/loop` for the current track.\n- Interactive **now-playing inline panel** with pause/resume, skip, stop, loop, and queue buttons; non-admin users may view the queue but cannot change playback.\n- Private `/start`, `/help` and `/cmd` card with an Add to Group button.
 - `/start`, `/help`, `/ping` and HTTP `/health` for Render/UptimeRobot.
 - Automatic next track on stream end (best effort); leave when the queue runs out.
 
-Song-title audio requests check several SoundCloud search results and skip tracks that refuse playback (including DRM-protected tracks); if nothing works, they try YouTube. The matching SoundCloud upload can be a remix, cover, or otherwise different from the requested recording; the response includes the actual title and its source. YouTube may refuse requests from Render cloud IPs with a sign-in challenge, and SoundCloud may also fail. Spotify direct playback is not implemented. Real voice/video playback has not yet been verified by a live test; passing Python syntax checks does not confirm playback.
+Song-title audio requests check several SoundCloud search results and skip tracks that refuse playback (including DRM-protected tracks); if nothing works, they try YouTube. The matching SoundCloud upload can be a remix, cover, or otherwise different from the requested recording; the response includes the actual title and its source. YouTube may refuse requests from Render cloud IPs with a sign-in challenge, and SoundCloud may also fail. Spotify direct playback is not implemented. A Telegram MP3 reply and a SoundCloud song have been confirmed to play in a real group VC; the revised controls still require a live smoke test. Passing Python tests alone does not confirm all playback controls.
 
 ## Render deployment
 
@@ -74,3 +74,34 @@ maintenance, resource limits, and restarts can still disconnect the assistant.
 - Telegram file replies are fetched through the HTTPS Bot API first, with a shorter MTProto fallback when the HTTP route is unavailable. Downloaded Telegram, SoundCloud and YouTube files are temporary. Only share media you have permission to play.
 - No automatic deploy: commits are deployed manually after GitHub workflow checks, and then VC is tested with users.
 - The default `MAX_ACTIVE_GROUPS=2` is a test cap, not evidence of stable concurrent streaming.
+
+## Reference review and implementation boundaries (October 2026)
+
+The music bot was compared with three public repositories. The controls, queue operations and group-admin permissions in this repository were **independently implemented** for the existing Render Free/pyrogrammod/PyTgCalls 2.3.3 stack. Do not copy their entire codebase or bundled images/fonts/cookies:
+
+- [AsmSafone/MusicPlayer](https://github.com/AsmSafone/MusicPlayer), AGPL-3.0: lightweight queue, stream mode, quality levels, repeat, shuffle, radio, group-local controls and theme images.
+- [CertifiedCoders/AnnieXMusic](https://github.com/CertifiedCoders/AnnieXMusic), MIT license in its repository: inline playback/settings panels, multiple assistants, admin rules, language support, thumbnails, seek/speed and extensive extras.
+- [lakzexe/HasiiMusicBot](https://github.com/lakzexe/HasiiMusicBot), GPL-3.0: modular player, YouTube/Spotify metadata, radio, user authorization, queue/download caching, FFmpeg and Deno, auto-leave, thumbnails and inline controls.
+
+Adapted **now**: group admin guards for mutating playback commands/buttons, group-bound inline player, one active control card per group, skip/next and stop/end aliases, current track repeat, shuffle next items, remove a queued item, clear upcoming queue, /now and branded Add to Group help.
+
+Not yet adapted: Spotify or Apple Music audio playback (their metadata APIs do not grant streaming rights), playlists, seek, speed, multi-assistant scaling, persistent MongoDB settings, AI/entertainment/moderation plugins, high-resolution artwork. These need careful resource/permission review. The YouTube cloud verification challenge remains a separate upstream problem; none of the borrowed ideas guarantees bypassing it.
+
+**Render Free limits:** no automatic 24/7 uptime or multi-group HD guarantee. FFmpeg/Deno/MongoDB, downloaded theme assets and heavy thumbnails are not added by this incremental update. Group queue, loop flag and currently playing state are in memory and reset on service restart.
+
+### New controls
+
+| Command | Permission | Description |
+| --- | --- | --- |
+| `/play title` or audio reply `/play` | Members | Search / stream or queue media |
+| `/vplay title` or video reply `/vplay` | Members | Experimental video |
+| `/queue`, `/now`, `/nowplaying` | Members | Show current and upcoming songs |
+| `/pause`, `/resume`, `/skip`, `/next` | Group admins | Control active stream |
+| `/stop`, `/end` | Group admins | Stop, leave call and reset queue |
+| `/shuffle` | Group admins | Randomize upcoming songs only |
+| `/remove 2` | Group admins | Remove second song from upcoming queue |
+| `/clear` | Group admins | Empty upcoming queue, keep current song |
+| `/loop` | Group admins | Toggle repeating the current song at natural end |
+| `/start`, `/help`, `/cmd` | Everyone | Music help and group-add button |
+
+The inline player buttons are attached only to the active Now Playing message and ignore old/stale cards.

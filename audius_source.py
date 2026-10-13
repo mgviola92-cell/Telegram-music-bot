@@ -6,6 +6,7 @@ This module never requests private networks or arbitrary user-provided URLs.
 """
 import json
 import logging
+import os
 import re
 import shutil
 import tempfile
@@ -55,9 +56,10 @@ def find_audius_tracks(query: str, *, opener=None) -> list[dict]:
     if not query.strip() or len(query) > 120:
         return []
     opener = opener or build_opener(AudiusOnlyRedirect())
-    url = API_BASE + "/tracks/search?" + urlencode({
-        "query": query, "limit": MAX_RESULTS, "app_name": "mudyar-music"
-    })
+    params = {"query": query, "limit": MAX_RESULTS, "app_name": "mudyar-music"}
+    if os.getenv("AUDIUS_API_KEY"):
+        params["api_key"] = os.environ["AUDIUS_API_KEY"]
+    url = API_BASE + "/tracks/search?" + urlencode(params)
     request = Request(url, headers={"Accept": "application/json", "User-Agent": "MudyarMusicBot/1.0"})
     with opener.open(request, timeout=12) as response:
         if int(response.status) != 200:
@@ -105,9 +107,10 @@ def fetch_audius_audio(
         artist = str(user.get("name") or "")
         if not title or (match is not None and not match(title, query, artist)):
             continue
-        url = API_BASE + "/tracks/" + identifier + "/stream?" + urlencode({
-            "app_name": "mudyar-music"
-        })
+        params = {"app_name": "mudyar-music"}
+        if os.getenv("AUDIUS_API_KEY"):
+            params["api_key"] = os.environ["AUDIUS_API_KEY"]
+        url = API_BASE + "/tracks/" + identifier + "/stream?" + urlencode(params)
         directory = Path(tempfile.mkdtemp(prefix="mudyar_media_"))
         target = directory / "audius.mp3"
         try:

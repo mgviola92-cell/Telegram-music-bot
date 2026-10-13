@@ -740,16 +740,70 @@ async def main() -> None:
             else:
                 await progress.edit_text("✅ Queue ထဲထည့်ပြီးပြီ — " + track.title)
 
-    @bot.on_message(filters.command("queue") & filters.group)
+    @bot.on_message(filters.command(["queue", "now", "nowplaying"]) & filters.group)
     async def queue_command(_: Client, msg: Message) -> None:
         player = players[msg.chat.id]
-        current = player.current.title if player.current else "မရှိသေးဘူး"
-        next_up = [f"{i}. {song.title}" for i, song in enumerate(player.queue, 1)]
-        text = "🎶 Playing: " + current + "\n\n📜 Next:\n"
-        await msg.reply_text(text + ("\n".join(next_up) or "Queue အလွတ်"))
+        async with player.lock:
+            message = queue_display(
+                player.current.title if player.current else None,
+                [song.title for song in player.queue],
+                loop=player.loop_current,
+            )
+        await msg.reply_text(message)
+
+    @bot.on_message(filters.command("shuffle") & filters.group)
+    async def shuffle_command(_: Client, msg: Message) -> None:
+        if not await require_admin(msg):
+            return
+        player = players[msg.chat.id]
+        async with player.lock:
+            if len(player.queue) < 2:
+                await msg.reply_text("🔀 Shuffle အတွက် Queue ထဲ အနည်းဆုံး ၂ ပုဒ် လိုတယ်။")
+                return
+            count = queue_shuffle(player.queue)
+        await msg.reply_text(f"🔀 Next Queue သီချင်း {count} ပုဒ် Shuffle လုပ်ပြီးပြီ။")
+
+    @bot.on_message(filters.command("remove") & filters.group)
+    async def remove_command(_: Client, msg: Message) -> None:
+        if not await require_admin(msg):
+            return
+        if len(msg.command) != 2 or not msg.command[1].isdigit():
+            await msg.reply_text("📜 /queue ကြည့်ပြီး /remove 1 လို သုံးပါ။")
+            return
+        player = players[msg.chat.id]
+        async with player.lock:
+            try:
+                track = queue_remove(player.queue, int(msg.command[1]))
+            except IndexError:
+                await msg.reply_text("⚠️ Queue မှာ အဲဒီ နံပါတ် မရှိဘူး။")
+                return
+        await msg.reply_text("🗑 Queue ကနေ ဖယ်ပြီးပြီ — " + track.title[:90])
+
+    @bot.on_message(filters.command("clear") & filters.group)
+    async def clear_command(_: Client, msg: Message) -> None:
+        if not await require_admin(msg):
+            return
+        player = players[msg.chat.id]
+        async with player.lock:
+            count = len(player.queue)
+            player.queue.clear()
+        await msg.reply_text(f"🧹 Next Queue {count} ပုဒ် ရှင်းပြီးပြီ။ လက်ရှိသီချင်း ဆက်ဖွင့်မယ်။")
+
+    @bot.on_message(filters.command("loop") & filters.group)
+    async def loop_command(_: Client, msg: Message) -> None:
+        if not await require_admin(msg):
+            return
+        player = players[msg.chat.id]
+        async with player.lock:
+            player.loop_current = not player.loop_current
+            await update_player_panel(msg.chat.id, player)
+            is_on = player.loop_current
+        await msg.reply_text("🔁 Repeat current: " + ("ON" if is_on else "OFF"))
 
     @bot.on_message(filters.command("skip") & filters.group)
     async def skip_command(_: Client, msg: Message) -> None:
+        if not await require_admin(msg):
+            return
         player = players[msg.chat.id]
         async with player.lock:
             if not player.current:
@@ -763,6 +817,8 @@ async def main() -> None:
 
     @bot.on_message(filters.command("stop") & filters.group)
     async def stop_command(_: Client, msg: Message) -> None:
+        if not await require_admin(msg):
+            return
         player = players[msg.chat.id]
         # Preempt any ongoing search or VC join before acquiring the lock.
         was_loading = cancel_active_loading(player)
@@ -772,6 +828,9 @@ async def main() -> None:
             player.queue.clear()
             player.current = None
             player.started_at = 0.0
+            player.paused = False
+            player.loop_current = False
+            await clear_player_panel(msg.chat.id, player)
             clean_temp(player.temp_file)
             player.temp_file = None
             try:
@@ -783,6 +842,8 @@ async def main() -> None:
 
     @bot.on_message(filters.command(["pause", "resume"]) & filters.group)
     async def pause_resume_command(_: Client, msg: Message) -> None:
+        if not await require_admin(msg):
+            return
         player = players[msg.chat.id]
         async with player.lock:
             if player.current is None:
@@ -792,8 +853,11 @@ async def main() -> None:
             try:
                 if action == "pause":
                     await calls.pause(msg.chat.id)
+                    player.paused = True
                 else:
                     await calls.resume(msg.chat.id)
+                    player.paused = False
+                await update_player_panel(msg.chat.id, player)
                 await msg.reply_text("⏸ Paused." if action == "pause" else "▶️ Resumed.")
             except Exception:
                 log.exception("Could not %s chat %s", action, msg.chat.id)
@@ -812,7 +876,7 @@ async def main() -> None:
             # Ignore delayed end events caused by replacing a stream.
             if player.current and time.monotonic() - player.started_at >= 2:
                 try:
-                    await asyncio.create_task(advance(update.chat_id))
+                    await asyncio.create_task(advance(update.chat_id, repeat=True))
                 except asyncio.CancelledError:
                     return
 

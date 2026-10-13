@@ -71,6 +71,7 @@ class Player:
     radio_enabled: bool = True
     keep_idle: bool = True
     idle_notice_sent: bool = False
+    idle_early_ends: int = 0
 
 
 def voice_slot_count(players: dict[int, Player]) -> int:
@@ -805,6 +806,7 @@ async def main() -> None:
                     player.idle_mode = None
                     player.idle_started_at = 0
                     player.idle_notice_sent = False
+                    player.idle_early_ends = 0
                     player.recovery_attempts = 0
                     player.temp_file = local_file
                     player.started_at = time.monotonic()
@@ -1330,10 +1332,14 @@ async def main() -> None:
         if player is None:
             return
         async with player.lock:
-            if player.current is None:
+            if player.current is None and player.idle_mode is None:
                 return  # This may be an intentional /stop.
-            # A future /play must not be queued behind a disconnected stream.
+            # Never resurrect an externally closed call; wait for a new /play.
             player.current = None
+            player.idle_mode = None
+            player.idle_started_at = 0
+            player.idle_notice_sent = False
+            player.idle_early_ends = 0
             player.paused = False
             player.started_at = 0.0
             player.recovery_attempts = 0
@@ -1357,7 +1363,10 @@ async def main() -> None:
         """
         while True:
             await asyncio.sleep(35)
-            active = [cid for cid, player in players.items() if player.current is not None]
+            active = [
+                cid for cid, player in players.items()
+                if player.current is not None or player.idle_mode is not None
+            ]
             if not active:
                 continue
             try:
@@ -1371,7 +1380,16 @@ async def main() -> None:
                 player = players[chat_id]
                 async with player.lock:
                     song = player.current
-                    if song is None:
+                    if song is None and player.idle_mode is None:
+                        continue
+                    if song is None and player.idle_mode is not None:
+                        log.warning("Idle VC disconnected chat %s; rechecking", chat_id)
+                        if await start_idle(chat_id, player):
+                            continue
+                        player.idle_mode = None
+                        player.idle_started_at = 0
+                        player.idle_notice_sent = False
+                        player.started_at = 0
                         continue
                     log.warning(
                         "VC watchdog detected disconnected stream chat %s (attempts=%s)",
@@ -1405,6 +1423,9 @@ async def main() -> None:
                                     chat_id, type(exc).__name__,
                                 )
                     player.current = None
+                    player.idle_mode = None
+                    player.idle_started_at = 0
+                    player.idle_notice_sent = False
                     player.paused = False
                     player.started_at = 0.0
                     await clear_player_panel(chat_id, player)
@@ -1426,12 +1447,44 @@ async def main() -> None:
             return
         async with player.lock:
             song = player.current
-            if song is None:
-                log.info("Ignored VC end event in chat %s (no active song)", update.chat_id)
+            if song is None and player.idle_mode is None:
+                log.info("Ignored VC end event in chat %s (not playing)", update.chat_id)
                 return
             elapsed = time.monotonic() - player.started_at
             if elapsed < 2:
                 log.info("Ignored delayed VC audio end in chat %s (%.1fs)", update.chat_id, elapsed)
+                return
+            if song is None:
+                mode = player.idle_mode
+                # An unplayable live stream must not create an endless
+                # join/restart loop. Back off radio, then use quiet idle.
+                if elapsed < 30:
+                    player.idle_early_ends += 1
+                else:
+                    player.idle_early_ends = 0
+                if mode == "radio" and elapsed < 30:
+                    player.radio_retry_after = time.monotonic() + 10 * 60
+                log.info("Idle %s stream ended chat %s after %.1fs (early=%s)",
+                         mode, update.chat_id, elapsed, player.idle_early_ends)
+                if player.idle_early_ends >= 3:
+                    player.idle_mode = None
+                    player.idle_started_at = 0
+                    player.idle_notice_sent = False
+                    player.idle_early_ends = 0
+                    try:
+                        await asyncio.wait_for(calls.leave_call(update.chat_id), timeout=10)
+                    except Exception:
+                        pass
+                    try:
+                        await bot.send_message(
+                            update.chat_id,
+                            "⚠️ Idle Audio ကို ထပ်ခါတလဲလဲ ဖွင့်မရလို့ VC ထွက်ထားတယ်။ "
+                            "/play နဲ့ ပြန်စမ်းနိုင်တယ်။"
+                        )
+                    except Exception:
+                        pass
+                    return
+                await asyncio.create_task(advance(update.chat_id))
                 return
             log.warning(
                 "VC audio end chat %s after %.1fs (duration=%s, recovery=%s, queue=%s)",

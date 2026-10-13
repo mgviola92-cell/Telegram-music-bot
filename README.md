@@ -108,6 +108,14 @@ Not yet adapted: Spotify or Apple Music audio playback (their metadata APIs do n
 
 The inline player buttons are attached only to the active Now Playing message and ignore old/stale cards.
 
+## YouTube verification behavior (October 2026)
+
+- Render Logs repeatedly show `Sign in to confirm you're not a bot` on YouTube requests from the service. Successful metadata lookup **does not** mean that a downloadable or redistributable YouTube audio stream has been authorized. No change here guarantees original YouTube audio in Telegram VC.
+- The documented YouTube IFrame API plays videos inside YouTube's embedded player. It does not supply standalone audio files for redistribution to Telegram calls.
+- When the provider returns two YouTube sign-in verification errors within ten minutes, the in-process `youtube_health.YouTubeGuard` temporarily stops sending further YouTube requests for 15 minutes. This preserves a faster fallback to eligible other audio providers without attempting to defeat the verification process. A direct YouTube URL during the cooldown reports it unavailable instead of silently using a different recording. After the cooldown, one normal YouTube attempt is permitted again.
+- Verification cooldown is separate from the existing per-song cache, voice recovery and radio/idle behavior. It resets on service restart. Incorrect legacy `extractor_args.youtube.client` settings were removed.
+- If a permitted alternate audio provider is also unavailable, the bot gives a clear source-unavailable reply and suggests playing the video through YouTube's own player or using an authorized Telegram audio attachment. Upload/share only media you have rights to use.
+
 ## Current music source strategy and speed notes (October 2026)
 
 - **Original YouTube recordings are not guaranteed.** Render's cloud IP has received YouTube's sign-in verification response; code cannot promise to stream protected YouTube audio.

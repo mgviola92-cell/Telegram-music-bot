@@ -26,12 +26,13 @@ def safe_audius_url(value: str) -> bool:
     """Limit redirects to Audius-operated HTTPS hosts, not arbitrary LANs."""
     try:
         url = urlsplit(value)
+        host = (url.hostname or "").lower().rstrip(".")
+        secure_port = url.port in (None, 443)
     except ValueError:
         return False
-    host = (url.hostname or "").lower().rstrip(".")
     return (
         url.scheme == "https"
-        and url.port in (None, 443)
+        and secure_port
         and bool(host)
         and not url.username
         and not url.password
@@ -114,6 +115,8 @@ def fetch_audius_audio(
                 url, headers={"Accept": "audio/mpeg", "User-Agent": "MudyarMusicBot/1.0"}
             )
             with opener.open(request, timeout=18) as response:
+                if not safe_audius_url(response.url if isinstance(response.url, str) else response.geturl()):
+                    raise ValueError("Audius audio redirected outside approved hosts")
                 if int(response.status) != 200:
                     raise ValueError("Audius stream not available")
                 mime = response.headers.get("Content-Type", "").lower()

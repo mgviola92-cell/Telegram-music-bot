@@ -19,7 +19,7 @@ from urllib.parse import quote, urlsplit
 from aiohttp import ClientSession, ClientTimeout, web
 from pyrogram import Client, filters
 from pyrogram.enums import ChatMemberStatus
-from pyrogram.types import CallbackQuery, Message
+from pyrogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from music_ui import player_controls, queue_display, queue_remove, queue_shuffle
 from pytgcalls import PyTgCalls
 from pytgcalls import filters as call_filters
@@ -622,10 +622,17 @@ async def main() -> None:
                 player.loading_task = None
                 player.cancel_download = None
 
-    @bot.on_message(filters.command(["start", "help"]))
+    @bot.on_message(filters.command(["start", "help", "cmd"]))
     async def help_command(_: Client, msg: Message) -> None:
+        identity = await bot.get_me()
+        add_button = InlineKeyboardMarkup([[
+            InlineKeyboardButton(
+                "➕ Add မုဒြာ to Group",
+                url=f"https://t.me/{identity.username}?startgroup=true",
+            )
+        ]])
         await msg.reply_text(
-            "🎧 Telegram VC Music Bot\n\n"
+            "🎧 မုဒြာ Music Bot — VC Player\n\n"
             "Group VC ဖွင့်ပြီး /play Faded လို့ သီချင်းနာမည် ရိုက်နိုင်တယ်။\n"
             "Audio File ကို Reply လုပ်ပြီး /play လည်းရတယ်။\n"
             "Video အတွက် /vplay <name> (သို့) MP4 reply /vplay သုံးပါ။\n"
@@ -633,7 +640,8 @@ async def main() -> None:
             "/play /vplay /queue /now /skip /pause /resume /stop\n"
             "/shuffle /remove 1 /clear /loop — Admin Controls\n"
             "/ping — bot online ဖြစ်မဖြစ် စစ်မယ်။\n\n"
-            "Direct HTTPS audio link တွေအတွက် server-side host allowlist လိုတယ်။"
+            "Direct HTTPS audio link တွေအတွက် server-side host allowlist လိုတယ်။",
+            reply_markup=add_button,
         )
 
     @bot.on_message(filters.command("ping"))
@@ -801,7 +809,7 @@ async def main() -> None:
             is_on = player.loop_current
         await msg.reply_text("🔁 Repeat current: " + ("ON" if is_on else "OFF"))
 
-    @bot.on_message(filters.command("skip") & filters.group)
+    @bot.on_message(filters.command(["skip", "next"]) & filters.group)
     async def skip_command(_: Client, msg: Message) -> None:
         if not await require_admin(msg):
             return
@@ -816,7 +824,7 @@ async def main() -> None:
                 return
             await msg.reply_text("⏭ Skipped.")
 
-    @bot.on_message(filters.command("stop") & filters.group)
+    @bot.on_message(filters.command(["stop", "end"]) & filters.group)
     async def stop_command(_: Client, msg: Message) -> None:
         if not await require_admin(msg):
             return

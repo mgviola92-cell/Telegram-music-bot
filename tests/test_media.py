@@ -1,12 +1,14 @@
 """Offline checks for the music bot's two failure-prone download paths."""
+import asyncio
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from aiohttp import web
 
-from main import download_bot_api_file, is_youtube_url, soundcloud_results, suitable_recording
+from main import Player, cancel_active_loading, download_bot_api_file, download_song, is_youtube_url, soundcloud_results, suitable_recording
 
 
 class TelegramHttpsTest(unittest.IsolatedAsyncioTestCase):
@@ -111,6 +113,47 @@ class MusicResolverTest(unittest.TestCase):
                 "https://soundcloud.com/user/artist",
             ],
         )
+
+
+class PlaybackLifecycleTest(unittest.IsolatedAsyncioTestCase):
+    async def test_stop_preempts_loading_and_releases_lock(self):
+        """Cancel the child loader without cancelling the Telegram handler."""
+        player = Player()
+        ready = asyncio.Event()
+
+        async def fake_loader():
+            async with player.lock:
+                player.loading_task = asyncio.current_task()
+                player.cancel_download = threading.Event()
+                try:
+                    ready.set()
+                    await asyncio.Event().wait()
+                finally:
+                    player.loading_task = None
+                    player.cancel_download = None
+
+        child = asyncio.create_task(fake_loader())
+        await asyncio.wait_for(ready.wait(), timeout=1)
+        self.assertTrue(cancel_active_loading(player))
+        with self.assertRaises(asyncio.CancelledError):
+            await child
+        self.assertIsNone(player.loading_task)
+        await asyncio.wait_for(player.lock.acquire(), timeout=1)
+        player.lock.release()
+
+        # A new /play is allowed immediately after /stop.
+        self.assertFalse(cancel_active_loading(player))
+        self.assertIsNone(player.cancel_download)
+
+    async def test_source_download_aborts_before_network(self):
+        event = threading.Event()
+        event.set()
+        with self.assertRaises(InterruptedError):
+            await asyncio.to_thread(
+                download_song, "https://www.youtube.com/watch?v=abc", False, event
+            )
+
+
 
 
 if __name__ == "__main__":

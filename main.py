@@ -631,7 +631,7 @@ async def main() -> None:
             "Video အတွက် /vplay <name> (သို့) MP4 reply /vplay သုံးပါ။\n"
             "Private Group: Music Bot ကို Admin + Invite Users ပေးထားပါ။\n"
             "/play /vplay /queue /now /skip /pause /resume /stop\n"
-            "/shuffle /remove 1 /clear /loop — Admin Controls\\n"
+            "/shuffle /remove 1 /clear /loop — Admin Controls\n"
             "/ping — bot online ဖြစ်မဖြစ် စစ်မယ်။\n\n"
             "Direct HTTPS audio link တွေအတွက် server-side host allowlist လိုတယ်။"
         )

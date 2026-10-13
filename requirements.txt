@@ -2,5 +2,4 @@ py-tgcalls==2.3.3
 pyrogrammod==2.4.1
 aiohttp>=3.10,<4
 yt-dlp>=2025.1.15,<2027
-yt-dlp-get-pot
-yt-dlp-getpot-wpc
+TgCrypto==1.2.5

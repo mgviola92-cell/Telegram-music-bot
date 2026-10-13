@@ -371,6 +371,12 @@ def download_song(query: str, video: bool, cancel_signal: threading.Event | None
             "retries": 0,
             "fragment_retries": 0,
             "max_filesize": MAX_YOUTUBE_BYTES,
+            # YouTube အပိတ်ကျော်ရန် အလိုအလျောက် ပလပ်အင် စနစ်ထည့်သွင်းခြင်း
+            "extractor_args": {
+                "youtube": {
+                    "client": ["web", "web_safari", "mweb"]
+                }
+            }
         }
         try:
             with YoutubeDL(opts) as downloader:

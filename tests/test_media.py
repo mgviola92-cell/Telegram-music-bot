@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 from aiohttp import web
 
-from main import download_bot_api_file, is_youtube_url, soundcloud_results
+from main import download_bot_api_file, is_youtube_url, soundcloud_results, suitable_recording
 
 
 class TelegramHttpsTest(unittest.IsolatedAsyncioTestCase):
@@ -66,22 +66,51 @@ class MusicResolverTest(unittest.TestCase):
         self.assertFalse(is_youtube_url("https://youtube.com.evil.test/"))
         self.assertFalse(is_youtube_url("http://127.0.0.1/admin"))
 
-    def test_soundcloud_skips_drm_and_mismatched_hosts(self):
+    def test_suitable_recording_filters_variants(self):
+        self.assertFalse(suitable_recording(
+            "Alan Walker Faded slowed + reverb", "Alan Walker Faded"
+        ))
+        self.assertFalse(suitable_recording(
+            "Alan Walker Faded (COVER)", "Alan Walker Faded"
+        ))
+        self.assertFalse(suitable_recording(
+            "Faded Nightcore", "Alan Walker Faded", "Alan Walker"
+        ))
+        self.assertFalse(suitable_recording(
+            "Other Song", "Alan Walker Faded", "Unknown Artist"
+        ))
+        self.assertTrue(suitable_recording(
+            "Alan Walker - Faded", "Alan Walker Faded"
+        ))
+        self.assertTrue(suitable_recording(
+            "Faded", "Alan Walker Faded", "Alan Walker"
+        ))
+        self.assertTrue(suitable_recording(
+            "Alan Walker Faded (Remix)", "Alan Walker Faded Remix"
+        ))
+
+    def test_soundcloud_skips_drm_covers_remixes_and_mismatched_hosts(self):
         found = {
             "entries": [
-                {"title": "Faded (drm)", "webpage_url": "https://soundcloud.com/user/drm", "is_drm": True},
+                {"title": "Alan Walker Faded (drm)", "webpage_url": "https://soundcloud.com/user/drm", "is_drm": True},
                 {"title": "Elsewhere", "webpage_url": "https://example.org/other"},
-                {"title": "Alan Walker Faded cover", "webpage_url": "https://soundcloud.com/user/faded"},
+                {"title": "Alan Walker Faded cover", "webpage_url": "https://soundcloud.com/user/cover"},
+                {"title": "Alan Walker Faded slowed reverb", "webpage_url": "https://soundcloud.com/user/reverb"},
+                {"title": "Completely different", "webpage_url": "https://soundcloud.com/user/other"},
                 {"title": "Alan Walker Faded", "webpage_url": "https://soundcloud.com/user/original"},
-            ]
+                {"title": "Faded", "uploader": "Alan Walker", "webpage_url": "https://soundcloud.com/user/artist"},
+            ],
         }
         mocked = MagicMock()
         mocked.__enter__.return_value.extract_info.return_value = found
         with patch("yt_dlp.YoutubeDL", return_value=mocked):
-            urls = soundcloud_results("Alan Walker Faded", max_tracks=4)
-        self.assertEqual(len(urls), 2)
-        self.assertEqual(urls[0], "https://soundcloud.com/user/faded")
-        self.assertEqual(urls[1], "https://soundcloud.com/user/original")
+            urls = soundcloud_results("Alan Walker Faded", max_tracks=6)
+        self.assertEqual(
+            urls, [
+                "https://soundcloud.com/user/original",
+                "https://soundcloud.com/user/artist",
+            ],
+        )
 
 
 if __name__ == "__main__":

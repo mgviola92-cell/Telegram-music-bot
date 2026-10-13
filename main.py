@@ -99,52 +99,76 @@ def is_youtube_url(value: str) -> bool:
 
 
 def download_song(query: str, video: bool) -> tuple[str, str]:
-    """Search and download a single item in a worker thread."""
+    """Download a playable song without relying exclusively on YouTube.
+
+    For audio title queries SoundCloud is tried first, then YouTube.
+    A result from SoundCloud may be a different upload or cover; the
+    actual track title and source are shown to the group.
+    """
     from yt_dlp import YoutubeDL
 
-    directory = Path(tempfile.mkdtemp(prefix="mudyar_media_"))
-    target = query if is_youtube_url(query) else "ytsearch1:" + query
-    opts = {
-        "format": (
-            "best[ext=mp4][height<=360]/best[height<=360]/best[ext=mp4]"
-            if video else "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio"
-        ),
-        "outtmpl": str(directory / "%(id)s.%(ext)s"),
-        "noplaylist": True,
-        "quiet": True,
-        "no_warnings": True,
-        "socket_timeout": 12,
-        "retries": 1,
-        "fragment_retries": 1,
-        "max_filesize": MAX_YOUTUBE_BYTES,
-        "extract_flat": False,
-    }
-    try:
-        with YoutubeDL(opts) as downloader:
-            result = downloader.extract_info(target, download=True)
-        if not result:
-            raise ValueError("No playable search result")
-        if result.get("_type") == "playlist":
-            entries = [entry for entry in result.get("entries", []) if entry]
-            if not entries:
-                raise ValueError("No playable search result")
-            result = entries[0]
-        duration = result.get("duration")
-        if duration is not None and float(duration) > MAX_MEDIA_SECONDS:
-            raise ValueError("Track exceeds the 10-minute limit")
-        files = [
-            p for p in directory.iterdir()
-            if p.is_file() and not p.name.endswith((".part", ".ytdl"))
+    if is_youtube_url(query):
+        candidates = [("YouTube", query)]
+    elif video:
+        candidates = [("YouTube", "ytsearch1:" + query)]
+    else:
+        candidates = [
+            ("SoundCloud", "scsearch1:" + query),
+            ("YouTube", "ytsearch1:" + query),
         ]
-        if not files:
-            raise ValueError("No downloaded media file")
-        media_path = max(files, key=lambda p: p.stat().st_size)
-        if media_path.stat().st_size > MAX_YOUTUBE_BYTES:
-            raise ValueError("Track exceeds the 40 MB limit")
-        return str(media_path), str(result.get("title") or query)[:100]
-    except Exception:
-        shutil.rmtree(directory, ignore_errors=True)
-        raise
+
+    failures = []
+    for provider, target in candidates:
+        directory = Path(tempfile.mkdtemp(prefix="mudyar_media_"))
+        opts = {
+            "format": (
+                "best[ext=mp4][height<=360]/best[height<=360]/best[ext=mp4]"
+                if video else "bestaudio/best"
+            ),
+            "outtmpl": str(directory / "%(id)s.%(ext)s"),
+            "noplaylist": True,
+            "playlist_items": "1",
+            "quiet": True,
+            "no_warnings": True,
+            "socket_timeout": 12,
+            "retries": 1,
+            "fragment_retries": 1,
+            "max_filesize": MAX_YOUTUBE_BYTES,
+            "hls_prefer_native": True,
+            "extract_flat": False,
+        }
+        try:
+            with YoutubeDL(opts) as downloader:
+                result = downloader.extract_info(target, download=True)
+            if not result:
+                raise ValueError("No playable result")
+            if result.get("_type") == "playlist":
+                entries = [entry for entry in result.get("entries", []) if entry]
+                if not entries:
+                    raise ValueError("No playable result")
+                result = entries[0]
+            duration = result.get("duration")
+            if duration is not None and float(duration) > MAX_MEDIA_SECONDS:
+                raise ValueError("Song exceeds the 10-minute limit")
+            files = [
+                path for path in directory.iterdir()
+                if path.is_file() and not path.name.endswith((".part", ".ytdl"))
+            ]
+            if not files:
+                raise ValueError("No downloaded media file")
+            media_path = max(files, key=lambda path: path.stat().st_size)
+            if media_path.stat().st_size > MAX_YOUTUBE_BYTES:
+                raise ValueError("Song exceeds the 40 MB limit")
+            title = str(result.get("title") or query)[:85]
+            return str(media_path), f"{title} · {provider}"
+        except Exception as exc:
+            shutil.rmtree(directory, ignore_errors=True)
+            failures.append(provider)
+            log.warning(
+                "Audio/video source %s unavailable (%s): %s",
+                provider, type(exc).__name__, str(exc)[:250],
+            )
+    raise RuntimeError("No playable result from " + ", ".join(failures))
 
 
 async def main() -> None:
@@ -295,9 +319,11 @@ async def main() -> None:
                     error_message = ("⚠️ Media Download Timeout ဖြစ်တယ်။ "
                                      "အခြားသီချင်းနဲ့ ပြန်စမ်းပေးပါ။")
                 elif song.youtube:
-                    error_message = ("⚠️ သီချင်းရှာ/Download လုပ်မရဘူး။ "
-                                     "YouTube က Cloud Server ကို ကန့်သတ်ထားတာလည်း "
-                                     "ဖြစ်နိုင်တယ်။ နောက်တစ်ပုဒ် ပြန်စမ်းပါ။")
+                    error_message = ("⚠️ Music source တွေက ဒီသီချင်းကို Download "
+                                     "မပေးနိုင်သေးဘူး။ YouTube Login Check "
+                                     "သို့မဟုတ် SoundCloud Access Error ဖြစ်နိုင်တယ်။ "
+                                     "အခြားသီချင်း၊ သို့မဟုတ် Audio File ကို "
+                                     "Reply လုပ်ပြီး /play စမ်းပါ။")
                 else:
                     error_message = ("⚠️ VC သို့မဟုတ် Media Error တက်နေတယ်။ "
                                      "Group Voice Chat ဖွင့်ထားလား စစ်ပါ။")

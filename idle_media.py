@@ -56,7 +56,7 @@ def ensure_idle_audio() -> str:
                 audio.setnchannels(1)
                 audio.setsampwidth(2)
                 audio.setframerate(8000)
-                fragment = b"\\x00" * 16000
+                fragment = bytes(16000)
                 for _ in range(IDLE_SECONDS):
                     audio.writeframesraw(fragment)
             temporary.replace(_IDLE_PATH)

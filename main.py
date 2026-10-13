@@ -900,13 +900,15 @@ async def main() -> None:
             "Private Group: Music Bot ကို Admin + Invite Users ပေးထားပါ။\n"
             "/play /vplay /queue /now /skip /pause /resume /stop\n"
             "/shuffle /remove 1 /clear /loop — Admin Controls\n"
+            "/radio on|off — Authorized radio fallback\n"
+            "/idle on|off — Queue ကုန်ရင် VC ထဲဆက်နေမလား\n"
             "/ping — bot online ဖြစ်မဖြစ် စစ်မယ်။\n\n"
             "Direct HTTPS audio link တွေအတွက် server-side host allowlist လိုတယ်။",
             reply_markup=add_button,
         )
 
     @bot.on_message(
-        filters.command(["play", "vplay", "ping", "stop", "queue"]) &
+        filters.command(["play", "vplay", "ping", "stop", "queue", "radio", "idle"]) &
         (filters.group | filters.private),
         group=-1,
     )
@@ -1028,11 +1030,11 @@ async def main() -> None:
             ) >= 1:
                 await progress.edit_text("⚠️ Video Streaming တစ်ခုသာ စမ်းသပ်ခွင့်ပြုထားတယ်။")
                 return
-            if player.current is None and sum(
-                p.current is not None for p in players.values()
-            ) >= max_groups:
+            if (player.current is None and player.idle_mode is None
+                    and not await evict_oldest_idle_for_song(msg.chat.id)):
                 await progress.edit_text(
-                    "⚠️ လောလောဆယ် VC တွေပြည့်နေပြီ။ နောက်မှထပ်စမ်းပါ။"
+                    f"⚠️ တစ်ပြိုင်နက် VC {max_groups} ခု ပြည့်နေပြီ။ "
+                    "Idle Group ရှိလာမှ /play ပြန်စမ်းပါ။"
                 )
                 return
 
@@ -1056,7 +1058,9 @@ async def main() -> None:
         player = players[msg.chat.id]
         async with player.lock:
             message = queue_display(
-                player.current.title if player.current else None,
+                (player.current.title if player.current else
+                 "📻 Radio (idle)" if player.idle_mode == "radio" else
+                 "🔇 Quiet idle" if player.idle_mode == "silence" else None),
                 [song.title for song in player.queue],
                 loop=player.loop_current,
             )
@@ -1141,6 +1145,9 @@ async def main() -> None:
             player.started_at = 0.0
             player.paused = False
             player.loop_current = False
+            player.idle_mode = None
+            player.idle_started_at = 0
+            player.idle_notice_sent = False
             await clear_player_panel(msg.chat.id, player)
             clean_temp(player.temp_file)
             player.temp_file = None
@@ -1214,6 +1221,9 @@ async def main() -> None:
                 player.paused = False
                 player.loop_current = False
                 player.started_at = 0
+                player.idle_mode = None
+                player.idle_started_at = 0
+                player.idle_notice_sent = False
                 await clear_player_panel(chat_id, player)
                 clean_temp(player.temp_file)
                 player.temp_file = None

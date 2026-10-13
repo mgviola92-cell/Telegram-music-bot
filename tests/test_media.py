@@ -121,6 +121,8 @@ class SourceSelectionTest(unittest.TestCase):
             iterator = source_candidates("Alan Walker Faded", video=False)
             self.assertEqual(next(iterator), ("YouTube", "ytsearch1:Alan Walker Faded official"))
             search.assert_not_called()
+            self.assertEqual(next(iterator), ("Audius", "Alan Walker Faded"))
+            search.assert_not_called()
             self.assertEqual(next(iterator), ("SoundCloud", "https://soundcloud.com/artist/song"))
             self.assertEqual(search.call_count, 1)
 
@@ -138,7 +140,7 @@ class SourceSelectionTest(unittest.TestCase):
         ):
             self.assertEqual(
                 list(source_candidates("a b", False)),
-                [("SoundCloud", "https://soundcloud.com/a/b"), ("YouTube", "ytsearch1:a b official")],
+                [("SoundCloud", "https://soundcloud.com/a/b"), ("Audius", "a b"), ("YouTube", "ytsearch1:a b official")],
             )
 
     def test_end_timing_distinguishes_early_failure(self):

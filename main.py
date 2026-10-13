@@ -667,7 +667,9 @@ async def main() -> None:
             player.queue.append(track)
             if player.current is None:
                 try:
-                    await advance(msg.chat.id, progress)
+                    # Never cancel Pyrogram's long-lived HandlerTask; only
+                    # the child playback operation is cancelable by /stop.
+                    await asyncio.create_task(advance(msg.chat.id, progress))
                 except asyncio.CancelledError:
                     try:
                         await progress.edit_text("⏹ /stop လုပ်ထားလို့ ရပ်လိုက်ပြီ။")
@@ -692,7 +694,10 @@ async def main() -> None:
             if not player.current:
                 await msg.reply_text("သီချင်းဖွင့်ထားတာ မရှိသေးဘူး။")
                 return
-            await advance(msg.chat.id)
+            try:
+                await asyncio.create_task(advance(msg.chat.id))
+            except asyncio.CancelledError:
+                return
             await msg.reply_text("⏭ Skipped.")
 
     @bot.on_message(filters.command("stop") & filters.group)
@@ -745,7 +750,10 @@ async def main() -> None:
                 return
             # Ignore delayed end events caused by replacing a stream.
             if player.current and time.monotonic() - player.started_at >= 2:
-                await advance(update.chat_id)
+                try:
+                    await asyncio.create_task(advance(update.chat_id))
+                except asyncio.CancelledError:
+                    return
 
     async def health(_: web.Request) -> web.Response:
         return web.json_response({

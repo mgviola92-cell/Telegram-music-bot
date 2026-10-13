@@ -116,6 +116,29 @@ class MusicResolverTest(unittest.TestCase):
 
 
 class SourceSelectionTest(unittest.TestCase):
+    def setUp(self):
+        # Test the opt-in provider path, even when no real API key is present.
+        patcher = patch.dict("os.environ", {"AUDIUS_ENABLED": "1"})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_audius_off_without_api_access(self):
+        with patch.dict("os.environ", {"AUDIUS_ENABLED": "0"}), patch(
+            "main.soundcloud_results", return_value=[]
+        ):
+            self.assertEqual(
+                list(source_candidates("Alan Walker Faded", False)),
+                [("YouTube", "ytsearch1:Alan Walker Faded official")],
+            )
+        with patch.dict("os.environ", {"AUDIUS_ENABLED": "auto", "AUDIUS_API_KEY": "demo-key"}), patch(
+            "main.soundcloud_results", return_value=[]
+        ):
+            self.assertEqual(
+                list(source_candidates("Alan Walker Faded", False)),
+                [("YouTube", "ytsearch1:Alan Walker Faded official"),
+                 ("Audius", "Alan Walker Faded")],
+            )
+
     def test_youtube_first_and_lazy_soundcloud(self):
         with patch("main.soundcloud_results", return_value=["https://soundcloud.com/artist/song"]) as search:
             iterator = source_candidates("Alan Walker Faded", video=False)

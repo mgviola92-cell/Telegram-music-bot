@@ -16,7 +16,7 @@ jobs:
       - name: Install music dependencies
         run: python -m pip install -r requirements.txt
       - name: Verify optional MTProto crypto acceleration is installed
-        run: python -c "import tgcrypto; print('TgCrypto: available')"
+        run: python -c "import tgcrypto; print('TgCrypto acceleration available')"
       - name: Test media download and source filtering
         run: python -m unittest discover -s tests -v
       - name: Verify PyTgCalls / Pyrogram compatibility

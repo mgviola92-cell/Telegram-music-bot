@@ -18,7 +18,9 @@ from urllib.parse import quote, urlsplit
 
 from aiohttp import ClientSession, ClientTimeout, web
 from pyrogram import Client, filters
-from pyrogram.types import Message
+from pyrogram.enums import ChatMemberStatus
+from pyrogram.types import CallbackQuery, Message
+from music_ui import player_controls, queue_display, queue_remove, queue_shuffle
 from pytgcalls import PyTgCalls
 from pytgcalls import filters as call_filters
 from pytgcalls.types import AudioQuality, GroupCallConfig, MediaStream, StreamEnded, VideoQuality
@@ -54,6 +56,9 @@ class Player:
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     loading_task: asyncio.Task | None = None
     cancel_download: threading.Event | None = None
+    paused: bool = False
+    loop_current: bool = False
+    panel_id: int | None = None
 
 
 def cancel_active_loading(player: Player) -> bool:
@@ -377,6 +382,48 @@ async def main() -> None:
     )
     calls = PyTgCalls(assistant, workers=2)
 
+    async def is_chat_admin(chat_id: int, user_id: int | None) -> bool:
+        if not user_id:
+            return False
+        try:
+            member = await bot.get_chat_member(chat_id, user_id)
+            return member.status in {
+                ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER
+            }
+        except Exception as exc:
+            log.info("Cannot check admin status %s: %s", chat_id, type(exc).__name__)
+            return False
+
+    async def require_admin(msg: Message) -> bool:
+        if msg.sender_chat and msg.sender_chat.id == msg.chat.id:
+            return True  # Anonymous group administrator.
+        if msg.from_user and await is_chat_admin(msg.chat.id, msg.from_user.id):
+            return True
+        await msg.reply_text("🛡 ဒီ Playback Control ကို Group Admin ပဲ သုံးနိုင်တယ်။")
+        return False
+
+    async def update_player_panel(chat_id: int, player: Player) -> None:
+        if player.panel_id is None or player.current is None:
+            return
+        try:
+            await bot.edit_message_reply_markup(
+                chat_id, player.panel_id,
+                reply_markup=player_controls(
+                    chat_id, paused=player.paused, loop=player.loop_current
+                ),
+            )
+        except Exception:
+            pass
+
+    async def clear_player_panel(chat_id: int, player: Player) -> None:
+        old_id = player.panel_id
+        player.panel_id = None
+        if old_id is not None:
+            try:
+                await bot.delete_messages(chat_id, old_id)
+            except Exception:
+                pass
+
     async def ensure_assistant_in_group(chat: object) -> None:
         """Join automatically. Private groups need bot admin + invite rights."""
         chat_id = chat.id
@@ -421,7 +468,7 @@ async def main() -> None:
             except Exception:
                 log.warning("Could not revoke temporary invite for chat %s", chat_id)
 
-    async def advance(chat_id: int, progress: Message | None = None) -> None:
+    async def advance(chat_id: int, progress: Message | None = None, *, repeat: bool = False) -> None:
         """Caller holds this chat's lock. Moves to next track or leaves VC."""
         player = players[chat_id]
         task = asyncio.current_task()
@@ -429,9 +476,12 @@ async def main() -> None:
         cancel_signal = threading.Event()
         player.cancel_download = cancel_signal
         try:
+            if repeat and player.loop_current and player.current is not None:
+                player.queue.appendleft(player.current)
             clean_temp(player.temp_file)
             player.temp_file = None
             player.current = None
+            player.paused = False
 
             while player.queue:
                 song: Track = player.queue.popleft()
@@ -508,12 +558,21 @@ async def main() -> None:
                     player.temp_file = local_file
                     player.started_at = time.monotonic()
                     notice = ("🎬 " if song.video else "🎵 ") + "Now playing: " + song.title
+                    previous_panel = player.panel_id
                     try:
+                        markup = player_controls(chat_id, paused=False, loop=player.loop_current)
                         if progress:
-                            await progress.edit_text(notice)
+                            await progress.edit_text(notice, reply_markup=markup)
+                            new_panel = progress
                             progress = None
                         else:
-                            await bot.send_message(chat_id, notice)
+                            new_panel = await bot.send_message(chat_id, notice, reply_markup=markup)
+                        player.panel_id = new_panel.id
+                        if previous_panel is not None and previous_panel != new_panel.id:
+                            try:
+                                await bot.delete_messages(chat_id, previous_panel)
+                            except Exception:
+                                pass
                     except Exception:
                         log.warning("Could not announce now playing in chat %s", chat_id)
                     return
@@ -556,6 +615,8 @@ async def main() -> None:
                 await calls.leave_call(chat_id)
             except Exception:
                 pass  # It may already have left or never joined the call.
+            player.paused = False
+            await clear_player_panel(chat_id, player)
         finally:
             if player.loading_task is task:
                 player.loading_task = None

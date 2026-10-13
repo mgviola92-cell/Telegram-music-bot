@@ -13,7 +13,7 @@ Standalone Telegram voice-chat music bot. It is NOT part of the existing Game Bo
 - `/start`, `/help`, `/ping` and HTTP `/health` for Render/UptimeRobot.
 - Automatic next track on stream end (best effort); leave when the queue runs out.
 
-Song-title audio requests first try a SoundCloud search result and then YouTube if SoundCloud is unavailable. The matching SoundCloud upload can be a remix, cover, or otherwise different from the requested recording; the response includes the actual title and its source. YouTube may refuse requests from Render cloud IPs with a sign-in challenge, and SoundCloud may also fail. Spotify direct playback is not implemented. Real voice/video playback has not yet been verified by a live test; passing Python syntax checks does not confirm playback.
+Song-title audio requests check several SoundCloud search results and skip tracks that refuse playback (including DRM-protected tracks); if nothing works, they try YouTube. The matching SoundCloud upload can be a remix, cover, or otherwise different from the requested recording; the response includes the actual title and its source. YouTube may refuse requests from Render cloud IPs with a sign-in challenge, and SoundCloud may also fail. Spotify direct playback is not implemented. Real voice/video playback has not yet been verified by a live test; passing Python syntax checks does not confirm playback.
 
 ## Render deployment
 
@@ -69,8 +69,8 @@ maintenance, resource limits, and restarts can still disconnect the assistant.
 - All code changes and deploys are scoped to this repository and Music Bot Render service.
 - Game Bot code, database, UptimeRobot monitor, and Render service must not be changed.
 - Render Free may restart and its filesystem is ephemeral; queues and temporary audio are in-memory/local only.
-- This MVP limits queued tracks to 10 per group and Telegram audio/video messages to 25 MB; video is experimental and limited to one concurrent stream.
+- This MVP limits queued tracks to 10 per group and Telegram audio/video messages to 20 MB (HTTPS Bot API getFile limit); video is experimental and limited to one concurrent stream.
 - Video is CPU-intensive; Render Free 0.1 CPU/512 MB cannot guarantee smooth video or multiple concurrent voice chats.
-- Downloaded Telegram and YouTube files are temporary. Only share media you have permission to play.
+- Telegram file replies are fetched through the HTTPS Bot API first, with a shorter MTProto fallback when the HTTP route is unavailable. Downloaded Telegram, SoundCloud and YouTube files are temporary. Only share media you have permission to play.
 - No automatic deploy: commits are deployed manually after GitHub workflow checks, and then VC is tested with users.
 - The default `MAX_ACTIVE_GROUPS=2` is a test cap, not evidence of stable concurrent streaming.

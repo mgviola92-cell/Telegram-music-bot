@@ -23,6 +23,7 @@ from pyrogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMa
 from music_ui import player_controls, queue_display, queue_remove, queue_shuffle
 from audius_source import fetch_audius_audio
 from song_cache import get_cached_song, save_cached_song
+from idle_media import configured_radio_url, ensure_idle_audio
 from pytgcalls import PyTgCalls
 from pytgcalls import filters as call_filters
 from pytgcalls.types import AudioQuality, ChatUpdate, GroupCallConfig, MediaStream, StreamEnded, VideoQuality
@@ -63,6 +64,33 @@ class Player:
     loop_current: bool = False
     panel_id: int | None = None
     recovery_attempts: int = 0
+    # Only one voice connection per group. Idle is NOT a queued song.
+    idle_mode: str | None = None  # "radio" or "silence"
+    idle_started_at: float = 0.0
+    radio_retry_after: float = 0.0
+    radio_enabled: bool = True
+    keep_idle: bool = True
+
+
+def voice_slot_count(players: dict[int, Player]) -> int:
+    """Count active VC streams including idle ones, not group memberships."""
+    return sum(
+        bool(p.current is not None or p.idle_mode is not None or
+             (p.loading_task is not None and not p.loading_task.done()))
+        for p in players.values()
+    )
+
+
+def oldest_idle_chat(players: dict[int, Player], exclude: int) -> int | None:
+    """An idle VC makes room for a requested song before rejecting a group."""
+    idle = [
+        (p.idle_started_at, chat_id)
+        for chat_id, p in players.items()
+        if chat_id != exclude and p.idle_mode is not None
+        and p.current is None
+        and (p.loading_task is None or p.loading_task.done())
+    ]
+    return min(idle)[1] if idle else None
 
 
 def ended_early(elapsed: float, duration_seconds: float | None) -> bool:
@@ -471,7 +499,8 @@ async def main() -> None:
         for value in os.getenv("ALLOWED_STREAM_HOSTS", "").split(",")
         if value.strip()
     }
-    max_groups = max(1, int(os.getenv("MAX_ACTIVE_GROUPS", "2")))
+    # Conservative Render Free cap: more than 2 is allowed, but not unlimited.
+    max_groups = max(1, min(8, int(os.getenv("MAX_ACTIVE_GROUPS", "4"))))
     players: dict[int, Player] = defaultdict(Player)
     ready = False
 
@@ -489,7 +518,7 @@ async def main() -> None:
         bot_token=os.environ["BOT_TOKEN"],
         in_memory=True,
     )
-    calls = PyTgCalls(assistant, workers=2)
+    calls = PyTgCalls(assistant, workers=min(max_groups, 4))
 
     async def is_chat_admin(chat_id: int, user_id: int | None) -> bool:
         if not user_id:

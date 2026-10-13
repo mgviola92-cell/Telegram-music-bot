@@ -1040,6 +1040,102 @@ async def main() -> None:
                     pass
                 return
 
+    @calls.on_update(call_filters.chat_update(ChatUpdate.Status.LEFT_CALL))
+    async def call_left(_: PyTgCalls, update: ChatUpdate) -> None:
+        log.warning("Telegram VC state changed in chat %s (status=%s)", update.chat_id, update.status)
+        player = players.get(update.chat_id)
+        if player is None:
+            return
+        async with player.lock:
+            if player.current is None:
+                return  # This may be an intentional /stop.
+            # A future /play must not be queued behind a disconnected stream.
+            player.current = None
+            player.paused = False
+            player.started_at = 0.0
+            player.recovery_attempts = 0
+            await clear_player_panel(update.chat_id, player)
+            clean_temp(player.temp_file)
+            player.temp_file = None
+        try:
+            await bot.send_message(
+                update.chat_id,
+                "⚠️ Voice Chat connection ပိတ်/ပြတ်သွားတယ်။ "
+                "Group VC ကို ပြန်ဖွင့်ထားပြီး /play သုံးနိုင်တယ်။",
+            )
+        except Exception:
+            pass
+
+    async def watch_voice_connections() -> None:
+        """Repair a detached stream even if no StreamEnded update arrives.
+
+        The registry check is local to the PyTgCalls binding and cheap.
+        No background music download is attempted: reuse existing media.
+        """
+        while True:
+            await asyncio.sleep(35)
+            active = [cid for cid, player in players.items() if player.current is not None]
+            if not active:
+                continue
+            try:
+                call_registry = await asyncio.wait_for(calls.calls, timeout=10)
+            except Exception as exc:
+                log.warning("VC watchdog could not check active calls (%s)", type(exc).__name__)
+                continue
+            for chat_id in active:
+                if chat_id in call_registry:
+                    continue
+                player = players[chat_id]
+                async with player.lock:
+                    song = player.current
+                    if song is None:
+                        continue
+                    log.warning(
+                        "VC watchdog detected disconnected stream chat %s (attempts=%s)",
+                        chat_id, player.recovery_attempts,
+                    )
+                    if player.recovery_attempts < 1:
+                        player.recovery_attempts += 1
+                        source = player.temp_file or song.source
+                        if not source or (player.temp_file and not Path(source).is_file()):
+                            log.warning("VC recovery file absent in chat %s", chat_id)
+                        else:
+                            try:
+                                if song.video:
+                                    media = MediaStream(
+                                        source, AudioQuality.MEDIUM, VideoQuality.SD_360p
+                                    )
+                                else:
+                                    media = MediaStream(
+                                        source, AudioQuality.HIGH,
+                                        video_flags=MediaStream.Flags.IGNORE,
+                                    )
+                                await play_with_reconnect(calls, chat_id, media)
+                                player.started_at = time.monotonic()
+                                log.info("VC watchdog repaired chat %s", chat_id)
+                                continue
+                            except asyncio.CancelledError:
+                                raise
+                            except Exception as exc:
+                                log.warning(
+                                    "VC watchdog reconnect unsuccessful in %s (%s)",
+                                    chat_id, type(exc).__name__,
+                                )
+                    player.current = None
+                    player.paused = False
+                    player.started_at = 0.0
+                    await clear_player_panel(chat_id, player)
+                    clean_temp(player.temp_file)
+                    player.temp_file = None
+                try:
+                    await bot.send_message(
+                        chat_id,
+                        "⚠️ VC connection ပြတ်သွားတယ်။ Group VC ဆက်ဖွင့်ထားရင် "
+                        "/play နဲ့ ပြန်ဖွင့်နိုင်တယ်။",
+                    )
+                except Exception:
+                    pass
+
     @calls.on_update(call_filters.stream_end())
     async def stream_end(_: PyTgCalls, update: StreamEnded) -> None:
         player = players.get(update.chat_id)
@@ -1104,6 +1200,7 @@ async def main() -> None:
         runner, "0.0.0.0", int(os.getenv("PORT", "10000"))
     ).start()
 
+    watchdog_task: asyncio.Task | None = None
     try:
         await calls.start()  # Starts the assistant MTProto client.
         identity = await assistant.get_me()
@@ -1113,9 +1210,13 @@ async def main() -> None:
         await bot.start()
         ready = True
         log.info("Music Bot started; maximum active voice chats: %s", max_groups)
+        watchdog_task = asyncio.create_task(watch_voice_connections())
         await asyncio.Event().wait()
     finally:
         ready = False
+        if watchdog_task is not None:
+            watchdog_task.cancel()
+            await asyncio.gather(watchdog_task, return_exceptions=True)
         for player in players.values():
             clean_temp(player.temp_file)
         await bot.stop()

@@ -13,9 +13,9 @@ import uuid
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
-from aiohttp import web
+from aiohttp import ClientSession, ClientTimeout, web
 from pyrogram import Client, filters
 from pyrogram.types import Message
 from pytgcalls import PyTgCalls
@@ -29,8 +29,8 @@ logging.basicConfig(
 log = logging.getLogger("telegram_music")
 
 MAX_QUEUE = 10
-MAX_AUDIO_BYTES = 25 * 1024 * 1024
-MAX_VIDEO_BYTES = 25 * 1024 * 1024
+MAX_AUDIO_BYTES = 20 * 1024 * 1024
+MAX_VIDEO_BYTES = 20 * 1024 * 1024
 MAX_YOUTUBE_BYTES = 40 * 1024 * 1024
 MAX_MEDIA_SECONDS = 600
 
@@ -96,6 +96,62 @@ def is_youtube_url(value: str) -> bool:
         )
     except ValueError:
         return False
+
+
+async def download_bot_api_file(
+    file_id: str,
+    target: str,
+    size_limit: int,
+    token: str,
+    api_root: str = "https://api.telegram.org",
+) -> str:
+    """Fetch media over Bot API HTTPS instead of the failing MTProto media DC.
+
+    Bot API file downloads have a 20 MB limit. URLs containing the token
+    must never appear in group replies or application exception logs.
+    """
+    limit = min(size_limit, 20 * 1024 * 1024)
+    timeout = ClientTimeout(total=35, connect=8, sock_read=15)
+    try:
+        async with ClientSession(timeout=timeout) as http:
+            async with http.post(
+                f"{api_root}/bot{token}/getFile",
+                data={"file_id": file_id},
+                allow_redirects=False,
+            ) as response:
+                if response.status != 200:
+                    raise ValueError("Telegram getFile returned non-200")
+                payload = await response.json()
+                if not payload.get("ok"):
+                    raise ValueError("Telegram getFile rejected file_id")
+                result = payload.get("result") or {}
+                file_path = result.get("file_path")
+                if (not isinstance(file_path, str) or not file_path or
+                        file_path.startswith("/") or
+                        ".." in file_path.split("/") or "://" in file_path):
+                    raise ValueError("Telegram returned invalid file path")
+                if int(result.get("file_size") or 0) > limit:
+                    raise ValueError("Telegram Bot API 20 MB download limit")
+            file_url = f"{api_root}/file/bot{token}/" + quote(file_path, safe="/")
+            async with http.get(file_url, allow_redirects=False) as response:
+                if response.status != 200:
+                    raise ValueError("Telegram file download HTTP failure")
+                size = 0
+                with open(target, "wb") as media:
+                    async for chunk in response.content.iter_chunked(256 * 1024):
+                        size += len(chunk)
+                        if size > limit:
+                            raise ValueError("Telegram file exceeds 20 MB limit")
+                        media.write(chunk)
+                if size == 0:
+                    raise ValueError("Telegram returned an empty file")
+        return target
+    except Exception as exc:
+        Path(target).unlink(missing_ok=True)
+        # Do not leak the Bot token through aiohttp's URL-containing errors.
+        raise RuntimeError(
+            f"Telegram HTTP media download failed ({type(exc).__name__})"
+        ) from None
 
 
 def download_song(query: str, video: bool) -> tuple[str, str]:
@@ -273,11 +329,31 @@ async def main() -> None:
                         / ("music_" + uuid.uuid4().hex + (".mp4" if song.video else ".mp3"))
                     )
                     local_file = target
-                    downloaded = await asyncio.wait_for(
-                        bot.download_media(source, file_name=target), timeout=70
-                    )
+                    try:
+                        downloaded = await download_bot_api_file(
+                            source, target,
+                            MAX_VIDEO_BYTES if song.video else MAX_AUDIO_BYTES,
+                            os.environ["BOT_TOKEN"],
+                        )
+                        log.info("Telegram media downloaded via HTTPS Bot API in chat %s", chat_id)
+                    except RuntimeError as exc:
+                        log.warning(
+                            "Bot API media fetch unavailable in chat %s (%s); "
+                            "trying MTProto with short timeout",
+                            chat_id, type(exc).__name__,
+                        )
+                        Path(target).unlink(missing_ok=True)
+                        try:
+                            downloaded = await asyncio.wait_for(
+                                bot.download_media(source, file_name=target), timeout=25
+                            )
+                        except Exception as mtproto_exc:
+                            raise RuntimeError(
+                                "Telegram HTTPS and MTProto downloads both unavailable "
+                                f"({type(mtproto_exc).__name__})"
+                            ) from None
                     if not downloaded:
-                        raise RuntimeError("Telegram audio download failed")
+                        raise RuntimeError("Telegram file download returned no media")
                     local_file = downloaded
                     source = local_file
 
@@ -315,9 +391,12 @@ async def main() -> None:
                 if type(exc).__name__ == "NoActiveGroupCall":
                     error_message = ("🎙 Group Voice Chat ကို Admin က ဖွင့်ပေးပါ။ "
                                      "Assistant က /play နဲ့ အလိုအလျောက် ဝင်ပေးမယ်။")
-                elif isinstance(exc, (TimeoutError, asyncio.TimeoutError)):
-                    error_message = ("⚠️ Media Download Timeout ဖြစ်တယ်။ "
-                                     "အခြားသီချင်းနဲ့ ပြန်စမ်းပေးပါ။")
+                elif isinstance(exc, (TimeoutError, asyncio.TimeoutError)) or (
+                    song.telegram_file and "download" in str(exc).lower()
+                ):
+                    error_message = ("⚠️ Telegram Media Download မအောင်မြင်ဘူး။ "
+                                     "HTTPS Bot API နဲ့ MTProto နှစ်ခုစလုံးမရနိုင်တာပါ။ "
+                                     "နောက်မှ ပြန်စမ်းပေးပါ။")
                 elif song.youtube:
                     error_message = ("⚠️ Music source တွေက ဒီသီချင်းကို Download "
                                      "မပေးနိုင်သေးဘူး။ YouTube Login Check "
@@ -374,7 +453,7 @@ async def main() -> None:
         if media:
             byte_limit = MAX_VIDEO_BYTES if video_mode else MAX_AUDIO_BYTES
             if media.file_size and media.file_size > byte_limit:
-                await msg.reply_text("⚠️ လောလောဆယ် 25 MB အောက် Media File ကိုပဲ လက်ခံတယ်။")
+                await msg.reply_text("⚠️ လောလောဆယ် Telegram Audio/Video 20 MB အောက်ပဲ လက်ခံတယ်။")
                 return
             title = (
                 getattr(media, "title", None)

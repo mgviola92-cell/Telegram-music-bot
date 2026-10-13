@@ -526,6 +526,9 @@ async def main() -> None:
             player.recovery_attempts = 0
 
             while player.queue:
+                # A failed timed-out worker must not poison the next track.
+                cancel_signal = threading.Event()
+                player.cancel_download = cancel_signal
                 song: Track = player.queue.popleft()
                 local_file = None
                 try:
@@ -623,6 +626,8 @@ async def main() -> None:
                     log.info("Playback loading canceled chat %s", chat_id)
                     raise
                 except Exception as exc:
+                    if isinstance(exc, (TimeoutError, asyncio.TimeoutError)):
+                        cancel_signal.set()
                     clean_temp(local_file)
                     log.exception("Could not play track in chat %s", chat_id)
                     if type(exc).__name__ == "NoActiveGroupCall":
@@ -989,19 +994,51 @@ async def main() -> None:
     @calls.on_update(call_filters.stream_end())
     async def stream_end(_: PyTgCalls, update: StreamEnded) -> None:
         player = players.get(update.chat_id)
-        if player is None:
+        if player is None or update.stream_type != StreamEnded.Type.AUDIO:
             return
         async with player.lock:
-            # The video track can produce separate audio/video end events.
-            # Move queue only for the audio stream to avoid double-advance.
-            if update.stream_type != StreamEnded.Type.AUDIO:
+            song = player.current
+            if song is None:
+                log.info("Ignored VC end event in chat %s (no active song)", update.chat_id)
                 return
-            # Ignore delayed end events caused by replacing a stream.
-            if player.current and time.monotonic() - player.started_at >= 2:
+            elapsed = time.monotonic() - player.started_at
+            if elapsed < 2:
+                log.info("Ignored delayed VC audio end in chat %s (%.1fs)", update.chat_id, elapsed)
+                return
+            log.warning(
+                "VC audio end chat %s after %.1fs (duration=%s, recovery=%s, queue=%s)",
+                update.chat_id, elapsed, song.duration_seconds,
+                player.recovery_attempts, len(player.queue),
+            )
+            # A premature StreamEnded update may be a transient call failure,
+            # not the end of the audio. Reuse the same cached local media once.
+            if (not player.paused and player.recovery_attempts < 1
+                    and ended_early(elapsed, song.duration_seconds)):
+                player.recovery_attempts += 1
+                source = player.temp_file or song.source
                 try:
-                    await asyncio.create_task(advance(update.chat_id, repeat=True))
-                except asyncio.CancelledError:
+                    if song.video:
+                        stream = MediaStream(
+                            source, AudioQuality.MEDIUM, VideoQuality.SD_360p
+                        )
+                    else:
+                        stream = MediaStream(
+                            source, AudioQuality.HIGH,
+                            video_flags=MediaStream.Flags.IGNORE,
+                        )
+                    await play_with_reconnect(calls, update.chat_id, stream)
+                    player.started_at = time.monotonic()
+                    log.info("Recovered prematurely ended VC media in chat %s", update.chat_id)
                     return
+                except Exception as exc:
+                    log.warning(
+                        "VC premature-end recovery failed in chat %s (%s)",
+                        update.chat_id, type(exc).__name__,
+                    )
+            try:
+                await asyncio.create_task(advance(update.chat_id, repeat=True))
+            except asyncio.CancelledError:
+                return
 
     async def health(_: web.Request) -> web.Response:
         return web.json_response({

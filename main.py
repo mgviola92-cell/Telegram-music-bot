@@ -21,6 +21,7 @@ from pyrogram import Client, filters
 from pyrogram.enums import ChatMemberStatus
 from pyrogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from music_ui import player_controls, queue_display, queue_remove, queue_shuffle
+from audius_source import fetch_audius_audio
 from song_cache import get_cached_song, save_cached_song
 from pytgcalls import PyTgCalls
 from pytgcalls import filters as call_filters
@@ -329,10 +330,14 @@ def source_candidates(
     priority = os.getenv("MUSIC_SOURCE_PRIORITY", "youtube").lower()
     if priority != "soundcloud":
         yield youtube
+        if os.getenv("AUDIUS_ENABLED", "1") != "0":
+            yield ("Audius", query)
     if cancel_signal is None or not cancel_signal.is_set():
         for url in soundcloud_results(query, max_tracks=3, cancel_signal=cancel_signal):
             yield ("SoundCloud", url)
     if priority == "soundcloud":
+        if os.getenv("AUDIUS_ENABLED", "1") != "0":
+            yield ("Audius", query)
         yield youtube
 
 
@@ -354,6 +359,25 @@ def download_song(query: str, video: bool, cancel_signal: threading.Event | None
     failures: list[str] = []
     for provider, target in source_candidates(query, video, cancel_signal=cancel_signal):
         abort_if_stopped()
+        if provider == "Audius":
+            # This is a documented third-party stream API for publicly
+            # streamable recordings; it does not extract YouTube media.
+            try:
+                audius = fetch_audius_audio(
+                    target, cancel_signal=cancel_signal, match=suitable_recording
+                )
+                abort_if_stopped()
+                if audius is not None:
+                    path, label, seconds = audius
+                    if os.getenv("MUSIC_CACHE_ENABLED", "1") != "0":
+                        save_cached_song(query, video, path, label, seconds)
+                    return path, label, seconds
+            except InterruptedError:
+                raise
+            except Exception as exc:
+                log.warning("Audius source unavailable (%s)", type(exc).__name__)
+            failures.append("Audius")
+            continue
         directory = Path(tempfile.mkdtemp(prefix="mudyar_media_"))
         opts = {
             "format": (

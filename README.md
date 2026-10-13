@@ -33,7 +33,7 @@ Required Render environment variables:
 
 Optional variables:
 
-- `MAX_ACTIVE_GROUPS`: initial safety cap, default 2.
+- `MAX_ACTIVE_GROUPS`: default 4 simultaneous voice streams, bounded at 8 in code. The number of groups that can add the bot is not limited by this setting.
 - `ALLOWED_STREAM_HOSTS`: comma-separated allowlist of exact trusted HTTPS audio hostnames; empty by default.
 - `PORT`: set automatically by Render; the code listens on 0.0.0.0.
 
@@ -70,10 +70,10 @@ maintenance, resource limits, and restarts can still disconnect the assistant.
 - Game Bot code, database, UptimeRobot monitor, and Render service must not be changed.
 - Render Free may restart and its filesystem is ephemeral; queues and temporary audio are in-memory/local only.
 - This MVP limits queued tracks to 10 per group and Telegram audio/video messages to 20 MB (HTTPS Bot API getFile limit); video is experimental and limited to one concurrent stream.
-- Video is CPU-intensive; Render Free 0.1 CPU/512 MB cannot guarantee smooth video or multiple concurrent voice chats.
+- Video is CPU-intensive; Render Free has extremely limited CPU (observed service limit 0.15 CPU) and 512 MB RAM. Four concurrent calls is a trial cap, **not** a guarantee of smooth audio; lowering the cap may be necessary.
 - Telegram file replies are fetched through the HTTPS Bot API first, with a shorter MTProto fallback when the HTTP route is unavailable. Downloaded Telegram, SoundCloud and YouTube files are temporary. Only share media you have permission to play.
 - No automatic deploy: commits are deployed manually after GitHub workflow checks, and then VC is tested with users.
-- The default `MAX_ACTIVE_GROUPS=2` is a test cap, not evidence of stable concurrent streaming.
+- The default `MAX_ACTIVE_GROUPS=4` is a trial cap, not evidence of stable concurrent streaming. Idle calls count against that cap; a new song request evicts the oldest idle group before denying service. Groups may install the bot without this concurrent-VC limit.
 
 ## Reference review and implementation boundaries (October 2026)
 
@@ -102,6 +102,8 @@ Not yet adapted: Spotify or Apple Music audio playback (their metadata APIs do n
 | `/remove 2` | Group admins | Remove second song from upcoming queue |
 | `/clear` | Group admins | Empty upcoming queue, keep current song |
 | `/loop` | Group admins | Toggle repeating the current song at natural end |
+| `/radio on`, `/radio off`, `/radio status` | Group admins to toggle; everyone to view | Optional authorized radio when queue empties |
+| `/idle on`, `/idle off`, `/idle status` | Group admins to toggle; everyone to view | Keep a silent VC session open after the queue ends, or revert to auto-leave |
 | `/start`, `/help`, `/cmd` | Everyone | Music help and group-add button |
 
 The inline player buttons are attached only to the active Now Playing message and ignore old/stale cards.
@@ -116,10 +118,38 @@ The inline player buttons are attached only to the active Now Playing message an
 - A short-lived two-song cache is available. The provider search and stream may still take time, and Render Free may sleep/restart despite periodic HTTP checks.
 
 
+## Empty-queue VC and radio fallback (October 2026)
+
+When the queue empties, **the assistant stays in its current group Voice Chat**.
+It tries an approved live radio stream first, but only if the owner has privately configured
+an authorized station URL. Without one, it uses a **15-minute looping silent WAV**.
+This is a quiet VC waiting mode, **not** a real Myanmar radio station. Music requests
+preempt idle immediately. `/stop` always clears the queue and leaves.
+
+**Radio setup (Music Bot Render service only):** configure
+`RADIO_STREAM_URL=https://<authorized-station-host>/<direct-audio-path>` and
+`RADIO_STREAM_HOSTS=<authorized-station-host>` using the private Render
+environment. The host must be an exact HTTPS hostname; the stream must be
+authorized for redistribution to the Telegram voice chat. A station website
+address is not necessarily a direct audio URL, and the ability to listen on a
+website does not necessarily grant rebroadcast permission. No third-party
+station stream is enabled by default. `/radio on` and `/radio off`
+control automatic radio fallback per group; `/idle off` restores the old
+auto-leave behavior for that group.
+
+**Capacity:** unlimited installed groups, default 4 simultaneous group VCs.
+A silent or radio idle session uses a real VC slot, so a new group's song can
+displace the longest-idle group. The bot notifies that group when an idle VC
+is released. The oldest idle stream is evicted rather than rejecting a song.
+Only songs in use are guaranteed preference, and Render Free may not support
+four concurrent calls at acceptable quality. The cap can be adjusted by
+`MAX_ACTIVE_GROUPS` (hard maximum 8) after performance testing.
+Restarting Render clears group-specific toggle settings.
+
 ## Playback stability improvements (October 2026)
 
 - The source can attempt one VC reconnect after a stale join/play error, without creating a voice chat if the administrator has not opened one.
-- PyTgCalls `StreamEnded` events are logged. If the song ends noticeably earlier than its known duration, a single recovery attempt reuses the existing local media file. Legitimate track endings still advance the queue; after it empties, the assistant leaves the VC.
+- PyTgCalls `StreamEnded` events are logged. If the song ends noticeably earlier than its known duration, a single recovery attempt reuses the existing local media file. Legitimate track endings still advance the queue; after it empties, the assistant switches to radio (only when explicitly configured) or a quiet idle loop instead of leaving the VC. An explicit `/stop` still leaves.
 - A lightweight in-process watchdog inspects the PyTgCalls active-call registry every 35 seconds. It attempts to recover a detached session once, and releases stale playback state if recovery fails, so a subsequent `/play` can start normally.
 - `/play` also verifies stale per-chat state before appending to a queue when an old session disappeared. Voice-chat leave updates clear invalid state.
 - Now-playing inline buttons acknowledge actions promptly to avoid Telegram `QUERY_ID_INVALID` during long downloads or reconnection.

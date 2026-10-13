@@ -21,6 +21,7 @@ from pyrogram import Client, filters
 from pyrogram.enums import ChatMemberStatus
 from pyrogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from music_ui import player_controls, queue_display, queue_remove, queue_shuffle
+from song_cache import get_cached_song, save_cached_song
 from pytgcalls import PyTgCalls
 from pytgcalls import filters as call_filters
 from pytgcalls.types import AudioQuality, GroupCallConfig, MediaStream, StreamEnded, VideoQuality
@@ -339,6 +340,13 @@ def download_song(query: str, video: bool, cancel_signal: threading.Event | None
     """Download one playable source, trying SoundCloud if YouTube is blocked."""
     from yt_dlp import YoutubeDL
 
+    if os.getenv("MUSIC_CACHE_ENABLED", "1") != "0":
+        if cancel_signal is not None and cancel_signal.is_set():
+            raise InterruptedError("Download cancelled by stop")
+        cached = get_cached_song(query, video)
+        if cached is not None:
+            return cached
+
     def abort_if_stopped(_: dict | None = None) -> None:
         if cancel_signal is not None and cancel_signal.is_set():
             raise InterruptedError("Download cancelled by stop")
@@ -394,7 +402,11 @@ def download_song(query: str, video: bool, cancel_signal: threading.Event | None
             ):
                 raise ValueError("Non-matching or altered recording")
             log.info("Resolved music through %s (track title may differ from query)", provider)
-            return str(media_path), f"{title} · {provider}", float(duration) if duration is not None else None
+            label = f"{title} · {provider}"
+            seconds = float(duration) if duration is not None else None
+            if os.getenv("MUSIC_CACHE_ENABLED", "1") != "0":
+                save_cached_song(query, video, str(media_path), label, seconds)
+            return str(media_path), label, seconds
         except Exception as exc:
             shutil.rmtree(directory, ignore_errors=True)
             abort_if_stopped()

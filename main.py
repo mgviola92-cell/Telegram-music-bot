@@ -24,7 +24,7 @@ from music_ui import player_controls, queue_display, queue_remove, queue_shuffle
 from song_cache import get_cached_song, save_cached_song
 from pytgcalls import PyTgCalls
 from pytgcalls import filters as call_filters
-from pytgcalls.types import AudioQuality, GroupCallConfig, MediaStream, StreamEnded, VideoQuality
+from pytgcalls.types import AudioQuality, ChatUpdate, GroupCallConfig, MediaStream, StreamEnded, VideoQuality
 
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO"),
@@ -796,6 +796,23 @@ async def main() -> None:
             await progress.edit_text("✅ Queue ထဲထည့်ပြီးပြီ — " + track.title)
             return
         async with player.lock:
+            # An external VC disconnect can leave player.current set even
+            # though PyTgCalls has no active session. Without this check,
+            # every subsequent /play is stuck in a queue that never plays.
+            if player.current is not None:
+                try:
+                    active_calls = await asyncio.wait_for(calls.calls, timeout=8)
+                    if msg.chat.id not in active_calls:
+                        log.warning("Resetting stale player state for chat %s on /play", msg.chat.id)
+                        player.current = None
+                        player.paused = False
+                        player.started_at = 0.0
+                        player.recovery_attempts = 0
+                        await clear_player_panel(msg.chat.id, player)
+                        clean_temp(player.temp_file)
+                        player.temp_file = None
+                except Exception as exc:
+                    log.warning("Could not verify VC state in %s (%s)", msg.chat.id, type(exc).__name__)
             if len(player.queue) >= MAX_QUEUE:
                 await progress.edit_text("⚠️ Queue ပြည့်နေပြီ (10 tracks)။")
                 return

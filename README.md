@@ -13,7 +13,7 @@ Standalone Telegram voice-chat music bot. It is NOT part of the existing Game Bo
 - `/start`, `/help`, `/ping` and HTTP `/health` for Render/UptimeRobot.
 - Automatic next track on stream end (best effort); leave when the queue runs out.
 
-Song-title audio requests check several SoundCloud search results and skip tracks that refuse playback (including DRM-protected tracks); if nothing works, they try YouTube. The matching SoundCloud upload can be a remix, cover, or otherwise different from the requested recording; the response includes the actual title and its source. YouTube may refuse requests from Render cloud IPs with a sign-in challenge, and SoundCloud may also fail. Spotify direct playback is not implemented. A Telegram MP3 reply and a SoundCloud song have been confirmed to play in a real group VC; the revised controls still require a live smoke test. Passing Python tests alone does not confirm all playback controls.
+Song-title audio requests now try YouTube search for an official recording first; if YouTube refuses access, the engine lazily tests up to three suitably matched SoundCloud results. Set `MUSIC_SOURCE_PRIORITY=soundcloud` to restore the original SoundCloud-first behavior. These sources may still fail due to provider checks, licensing/DRM, or server routing. A 15-minute local cache (two tracks, 36 MB overall and 24 MB per entry) can accelerate repeated songs on the same running instance; set `MUSIC_CACHE_ENABLED=0` to disable it. No login-cookies, proxy bypasses, or new third-party download APIs are installed. The matching SoundCloud upload can be a remix, cover, or otherwise different from the requested recording; the response includes the actual title and its source. YouTube may refuse requests from Render cloud IPs with a sign-in challenge, and SoundCloud may also fail. Spotify direct playback is not implemented. A Telegram MP3 reply and a SoundCloud song have been confirmed to play in a real group VC; the revised controls still require a live smoke test. Passing Python tests alone does not confirm all playback controls.
 
 ## Render deployment
 
@@ -105,3 +105,14 @@ Not yet adapted: Spotify or Apple Music audio playback (their metadata APIs do n
 | `/start`, `/help`, `/cmd` | Everyone | Music help and group-add button |
 
 The inline player buttons are attached only to the active Now Playing message and ignore old/stale cards.
+
+## Playback stability improvements (October 2026)
+
+- The source can attempt one VC reconnect after a stale join/play error, without creating a voice chat if the administrator has not opened one.
+- PyTgCalls `StreamEnded` events are logged. If the song ends noticeably earlier than its known duration, a single recovery attempt reuses the existing local media file. Legitimate track endings still advance the queue; after it empties, the assistant leaves the VC.
+- A lightweight in-process watchdog inspects the PyTgCalls active-call registry every 35 seconds. It attempts to recover a detached session once, and releases stale playback state if recovery fails, so a subsequent `/play` can start normally.
+- `/play` also verifies stale per-chat state before appending to a queue when an old session disappeared. Voice-chat leave updates clear invalid state.
+- Now-playing inline buttons acknowledge actions promptly to avoid Telegram `QUERY_ID_INVALID` during long downloads or reconnection.
+- Local source and retry tests are offline: **successful GitHub Actions do not prove continuous live group-VC audio.** A real smoke test is still required after each deploy.
+
+Render Free can restart or suspend instances and cannot guarantee uninterrupted streaming. Background watchdogs run only when the Render instance is awake; disk cache and in-memory queue disappear on restart.

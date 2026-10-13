@@ -70,6 +70,7 @@ class Player:
     radio_retry_after: float = 0.0
     radio_enabled: bool = True
     keep_idle: bool = True
+    idle_notice_sent: bool = False
 
 
 def voice_slot_count(players: dict[int, Player]) -> int:
@@ -606,8 +607,114 @@ async def main() -> None:
             except Exception:
                 log.warning("Could not revoke temporary invite for chat %s", chat_id)
 
+    async def start_idle(
+        chat_id: int, player: Player, progress: Message | None = None
+    ) -> bool:
+        """Preserve a live VC after the queue ends without faking radio audio.
+
+        Radio requires a verified, authorized station configured by its owner.
+        Otherwise play a tiny silent loop to remain connected. Caller holds lock.
+        """
+        if not player.keep_idle:
+            return False
+        options: list[tuple[str, str]] = []
+        radio = (
+            configured_radio_url() if player.radio_enabled
+            and time.monotonic() >= player.radio_retry_after else None
+        )
+        if radio:
+            options.append(("radio", radio))
+        try:
+            silence = await asyncio.to_thread(ensure_idle_audio)
+            options.append(("silence", silence))
+        except OSError as exc:
+            log.warning("Could not build silent idle media (%s)", type(exc).__name__)
+        for mode, source in options:
+            try:
+                await play_with_reconnect(
+                    calls, chat_id,
+                    MediaStream(
+                        source, AudioQuality.MEDIUM,
+                        video_flags=MediaStream.Flags.IGNORE,
+                    ),
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                log.warning("Could not enter %s idle in chat %s (%s)",
+                            mode, chat_id, type(exc).__name__)
+                if mode == "radio":
+                    player.radio_retry_after = time.monotonic() + 10 * 60
+                continue
+            was_idle = player.idle_notice_sent
+            if not player.idle_mode:
+                player.idle_started_at = time.monotonic()
+            player.idle_mode = mode
+            player.started_at = time.monotonic()
+            player.current = None
+            player.temp_file = None
+            player.paused = False
+            player.recovery_attempts = 0
+            await clear_player_panel(chat_id, player)
+            log.info("Empty queue: chat %s stayed in VC on %s idle", chat_id, mode)
+            if not was_idle:
+                notice = (
+                    "📻 Queue အလွတ် — ခွင့်ပြုထားတဲ့ Radio Stream ဖွင့်ထားတယ်။ "
+                    "/play နဲ့ သီချင်းတောင်းနိုင်တယ်။ /stop နဲ့ VC ထွက်မယ်။"
+                    if mode == "radio"
+                    else "🔇 Queue အလွတ် — VC ထဲမှာ အသံမပါဘဲ စောင့်နေမယ်။ "
+                         "Radio URL အတည်ပြုပြီး ချိတ်ထားမှ Radio ဖွင့်နိုင်မယ်။ "
+                         "/play နဲ့ သီချင်းတောင်းနိုင်တယ်။ /stop နဲ့ VC ထွက်မယ်။"
+                )
+                try:
+                    if progress:
+                        await progress.edit_text(notice)
+                    else:
+                        await bot.send_message(chat_id, notice)
+                except Exception:
+                    log.info("Idle notice unavailable in chat %s", chat_id)
+            player.idle_notice_sent = True
+            return True
+        return False
+
+    async def evict_oldest_idle_for_song(chat_id: int) -> bool:
+        """A song request takes priority over the oldest idle group VC."""
+        if voice_slot_count(players) < max_groups:
+            return True
+        victim_id = oldest_idle_chat(players, chat_id)
+        if victim_id is None:
+            return False
+        victim = players[victim_id]
+        async with victim.lock:
+            if victim.current is not None or victim.idle_mode is None:
+                return False
+            if victim.loading_task is not None and not victim.loading_task.done():
+                return False
+            victim.idle_mode = None
+            victim.idle_notice_sent = False
+            victim.idle_started_at = 0
+            victim.started_at = 0
+            try:
+                await asyncio.wait_for(calls.leave_call(victim_id), timeout=10)
+            except Exception as exc:
+                log.warning("Idle eviction VC leave failed %s (%s)",
+                            victim_id, type(exc).__name__)
+                return False
+            log.info("Freed oldest idle chat %s for a new song in %s",
+                     victim_id, chat_id)
+        try:
+            await bot.send_message(
+                victim_id,
+                "🎧 အခြား Group က သီချင်းဖွင့်ဖို့ VC Slot လိုလာလို့ "
+                "Idle ဖြစ်နေတဲ့ ဒီ VC ကနေ ခဏထွက်ပေးလိုက်တယ်။ "
+                "/play နဲ့ ပြန်ဝင်နိုင်တယ်။",
+            )
+        except Exception:
+            pass
+        return voice_slot_count(players) < max_groups
+
     async def advance(chat_id: int, progress: Message | None = None, *, repeat: bool = False) -> None:
-        """Caller holds this chat's lock. Moves to next track or leaves VC."""
+        """Caller holds this chat's lock. Move to next track or idle VC."""
         player = players[chat_id]
         task = asyncio.current_task()
         player.loading_task = task
@@ -695,6 +802,9 @@ async def main() -> None:
                     await play_with_reconnect(calls, chat_id, stream)
                     log.info("VC play success chat %s", chat_id)
                     player.current = song
+                    player.idle_mode = None
+                    player.idle_started_at = 0
+                    player.idle_notice_sent = False
                     player.recovery_attempts = 0
                     player.temp_file = local_file
                     player.started_at = time.monotonic()
@@ -754,11 +864,18 @@ async def main() -> None:
                     except Exception:
                         log.warning("Could not announce track error in chat %s", chat_id)
 
+            # Keep the assistant connected between requests; explicit /stop
+            # still leaves. The silent fallback is not claimed as a radio station.
+            if await start_idle(chat_id, player, progress):
+                return
+            player.idle_mode = None
+            player.idle_started_at = 0
+            player.idle_notice_sent = False
             try:
                 await calls.leave_call(chat_id)
             except Exception as exc:
-                log.info("VC leave after empty queue in %s: %s", chat_id, type(exc).__name__)
-            log.info("Playlist finished; empty queue; VC left chat %s", chat_id)
+                log.info("VC leave after idle failure in %s: %s", chat_id, type(exc).__name__)
+            log.info("No idle stream available; VC left chat %s", chat_id)
             player.paused = False
             await clear_player_panel(chat_id, player)
         finally:

@@ -4,11 +4,11 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from aiohttp import web
 
-from main import Player, cancel_active_loading, download_bot_api_file, download_song, is_youtube_url, soundcloud_results, suitable_recording
+from main import Player, cancel_active_loading, download_bot_api_file, download_song, ended_early, is_youtube_url, play_with_reconnect, soundcloud_results, source_candidates, suitable_recording
 
 
 class TelegramHttpsTest(unittest.IsolatedAsyncioTestCase):
@@ -113,6 +113,68 @@ class MusicResolverTest(unittest.TestCase):
                 "https://soundcloud.com/user/artist",
             ],
         )
+
+
+class SourceSelectionTest(unittest.TestCase):
+    def test_youtube_first_and_lazy_soundcloud(self):
+        with patch("main.soundcloud_results", return_value=["https://soundcloud.com/artist/song"]) as search:
+            iterator = source_candidates("Alan Walker Faded", video=False)
+            self.assertEqual(next(iterator), ("YouTube", "ytsearch1:Alan Walker Faded official"))
+            search.assert_not_called()
+            self.assertEqual(next(iterator), ("SoundCloud", "https://soundcloud.com/artist/song"))
+            self.assertEqual(search.call_count, 1)
+
+    def test_direct_youtube_skips_soundcloud(self):
+        with patch("main.soundcloud_results") as search:
+            self.assertEqual(
+                list(source_candidates("https://youtube.com/watch?v=abc123", video=False)),
+                [("YouTube", "https://youtube.com/watch?v=abc123")],
+            )
+            search.assert_not_called()
+
+    def test_soundcloud_first_compat_option(self):
+        with patch.dict("os.environ", {"MUSIC_SOURCE_PRIORITY": "soundcloud"}), patch(
+            "main.soundcloud_results", return_value=["https://soundcloud.com/a/b"]
+        ):
+            self.assertEqual(
+                list(source_candidates("a b", False)),
+                [("SoundCloud", "https://soundcloud.com/a/b"), ("YouTube", "ytsearch1:a b official")],
+            )
+
+    def test_end_timing_distinguishes_early_failure(self):
+        self.assertTrue(ended_early(30, 180))
+        self.assertFalse(ended_early(170, 180))
+        self.assertTrue(ended_early(15, None))
+        self.assertFalse(ended_early(35, None))
+
+
+class ReconnectTest(unittest.IsolatedAsyncioTestCase):
+    async def test_reconnect_retries_failed_vc_play_once(self):
+        calls = MagicMock()
+        calls.play = AsyncMock(side_effect=[RuntimeError("transport stale"), None])
+        calls.leave_call = AsyncMock(return_value=None)
+        with patch("main.asyncio.sleep", new_callable=AsyncMock):
+            await play_with_reconnect(calls, -100123, object())
+        self.assertEqual(calls.play.await_count, 2)
+        calls.leave_call.assert_awaited_once_with(-100123)
+
+    async def test_no_reconnection_when_first_play_succeeds(self):
+        calls = MagicMock()
+        calls.play = AsyncMock(return_value=None)
+        calls.leave_call = AsyncMock()
+        await play_with_reconnect(calls, -100123, object())
+        calls.play.assert_awaited_once()
+        calls.leave_call.assert_not_awaited()
+
+    async def test_no_active_vc_is_not_automatically_created(self):
+        class NoActiveGroupCall(Exception):
+            pass
+        calls = MagicMock()
+        calls.play = AsyncMock(side_effect=NoActiveGroupCall("no active group call"))
+        calls.leave_call = AsyncMock()
+        with self.assertRaises(NoActiveGroupCall):
+            await play_with_reconnect(calls, -100123, object())
+        calls.leave_call.assert_not_awaited()
 
 
 class PlaybackLifecycleTest(unittest.IsolatedAsyncioTestCase):

@@ -719,9 +719,25 @@ async def main() -> None:
             reply_markup=add_button,
         )
 
+    @bot.on_message(
+        filters.command(["play", "vplay", "ping", "stop", "queue"]) &
+        (filters.group | filters.private),
+        group=-1,
+    )
+    async def log_music_command(_: Client, msg: Message) -> None:
+        # This pre-handler runs independently of music downloading. It lets
+        # Render logs distinguish Telegram not delivering the command from
+        # a command that was received but failed to produce a reply.
+        action = (msg.command or ["unknown"])[0].lower()
+        log.info("Telegram command received /%s in chat %s", action, msg.chat.id)
+
     @bot.on_message(filters.command("ping"))
     async def ping_command(_: Client, msg: Message) -> None:
-        await msg.reply_text("🏓 Pong — Music Bot online!")
+        try:
+            await msg.reply_text("🏓 Pong — Music Bot online!")
+            log.info("Ping replied in chat %s", msg.chat.id)
+        except Exception:
+            log.exception("Ping reply failed in chat %s", msg.chat.id)
 
     @bot.on_message(filters.command(["play", "vplay"]) & filters.group)
     async def play_command(_: Client, msg: Message) -> None:
@@ -775,7 +791,12 @@ async def main() -> None:
             return
 
         player = players[msg.chat.id]
-        progress = await msg.reply_text("⏳ Assistant အလိုအလျောက်ဝင်ပြီး VC ချိတ်နေတယ်...")
+        try:
+            progress = await msg.reply_text("⏳ Assistant အလိုအလျောက်ဝင်ပြီး VC ချိတ်နေတယ်...")
+            log.info("Music request acknowledged in chat %s", msg.chat.id)
+        except Exception:
+            log.exception("Cannot acknowledge /play in chat %s", msg.chat.id)
+            return
         try:
             await ensure_assistant_in_group(msg.chat)
         except RuntimeError as exc:

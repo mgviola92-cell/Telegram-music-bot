@@ -1066,6 +1066,72 @@ async def main() -> None:
             )
         await msg.reply_text(message)
 
+    @bot.on_message(filters.command("radio") & filters.group)
+    async def radio_command(_: Client, msg: Message) -> None:
+        """Manage the optional authorized radio fallback per group."""
+        player = players[msg.chat.id]
+        action = msg.command[1].lower() if len(msg.command) > 1 else "status"
+        if action == "status":
+            configured = configured_radio_url() is not None
+            await msg.reply_text(
+                "📻 Radio URL: " + ("configured" if configured else "မချိတ်ရသေးဘူး") +
+                "\nRadio fallback: " + ("ON" if player.radio_enabled else "OFF") +
+                "\nIdle stream: " + (player.idle_mode or "none") +
+                "\nGroup Admin: /radio on, /radio off"
+            )
+            return
+        if action not in {"on", "off"}:
+            await msg.reply_text("📻 /radio on, /radio off, /radio status")
+            return
+        if not await require_admin(msg):
+            return
+        async with player.lock:
+            player.radio_enabled = action == "on"
+            if player.current is None and player.idle_mode is not None:
+                await start_idle(msg.chat.id, player)
+        if action == "on" and configured_radio_url() is None:
+            await msg.reply_text(
+                "📻 Radio ON သတ်မှတ်ထားတယ်။ ဒါပေမဲ့ ခွင့်ပြုထားတဲ့ "
+                "Radio Stream URL မရှိသေးလို့ Queue အလွတ်မှာ Silent Idle နဲ့ စောင့်မယ်။"
+            )
+        else:
+            await msg.reply_text(
+                "📻 Radio auto-fallback: " + ("ON" if action == "on" else "OFF")
+            )
+
+    @bot.on_message(filters.command("idle") & filters.group)
+    async def idle_command(_: Client, msg: Message) -> None:
+        """Opt out of remaining in a voice call between song requests."""
+        player = players[msg.chat.id]
+        action = msg.command[1].lower() if len(msg.command) > 1 else "status"
+        if action == "status":
+            await msg.reply_text(
+                "🎙 Empty queue stay in VC: " + ("ON" if player.keep_idle else "OFF") +
+                "\nIdle stream: " + (player.idle_mode or "none") +
+                "\nGroup Admin: /idle on, /idle off"
+            )
+            return
+        if action not in {"on", "off"}:
+            await msg.reply_text("🎙 /idle on, /idle off, /idle status")
+            return
+        if not await require_admin(msg):
+            return
+        async with player.lock:
+            player.keep_idle = action == "on"
+            if not player.keep_idle and player.idle_mode is not None:
+                player.idle_mode = None
+                player.idle_started_at = 0
+                player.idle_notice_sent = False
+                try:
+                    await asyncio.wait_for(calls.leave_call(msg.chat.id), timeout=10)
+                except Exception as exc:
+                    log.info("Idle opt-out leave in %s: %s", msg.chat.id, type(exc).__name__)
+        await msg.reply_text(
+            "🎙 Queue အလွတ်မှာ VC ဆက်စောင့်မယ်: " +
+            ("ON" if action == "on" else "OFF") +
+            (". /play နဲ့ ပြန်စနိုင်တယ်။" if action == "on" else "")
+        )
+
     @bot.on_message(filters.command("shuffle") & filters.group)
     async def shuffle_command(_: Client, msg: Message) -> None:
         if not await require_admin(msg):

@@ -309,26 +309,42 @@ def soundcloud_results(query: str, max_tracks: int = 6, cancel_signal: threading
             break
     return urls
 
-def download_song(query: str, video: bool, cancel_signal: threading.Event | None = None) -> tuple[str, str, float | None]:
-    """Download a playable candidate; SoundCloud handles audio-search fallback."""
-    from yt_dlp import YoutubeDL
+def source_candidates(
+    query: str, video: bool, cancel_signal: threading.Event | None = None
+):
+    """Lazy source choices: YouTube first, SoundCloud only if that fails.
 
+    YouTube search metadata can fail on some cloud hosts; this does not try
+    to bypass sign-in checks or protected media. Spotify URLs are unsupported.
+    """
     if is_youtube_url(query):
-        candidates = [("YouTube", query)]
-    elif video:
-        candidates = [("YouTube", "ytsearch1:" + query)]
-    else:
-        candidates = [
-            ("SoundCloud", url) for url in soundcloud_results(query, cancel_signal=cancel_signal)
-        ]
-        candidates.append(("YouTube", "ytsearch1:" + query))
+        yield ("YouTube", query)
+        return
+    if video:
+        yield ("YouTube", "ytsearch1:" + query)
+        return
+    # Search official artist recordings before third-party uploads.
+    youtube = ("YouTube", "ytsearch1:" + query + " official")
+    priority = os.getenv("MUSIC_SOURCE_PRIORITY", "youtube").lower()
+    if priority != "soundcloud":
+        yield youtube
+    if cancel_signal is None or not cancel_signal.is_set():
+        for url in soundcloud_results(query, max_tracks=3, cancel_signal=cancel_signal):
+            yield ("SoundCloud", url)
+    if priority == "soundcloud":
+        yield youtube
+
+
+def download_song(query: str, video: bool, cancel_signal: threading.Event | None = None) -> tuple[str, str, float | None]:
+    """Download one playable source, trying SoundCloud if YouTube is blocked."""
+    from yt_dlp import YoutubeDL
 
     def abort_if_stopped(_: dict | None = None) -> None:
         if cancel_signal is not None and cancel_signal.is_set():
             raise InterruptedError("Download cancelled by stop")
 
     failures: list[str] = []
-    for provider, target in candidates:
+    for provider, target in source_candidates(query, video, cancel_signal=cancel_signal):
         abort_if_stopped()
         directory = Path(tempfile.mkdtemp(prefix="mudyar_media_"))
         opts = {

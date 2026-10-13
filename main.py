@@ -45,6 +45,7 @@ class Track:
     telegram_file: bool = False
     video: bool = False
     youtube: bool = False
+    duration_seconds: float | None = None
 
 
 @dataclass
@@ -59,6 +60,46 @@ class Player:
     paused: bool = False
     loop_current: bool = False
     panel_id: int | None = None
+    recovery_attempts: int = 0
+
+
+def ended_early(elapsed: float, duration_seconds: float | None) -> bool:
+    """An end event before expected duration is probably a broken stream.
+
+    Don't restart normal completed tracks; allow one limited attempt for
+    formats whose duration is unknown (including live/replied media).
+    """
+    if duration_seconds and duration_seconds > 0:
+        return elapsed + 12 < duration_seconds
+    return elapsed < 25
+
+
+async def play_with_reconnect(calls: PyTgCalls, chat_id: int, stream: MediaStream) -> None:
+    """Recover once from a stale per-chat voice connection.
+
+    Do not create missing group calls; a group admin must start the VC.
+    """
+    try:
+        await asyncio.wait_for(
+            calls.play(chat_id, stream, GroupCallConfig(auto_start=False)),
+            timeout=40,
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        reason = type(exc).__name__
+        if reason == "NoActiveGroupCall":
+            raise
+        log.warning("VC first join/play failed in chat %s (%s); trying reconnection", chat_id, reason)
+        try:
+            await asyncio.wait_for(calls.leave_call(chat_id), timeout=8)
+        except Exception as leave_exc:
+            log.info("VC reconnection cleanup in %s: %s", chat_id, type(leave_exc).__name__)
+        await asyncio.sleep(0.8)
+        await asyncio.wait_for(
+            calls.play(chat_id, stream, GroupCallConfig(auto_start=False)),
+            timeout=40,
+        )
 
 
 def cancel_active_loading(player: Player) -> bool:
@@ -268,7 +309,7 @@ def soundcloud_results(query: str, max_tracks: int = 6, cancel_signal: threading
             break
     return urls
 
-def download_song(query: str, video: bool, cancel_signal: threading.Event | None = None) -> tuple[str, str]:
+def download_song(query: str, video: bool, cancel_signal: threading.Event | None = None) -> tuple[str, str, float | None]:
     """Download a playable candidate; SoundCloud handles audio-search fallback."""
     from yt_dlp import YoutubeDL
 
@@ -337,7 +378,7 @@ def download_song(query: str, video: bool, cancel_signal: threading.Event | None
             ):
                 raise ValueError("Non-matching or altered recording")
             log.info("Resolved music through %s (track title may differ from query)", provider)
-            return str(media_path), f"{title} · {provider}"
+            return str(media_path), f"{title} · {provider}", float(duration) if duration is not None else None
         except Exception as exc:
             shutil.rmtree(directory, ignore_errors=True)
             abort_if_stopped()
@@ -482,6 +523,7 @@ async def main() -> None:
             player.temp_file = None
             player.current = None
             player.paused = False
+            player.recovery_attempts = 0
 
             while player.queue:
                 song: Track = player.queue.popleft()
@@ -489,10 +531,11 @@ async def main() -> None:
                 try:
                     source = song.source
                     if song.youtube:
-                        local_file, title = await asyncio.wait_for(
+                        local_file, title, duration_seconds = await asyncio.wait_for(
                             asyncio.to_thread(download_song, source, song.video, cancel_signal),
                             timeout=110,
                         )
+                        song.duration_seconds = duration_seconds
                         if cancel_signal.is_set():
                             clean_temp(local_file)
                             return
@@ -549,12 +592,10 @@ async def main() -> None:
                     if cancel_signal.is_set():
                         raise asyncio.CancelledError()
                     log.info("VC play requested chat %s", chat_id)
-                    await asyncio.wait_for(
-                        calls.play(chat_id, stream, GroupCallConfig(auto_start=False)),
-                        timeout=45,
-                    )
+                    await play_with_reconnect(calls, chat_id, stream)
                     log.info("VC play success chat %s", chat_id)
                     player.current = song
+                    player.recovery_attempts = 0
                     player.temp_file = local_file
                     player.started_at = time.monotonic()
                     notice = ("🎬 " if song.video else "🎵 ") + "Now playing: " + song.title
@@ -613,8 +654,9 @@ async def main() -> None:
 
             try:
                 await calls.leave_call(chat_id)
-            except Exception:
-                pass  # It may already have left or never joined the call.
+            except Exception as exc:
+                log.info("VC leave after empty queue in %s: %s", chat_id, type(exc).__name__)
+            log.info("Playlist finished; empty queue; VC left chat %s", chat_id)
             player.paused = False
             await clear_player_panel(chat_id, player)
         finally:
@@ -671,7 +713,10 @@ async def main() -> None:
                 or getattr(media, "file_name", None)
                 or ("Telegram video" if video_mode else "Telegram audio")
             )
-            track = Track(str(title)[:100], media.file_id, telegram_file=True, video=video_mode)
+            track = Track(
+                str(title)[:100], media.file_id, telegram_file=True, video=video_mode,
+                duration_seconds=float(media.duration) if getattr(media, "duration", None) else None,
+            )
         elif len(msg.command) >= 2:
             query = msg.text.split(maxsplit=1)[1].strip()
             if not query or len(query) > 120:

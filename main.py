@@ -24,6 +24,7 @@ from music_ui import player_controls, queue_display, queue_remove, queue_shuffle
 from audius_source import fetch_audius_audio
 from song_cache import get_cached_song, save_cached_song
 from idle_media import configured_radio_url, ensure_idle_audio
+from youtube_health import youtube_guard
 from pytgcalls import PyTgCalls
 from pytgcalls import filters as call_filters
 from pytgcalls.types import AudioQuality, ChatUpdate, GroupCallConfig, MediaStream, StreamEnded, VideoQuality
@@ -399,6 +400,12 @@ def download_song(query: str, video: bool, cancel_signal: threading.Event | None
     failures: list[str] = []
     for provider, target in source_candidates(query, video, cancel_signal=cancel_signal):
         abort_if_stopped()
+        if provider == "YouTube":
+            wait = youtube_guard.seconds_remaining()
+            if wait > 0:
+                log.info("YouTube verification cooldown (%ds remaining); skipping challenge", int(wait))
+                failures.append("YouTube verification cooldown")
+                continue
         if provider == "Audius":
             # This is a documented third-party stream API for publicly
             # streamable recordings; it does not extract YouTube media.
@@ -435,12 +442,6 @@ def download_song(query: str, video: bool, cancel_signal: threading.Event | None
             "retries": 0,
             "fragment_retries": 0,
             "max_filesize": MAX_YOUTUBE_BYTES,
-            # YouTube အပိတ်ကျော်ရန် အလိုအလျောက် ပလပ်အင် စနစ်ထည့်သွင်းခြင်း
-            "extractor_args": {
-                "youtube": {
-                    "client": ["web", "web_safari", "mweb"]
-                }
-            }
         }
         try:
             with YoutubeDL(opts) as downloader:
@@ -472,6 +473,8 @@ def download_song(query: str, video: bool, cancel_signal: threading.Event | None
             ):
                 raise ValueError("Non-matching or altered recording")
             log.info("Resolved music through %s (track title may differ from query)", provider)
+            if provider == "YouTube":
+                youtube_guard.record_success()
             label = f"{title} · {provider}"
             seconds = float(duration) if duration is not None else None
             if os.getenv("MUSIC_CACHE_ENABLED", "1") != "0":
@@ -481,10 +484,18 @@ def download_song(query: str, video: bool, cancel_signal: threading.Event | None
             shutil.rmtree(directory, ignore_errors=True)
             abort_if_stopped()
             failures.append(provider)
-            log.warning(
-                "Audio source %s candidate unavailable (%s): %s",
-                provider, type(exc).__name__, str(exc)[:230],
-            )
+            if provider == "YouTube" and youtube_guard.record_error(exc):
+                remaining = youtube_guard.seconds_remaining()
+                log.warning(
+                    "YouTube rejected automated access; official verification required "
+                    "(cooldown=%ds). Not retrying verification with other clients.",
+                    int(remaining),
+                )
+            else:
+                log.warning(
+                    "Audio source %s candidate unavailable (%s): %s",
+                    provider, type(exc).__name__, str(exc)[:230],
+                )
     raise RuntimeError("No playable track from " + ", ".join(sorted(set(failures))))
 
 
@@ -849,11 +860,14 @@ async def main() -> None:
                                          "HTTPS Bot API နဲ့ MTProto နှစ်ခုစလုံးမရနိုင်တာပါ။ "
                                          "နောက်မှ ပြန်စမ်းပေးပါ။")
                     elif song.youtube:
-                        error_message = ("⚠️ Music source တွေက ဒီသီချင်းကို Download "
-                                         "မပေးနိုင်သေးဘူး။ YouTube Login Check "
-                                         "သို့မဟုတ် SoundCloud Access Error ဖြစ်နိုင်တယ်။ "
-                                         "အခြားသီချင်း၊ သို့မဟုတ် Audio File ကို "
-                                         "Reply လုပ်ပြီး /play စမ်းပါ။")
+                        error_message = (
+                            "⚠️ YouTube ရဲ့ Login/Verification လိုအပ်နေတဲ့ Audio ကို "
+                            "Telegram VC ထဲ မဖွင့်နိုင်သေးဘူး။ "
+                            "SoundCloud ကလည်း ဒီသီချင်းအတွက် အသုံးပြုနိုင်တဲ့ "
+                            "Recording မပေးနိုင်ဘူး။ YouTube ကို တရားဝင် App မှာ "
+                            "ဖွင့်နိုင်တယ်။ ခွင့်ပြုထားတဲ့ Audio File ရှိရင် "
+                            "Reply ပြီး /play စမ်းနိုင်တယ်။"
+                        )
                     else:
                         error_message = ("⚠️ VC သို့မဟုတ် Media Error တက်နေတယ်။ "
                                          "Group Voice Chat ဖွင့်ထားလား စစ်ပါ။")

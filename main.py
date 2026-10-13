@@ -154,13 +154,63 @@ async def download_bot_api_file(
         ) from None
 
 
-def download_song(query: str, video: bool) -> tuple[str, str]:
-    """Download a playable song without relying exclusively on YouTube.
+def soundcloud_results(query: str, max_tracks: int = 6) -> list[str]:
+    """Retrieve several SoundCloud search results without downloading them.
 
-    For audio title queries SoundCloud is tried first, then YouTube.
-    A result from SoundCloud may be a different upload or cover; the
-    actual track title and source are shown to the group.
+    A single first match is often DRM-protected. Never bypass DRM; simply
+    try other publicly playable matches and reveal the actual title.
     """
+    from yt_dlp import YoutubeDL
+
+    opts = {
+        "quiet": True,
+        "no_warnings": True,
+        "extract_flat": True,
+        "skip_download": True,
+        "socket_timeout": 10,
+        "retries": 0,
+    }
+    try:
+        with YoutubeDL(opts) as searcher:
+            result = searcher.extract_info("scsearch10:" + query, download=False)
+            entries = list((result or {}).get("entries") or [])
+    except Exception as exc:
+        log.warning("SoundCloud search unavailable: %s", type(exc).__name__)
+        return []
+
+    import re
+    words = set(re.findall(r"[\\w]+", query.casefold()))
+    ranked = sorted(
+        enumerate(entries),
+        key=lambda pair: (
+            -len(words & set(re.findall(
+                r"[\\w]+", str((pair[1] or {}).get("title") or "").casefold()
+            ))),
+            pair[0],
+        ),
+    )
+    urls: list[str] = []
+    for _, entry in ranked:
+        if not isinstance(entry, dict) or entry.get("is_drm"):
+            continue
+        link = entry.get("webpage_url") or entry.get("url")
+        if not isinstance(link, str):
+            continue
+        try:
+            hostname = (urlsplit(link).hostname or "").lower()
+        except ValueError:
+            continue
+        if hostname != "soundcloud.com" and not hostname.endswith(".soundcloud.com"):
+            continue
+        if link not in urls:
+            urls.append(link)
+        if len(urls) >= max_tracks:
+            break
+    return urls
+
+
+def download_song(query: str, video: bool) -> tuple[str, str]:
+    """Download a playable candidate; SoundCloud handles audio-search fallback."""
     from yt_dlp import YoutubeDL
 
     if is_youtube_url(query):
@@ -169,11 +219,11 @@ def download_song(query: str, video: bool) -> tuple[str, str]:
         candidates = [("YouTube", "ytsearch1:" + query)]
     else:
         candidates = [
-            ("SoundCloud", "scsearch1:" + query),
-            ("YouTube", "ytsearch1:" + query),
+            ("SoundCloud", url) for url in soundcloud_results(query)
         ]
+        candidates.append(("YouTube", "ytsearch1:" + query))
 
-    failures = []
+    failures: list[str] = []
     for provider, target in candidates:
         directory = Path(tempfile.mkdtemp(prefix="mudyar_media_"))
         opts = {
@@ -186,12 +236,10 @@ def download_song(query: str, video: bool) -> tuple[str, str]:
             "playlist_items": "1",
             "quiet": True,
             "no_warnings": True,
-            "socket_timeout": 12,
-            "retries": 1,
-            "fragment_retries": 1,
+            "socket_timeout": 10,
+            "retries": 0,
+            "fragment_retries": 0,
             "max_filesize": MAX_YOUTUBE_BYTES,
-            "hls_prefer_native": True,
-            "extract_flat": False,
         }
         try:
             with YoutubeDL(opts) as downloader:
@@ -205,26 +253,28 @@ def download_song(query: str, video: bool) -> tuple[str, str]:
                 result = entries[0]
             duration = result.get("duration")
             if duration is not None and float(duration) > MAX_MEDIA_SECONDS:
-                raise ValueError("Song exceeds the 10-minute limit")
+                raise ValueError("Track exceeds the 10-minute limit")
+            valid_types = {".mp3", ".m4a", ".mp4", ".webm", ".opus", ".ogg", ".aac", ".flac", ".wav"}
             files = [
                 path for path in directory.iterdir()
-                if path.is_file() and not path.name.endswith((".part", ".ytdl"))
+                if path.is_file() and path.suffix.lower() in valid_types
             ]
             if not files:
-                raise ValueError("No downloaded media file")
+                raise ValueError("No downloaded playable media file")
             media_path = max(files, key=lambda path: path.stat().st_size)
             if media_path.stat().st_size > MAX_YOUTUBE_BYTES:
-                raise ValueError("Song exceeds the 40 MB limit")
+                raise ValueError("Track exceeds the 40 MB limit")
             title = str(result.get("title") or query)[:85]
+            log.info("Resolved music through %s (track title may differ from query)", provider)
             return str(media_path), f"{title} · {provider}"
         except Exception as exc:
             shutil.rmtree(directory, ignore_errors=True)
             failures.append(provider)
             log.warning(
-                "Audio/video source %s unavailable (%s): %s",
-                provider, type(exc).__name__, str(exc)[:250],
+                "Audio source %s candidate unavailable (%s): %s",
+                provider, type(exc).__name__, str(exc)[:230],
             )
-    raise RuntimeError("No playable result from " + ", ".join(failures))
+    raise RuntimeError("No playable track from " + ", ".join(sorted(set(failures))))
 
 
 async def main() -> None:

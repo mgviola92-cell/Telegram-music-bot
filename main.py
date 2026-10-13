@@ -630,7 +630,8 @@ async def main() -> None:
             "Audio File ကို Reply လုပ်ပြီး /play လည်းရတယ်။\n"
             "Video အတွက် /vplay <name> (သို့) MP4 reply /vplay သုံးပါ။\n"
             "Private Group: Music Bot ကို Admin + Invite Users ပေးထားပါ။\n"
-            "/play /vplay /queue /skip /pause /resume /stop\n"
+            "/play /vplay /queue /now /skip /pause /resume /stop\n"
+            "/shuffle /remove 1 /clear /loop — Admin Controls\\n"
             "/ping — bot online ဖြစ်မဖြစ် စစ်မယ်။\n\n"
             "Direct HTTPS audio link တွေအတွက် server-side host allowlist လိုတယ်။"
         )
@@ -862,6 +863,75 @@ async def main() -> None:
             except Exception:
                 log.exception("Could not %s chat %s", action, msg.chat.id)
                 await msg.reply_text("⚠️ VC connection ပြန်စစ်ပါ။")
+
+    @bot.on_callback_query(filters.regex(r"^mud:(pause|resume|skip|stop|loop|queue):"))
+    async def panel_callback(_: Client, cb: CallbackQuery) -> None:
+        """One panel per chat; stale buttons cannot control future tracks."""
+        try:
+            prefix, action, raw_chat = (cb.data or "").split(":")
+            chat_id = int(raw_chat)
+        except (ValueError, TypeError):
+            await cb.answer("Invalid player control", show_alert=True)
+            return
+        if not cb.message or cb.message.chat.id != chat_id:
+            await cb.answer("This control is not for this group.", show_alert=True)
+            return
+        player = players[chat_id]
+        if player.panel_id != cb.message.id or player.current is None:
+            await cb.answer("ဒီ Player Card သက်တမ်းကုန်ပြီ။ /now သုံးပါ။", show_alert=True)
+            return
+        if action == "queue":
+            titles = [item.title for item in player.queue]
+            info = queue_display(
+                player.current.title, titles[:2], loop=player.loop_current
+            )[:195]
+            await cb.answer(info, show_alert=True)
+            return
+        if not await is_chat_admin(chat_id, cb.from_user.id if cb.from_user else None):
+            await cb.answer("🛡 Group Admin တွေကပဲ Control နှိပ်နိုင်တယ်။", show_alert=True)
+            return
+        # A cancelable child ensures a new /stop does not poison bot handlers.
+        if action == "stop":
+            cancel_active_loading(player)
+            async with player.lock:
+                player.queue.clear()
+                player.current = None
+                player.paused = False
+                player.loop_current = False
+                player.started_at = 0
+                await clear_player_panel(chat_id, player)
+                clean_temp(player.temp_file)
+                player.temp_file = None
+                try:
+                    await asyncio.wait_for(calls.leave_call(chat_id), timeout=12)
+                except Exception as exc:
+                    log.info("Button stop leave status %s: %s", chat_id, type(exc).__name__)
+            await cb.answer("⏹ Stopped.")
+            return
+        async with player.lock:
+            if player.current is None:
+                await cb.answer("သီချင်း မဖွင့်ထားဘူး။", show_alert=True)
+                return
+            try:
+                if action == "pause":
+                    await calls.pause(chat_id)
+                    player.paused = True
+                elif action == "resume":
+                    await calls.resume(chat_id)
+                    player.paused = False
+                elif action == "loop":
+                    player.loop_current = not player.loop_current
+                elif action == "skip":
+                    await asyncio.create_task(advance(chat_id))
+                await update_player_panel(chat_id, player)
+            except asyncio.CancelledError:
+                await cb.answer("⏹ Cancelled.")
+                return
+            except Exception as exc:
+                log.warning("Panel %s failed in chat %s: %s", action, chat_id, type(exc).__name__)
+                await cb.answer("⚠️ VC Control မအောင်မြင်ဘူး။", show_alert=True)
+                return
+        await cb.answer("✅ " + action.title())
 
     @calls.on_update(call_filters.stream_end())
     async def stream_end(_: PyTgCalls, update: StreamEnded) -> None:

@@ -13,7 +13,7 @@ Standalone Telegram voice-chat music bot. It is NOT part of the existing Game Bo
 - `/start`, `/help`, `/ping` and HTTP `/health` for Render/UptimeRobot.
 - Automatic next track on stream end (best effort); leave when the queue runs out.
 
-Song-title search and YouTube links are experimental and may fail when YouTube restricts cloud-server IP addresses or requires additional JavaScript support. Spotify direct playback is not implemented. Real voice/video playback has not yet been verified by a live test; passing Python syntax checks does not confirm playback.
+Song-title audio requests first try a SoundCloud search result and then YouTube if SoundCloud is unavailable. The matching SoundCloud upload can be a remix, cover, or otherwise different from the requested recording; the response includes the actual title and its source. YouTube may refuse requests from Render cloud IPs with a sign-in challenge, and SoundCloud may also fail. Spotify direct playback is not implemented. Real voice/video playback has not yet been verified by a live test; passing Python syntax checks does not confirm playback.
 
 ## Render deployment
 

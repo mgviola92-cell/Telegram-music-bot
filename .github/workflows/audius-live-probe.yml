@@ -1,0 +1,23 @@
+name: One-Time Audius Live Probe
+
+on:
+  push:
+    paths:
+      - '.github/workflows/audius-live-probe.yml'
+      - 'tests/live_audius_check.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  api-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Check Audius public search and single authorized stream
+        run: python tests/live_audius_check.py

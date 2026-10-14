@@ -72,9 +72,28 @@ def resolve_soundcloud_https(
         if isinstance(entry, dict):
             choices.append(entry)
     choices.append(info)
+    # The extractor's preferred format may be a download host that cannot
+    # be used by this resolver. Try other public SoundCloud CDN formats.
+    choices.extend(entry for entry in reversed(info.get("formats") or [])
+                   if isinstance(entry, dict))
     for entry in choices:
+        if entry.get("has_drm") or entry.get("is_drm"):
+            continue
+        if "preview" in str(entry.get("format_id") or "").lower():
+            continue
         url = entry.get("url")
         if not allowed_audio_cdn(url):
+            # Never log signed URL query strings or credentials.
+            try:
+                parsed_media = urlsplit(url) if isinstance(url, str) else None
+                LOG.info(
+                    "Direct stream URL rejected (scheme=%s host=%s length=%s)",
+                    parsed_media.scheme if parsed_media else "missing",
+                    (parsed_media.hostname or "unknown")[:100] if parsed_media else "missing",
+                    len(url) if isinstance(url, str) else 0,
+                )
+            except ValueError:
+                LOG.info("Direct stream URL rejected: malformed URL")
             continue
         protocol = str(entry.get("protocol") or info.get("protocol") or "").lower()
         if protocol and protocol not in {"https", "http", "m3u8", "m3u8_native"}:

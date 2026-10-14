@@ -92,6 +92,32 @@ class DirectStreamingMetadataTest(unittest.TestCase):
         youtube_dl.return_value.__enter__.return_value.extract_info.assert_called_once()
 
     @patch("yt_dlp.YoutubeDL")
+    def test_long_signed_cdn_url_is_streamed(self, youtube_dl):
+        url = "https://cf-hls-media.sndcdn.com/playlist.m3u8?Policy=" + "x" * 3000
+        youtube_dl.return_value.__enter__.return_value.extract_info.return_value = {
+            "title": "Example", "duration": 120, "url": url,
+            "protocol": "m3u8_native",
+        }
+        result = resolve_soundcloud_https("https://soundcloud.com/artist/example", "Example")
+        self.assertEqual(result[0], url)
+        self.assertFalse(allowed_audio_cdn(url + "x" * 16384))
+
+    @patch("yt_dlp.YoutubeDL")
+    def test_alternate_public_format_used_when_best_host_not_allowed(self, youtube_dl):
+        url = "https://cf-hls-media.sndcdn.com/playlist.m3u8"
+        youtube_dl.return_value.__enter__.return_value.extract_info.return_value = {
+            "title": "Example", "duration": 120,
+            "url": "https://other.example.invalid/download", "protocol": "https",
+            "formats": [
+                {"url": url, "protocol": "m3u8_native", "format_id": "hls_mp3"},
+                {"url": url + "?preview", "protocol": "m3u8_native", "format_id": "hls_preview"},
+                {"url": url + "?drm", "protocol": "m3u8_native", "has_drm": True},
+            ],
+        }
+        result = resolve_soundcloud_https("https://soundcloud.com/artist/example", "Example")
+        self.assertEqual(result[0], url)
+
+    @patch("yt_dlp.YoutubeDL")
     def test_blocks_non_soundcloud_destinations(self, youtube_dl):
         youtube_dl.return_value.__enter__.return_value.extract_info.return_value = {
             "title": "Hello World", "duration": 120,

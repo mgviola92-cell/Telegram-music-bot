@@ -33,7 +33,7 @@ def artwork_is_safe(url: str | None) -> bool:
 
 def allowed_audio_cdn(url: str | None) -> bool:
     """Accept only HTTPS SoundCloud-operated public transcoding hosts."""
-    if not isinstance(url, str) or len(url) > 2048:
+    if not isinstance(url, str) or len(url) > 16384:
         return False
     try:
         parsed = urlsplit(url)

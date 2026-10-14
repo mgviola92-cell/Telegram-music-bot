@@ -27,6 +27,8 @@ from idle_media import configured_radio_url, ensure_idle_audio
 from youtube_health import youtube_guard
 from archive_source import get_archive_audio
 from prefetch import PreparedAudio
+from direct_stream import resolve_soundcloud_https
+from player_visuals import (player_caption, artwork_for, artwork_is_safe, stream_headers_for, allowed_audio_cdn, save_artwork)
 from pytgcalls import PyTgCalls
 from pytgcalls import filters as call_filters
 from pytgcalls.types import AudioQuality, ChatUpdate, GroupCallConfig, MediaStream, StreamEnded, VideoQuality
@@ -77,6 +79,12 @@ class Player:
     idle_early_ends: int = 0
     prepared: PreparedAudio | None = None
     skip_pending: bool = False
+    # UI timestamp excludes actual paused time.
+    paused_since: float = 0.0
+    paused_seconds: float = 0.0
+    panel_is_photo: bool = False
+    progress_task: asyncio.Task | None = None
+    stream_enabled: bool = False
 
 
 def voice_slot_count(players: dict[int, Player]) -> int:
@@ -151,7 +159,7 @@ def cancel_active_loading(player: Player) -> bool:
 
 
 def clean_temp(path: str | None) -> None:
-    if path:
+    if path and not path.startswith(("https://", "http://")):
         try:
             p = Path(path)
             temp_root = Path(tempfile.gettempdir())
@@ -421,7 +429,10 @@ def source_candidates(
         yield youtube
 
 
-def download_song(query: str, video: bool, cancel_signal: threading.Event | None = None) -> tuple[str, str, float | None]:
+def download_song(
+    query: str, video: bool, cancel_signal: threading.Event | None = None,
+    prefer_stream: bool = False,
+) -> tuple[str, str, float | None]:
     """Download one playable source, trying SoundCloud if YouTube is blocked."""
     from yt_dlp import YoutubeDL
 
@@ -488,6 +499,20 @@ def download_song(query: str, video: bool, cancel_signal: threading.Event | None
                 log.warning("Audius source unavailable (%s)", type(exc).__name__)
             failures.append("Audius")
             continue
+        if provider == "SoundCloud" and prefer_stream and not video:
+            try:
+                direct = resolve_soundcloud_https(
+                    target, query, cancel_signal=cancel_signal,
+                    check=suitable_recording,
+                )
+                abort_if_stopped()
+                if direct is not None:
+                    return direct
+            except InterruptedError:
+                raise
+            except Exception as exc:
+                log.info("Direct SoundCloud stream unavailable (%s); normal download fallback",
+                         type(exc).__name__)
         directory = Path(tempfile.mkdtemp(prefix="mudyar_media_"))
         opts = {
             "format": (
@@ -541,6 +566,8 @@ def download_song(query: str, video: bool, cancel_signal: threading.Event | None
             if provider == "YouTube":
                 youtube_guard.record_success()
             label = f"{title} · {provider}"
+            if provider == "SoundCloud":
+                save_artwork(query, result.get("thumbnail"))
             seconds = float(duration) if duration is not None else None
             if os.getenv("MUSIC_CACHE_ENABLED", "1") != "0":
                 save_cached_song(query, video, str(media_path), label, seconds)

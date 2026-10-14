@@ -37,6 +37,26 @@ if __name__=="__main__":
         "q":"mediatype:audio AND title:ambient AND licenseurl:http* AND NOT licenseurl:http*nc* AND NOT licenseurl:http*nd* AND NOT licenseurl:http*sa*", "fl[]":["identifier","title","licenseurl"],
         "rows":2,"output":"json",
     })
+    from archive_source import archive_search, read_json, allowed_license, ArchiveRedirects
+    from urllib.request import build_opener
+    opener=build_opener(ArchiveRedirects())
+    for row in archive_search("ambient",opener=opener)[:5]:
+        identifier=row.get("identifier")
+        if not identifier:
+            continue
+        metadata=read_json(
+            "https://archive.org/metadata/"+identifier,opener=opener
+        )
+        item=metadata.get("metadata",{})
+        if not isinstance(item,dict):
+            continue
+        license_kind=allowed_license(item.get("licenseurl",""))
+        audio_files=[
+            (f.get("name"),f.get("length"),f.get("size"))
+            for f in metadata.get("files",[])
+            if f.get("name","").lower().endswith(".mp3")
+        ][:1]
+        print("Archive candidate",identifier,"CC",license_kind,"sample_mp3",audio_files)
     probe("Jamendo","https://api.jamendo.com/v3.0/tracks/",{
         "client_id":"709fa152","format":"json","limit":3,"search":"ambient","audioformat":"mp31",
     })

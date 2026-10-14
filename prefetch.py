@@ -19,6 +19,7 @@ class PreparedAudio:
         self.cleanup = cleanup
         self.discarded = False
         self.consumed = False
+        self.cleaned = False
         self.task = asyncio.create_task(
             asyncio.to_thread(downloader, track.source, track.video, self.cancel_signal)
         )
@@ -29,7 +30,8 @@ class PreparedAudio:
             result = task.result()
         except (asyncio.CancelledError, Exception):
             return
-        if self.discarded and not self.consumed and result:
+        if self.discarded and not self.consumed and not self.cleaned and result:
+            self.cleaned = True
             self.cleanup(result[0])
 
     def discard(self) -> None:

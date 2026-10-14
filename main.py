@@ -658,7 +658,6 @@ async def main() -> None:
                 if mode == "radio":
                     player.radio_retry_after = time.monotonic() + 10 * 60
                 continue
-            was_idle = player.idle_notice_sent
             if not player.idle_mode:
                 player.idle_started_at = time.monotonic()
             player.idle_mode = mode
@@ -668,24 +667,9 @@ async def main() -> None:
             player.paused = False
             player.recovery_attempts = 0
             await clear_player_panel(chat_id, player)
-            log.info("Empty queue: chat %s stayed in VC on %s idle", chat_id, mode)
-            if not was_idle:
-                notice = (
-                    "📻 Queue အလွတ် — ခွင့်ပြုထားတဲ့ Radio Stream ဖွင့်ထားတယ်။ "
-                    "/play နဲ့ သီချင်းတောင်းနိုင်တယ်။ /stop နဲ့ VC ထွက်မယ်။"
-                    if mode == "radio"
-                    else "🔇 Queue အလွတ် — VC ထဲမှာ အသံမပါဘဲ စောင့်နေမယ်။ "
-                         "Radio URL အတည်ပြုပြီး ချိတ်ထားမှ Radio ဖွင့်နိုင်မယ်။ "
-                         "/play နဲ့ သီချင်းတောင်းနိုင်တယ်။ /stop နဲ့ VC ထွက်မယ်။"
-                )
-                try:
-                    if progress:
-                        await progress.edit_text(notice)
-                    else:
-                        await bot.send_message(chat_id, notice)
-                except Exception:
-                    log.info("Idle notice unavailable in chat %s", chat_id)
-            player.idle_notice_sent = True
+            # Stay connected quietly: no new chat message or progress edit
+            # when the queue empties, including silent-loop renewals.
+            log.info("Empty queue: chat %s stayed in VC on %s idle (quiet)", chat_id, mode)
             return True
         return False
 

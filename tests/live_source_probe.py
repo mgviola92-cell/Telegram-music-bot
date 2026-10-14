@@ -17,7 +17,19 @@ def probe(name,base,params):
                 print(name,"API-status",data.get("headers",{}).get("status"),"code",data.get("headers",{}).get("code"),"error",str(data.get("headers",{}).get("error_message",""))[:110],"results",len(data.get("results",[])))
             else:
                 print(name,"matches",data.get("response",{}).get("numFound"),"returned",len(data.get("response",{}).get("docs",[])))
-                print("example IDs",[item.get("identifier") for item in data.get("response",{}).get("docs",[])[:2]])
+                ids=[item.get("identifier") for item in data.get("response",{}).get("docs",[])[:2]]
+                print("example IDs",ids)
+                if ids and ids[0]:
+                    from urllib.parse import quote
+                    murl="https://archive.org/metadata/"+quote(ids[0],safe="")
+                    with urlopen(Request(murl,headers={"User-Agent":"MudyarMusicBot/1.0"}),timeout=12) as resp2:
+                        md=json.loads(resp2.read(1500000))
+                        print("Archive license",md.get("metadata",{}).get("licenseurl"))
+                        print("Archive sample mp3 files",[
+                            (x.get("name","")[:75],x.get("size"),x.get("length"))
+                            for x in md.get("files",[])
+                            if x.get("name","").lower().endswith(".mp3")
+                        ][:3])
     except Exception as exc:
         print(name,"error",type(exc).__name__,str(exc)[:95])
 if __name__=="__main__":

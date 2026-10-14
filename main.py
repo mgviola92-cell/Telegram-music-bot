@@ -838,13 +838,19 @@ async def main() -> None:
                             except Exception:
                                 log.info("Prefetch unavailable; trying ordinary track resolution")
                                 local_file, title, duration_seconds = await asyncio.wait_for(
-                                    asyncio.to_thread(download_song, source, song.video, cancel_signal),
+                                    asyncio.to_thread(
+                                        download_song, source, song.video, cancel_signal,
+                                        player.stream_enabled,
+                                    ),
                                     timeout=100,
                                 )
                         else:
                             discard_prepared(player)
                             local_file, title, duration_seconds = await asyncio.wait_for(
-                                asyncio.to_thread(download_song, source, song.video, cancel_signal),
+                                asyncio.to_thread(
+                                    download_song, source, song.video, cancel_signal,
+                                    player.stream_enabled,
+                                ),
                                 timeout=100,
                             )
                         song.duration_seconds = duration_seconds
@@ -896,15 +902,36 @@ async def main() -> None:
                         )
                     else:
                         # Never try to create a video camera for audio-only media.
-                        stream = MediaStream(
-                            source,
-                            AudioQuality.HIGH,
-                            video_flags=MediaStream.Flags.IGNORE,
-                        )
+                        options = {"video_flags": MediaStream.Flags.IGNORE}
+                        if allowed_audio_cdn(source):
+                            options["headers"] = stream_headers_for(source)
+                        stream = MediaStream(source, AudioQuality.HIGH, **options)
                     if cancel_signal.is_set():
                         raise asyncio.CancelledError()
-                    log.info("VC play requested chat %s", chat_id)
-                    await play_with_reconnect(calls, chat_id, stream)
+                    log.info("VC play requested chat %s (direct=%s)",
+                             chat_id, allowed_audio_cdn(source))
+                    try:
+                        await play_with_reconnect(calls, chat_id, stream)
+                    except Exception as live_exc:
+                        if not (allowed_audio_cdn(source) and song.youtube):
+                            raise
+                        log.warning(
+                            "Remote audio not playable in VC (%s); reverting to tested local media",
+                            type(live_exc).__name__,
+                        )
+                        local_file, title, duration_seconds = await asyncio.wait_for(
+                            asyncio.to_thread(
+                                download_song, song.source, song.video, cancel_signal, False
+                            ), timeout=100,
+                        )
+                        song.duration_seconds = duration_seconds
+                        song.title = title
+                        source = local_file
+                        stream = MediaStream(
+                            source, AudioQuality.HIGH,
+                            video_flags=MediaStream.Flags.IGNORE,
+                        )
+                        await play_with_reconnect(calls, chat_id, stream)
                     log.info("VC play success chat %s", chat_id)
                     player.current = song
                     player.idle_mode = None

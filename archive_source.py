@@ -30,7 +30,7 @@ def archive_https_url(raw: str) -> bool:
         return (
             p.scheme == "https" and p.port in (None, 443)
             and not p.username and not p.password
-            and (host == "archive.org" or host.endswith(".us.archive.org"))
+            and (host == "archive.org" or host.endswith(".archive.org"))
         )
     except ValueError:
         return False

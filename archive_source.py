@@ -103,7 +103,10 @@ def archive_search(query: str, *, opener) -> list[dict]:
         return []
     # Exact item-title phrase first; search isn't broad enough to substitute
     # unrelated artist covers for the user's requested song.
-    search = 'mediatype:audio AND licenseurl:http* AND title:"' + (
+    search = ('mediatype:audio AND licenseurl:http* '
+              'AND NOT licenseurl:http*nc* '
+              'AND NOT licenseurl:http*nd* '
+              'AND NOT licenseurl:http*sa* AND title:"') + (
         " ".join(terms).replace('"', "")
     ) + '"'
     url = "https://archive.org/advancedsearch.php?" + urlencode({

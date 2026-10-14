@@ -15,7 +15,7 @@ class QueuePrefetchTest(unittest.IsolatedAsyncioTestCase):
     async def test_preloads_only_first_next_song(self):
         seen = []
         calls = []
-        def fake_loader(src, video, cancel_signal):
+        def fake_loader(src, video, cancel_signal, prefer_stream=False):
             seen.append(src)
             return "demo-track.mp3", "Demo", 180.0
         def fake_clean(path):
@@ -72,7 +72,7 @@ class QueuePrefetchTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(stopped.is_set())
 
     async def test_changed_queue_abandons_old_prefetch(self):
-        def dummy_download(src, video, cancel_signal):
+        def dummy_download(src, video, cancel_signal, prefer_stream=False):
             return src+".mp3", "Song", 80.0
         cleanup = []
         player = Player(
@@ -90,6 +90,33 @@ class QueuePrefetchTest(unittest.IsolatedAsyncioTestCase):
             self.assertIsNone(player.prepared)
             self.assertTrue(previous.discarded)
             self.assertEqual(cleanup, ["one.mp3"])
+
+    async def test_direct_mode_prefetch_returns_url_without_local_download(self):
+        url = "https://playback.media-streaming.soundcloud.cloud/test/playlist.m3u8"
+        def loader(src, video, cancel_signal, prefer_stream=False):
+            self.assertTrue(prefer_stream)
+            return url, "Example", 120.
+        player = Player(current=Track("Playing", "current", youtube=True),
+                        queue=deque([Track("Next", "next", youtube=True)]))
+        with patch("main.download_song", side_effect=loader):
+            prepare_next_song(player)
+            self.assertEqual((await player.prepared.consume())[0], url)
+
+    async def test_changing_stream_mode_replaces_preparation(self):
+        def loader(src, video, cancel_signal, prefer_stream=False):
+            return "example.mp3", "Example", 120.
+        player = Player(current=Track("Playing", "current", youtube=True),
+                        queue=deque([Track("Next", "next", youtube=True)]))
+        with patch("main.download_song", side_effect=loader), patch("main.clean_temp"):
+            prepare_next_song(player)
+            previous = player.prepared
+            player.stream_enabled = False
+            prepare_next_song(player)
+            self.assertTrue(previous.discarded)
+            self.assertIsNot(previous, player.prepared)
+            self.assertFalse(player.prepared.prefer_stream)
+            await asyncio.gather(previous.task, player.prepared.task, return_exceptions=True)
+            player.prepared.discard()
 
     async def test_not_prefetched_when_no_active_song(self):
         player = Player(queue=deque([Track("Next", "one", youtube=True)]))

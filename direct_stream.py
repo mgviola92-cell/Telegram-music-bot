@@ -15,6 +15,46 @@ from player_visuals import (
 
 LOG = getLogger("telegram_music")
 
+# Keep codec detection, but bound initial probing for known audio-only CDN streams.
+DIRECT_AUDIO_FFMPEG = "-analyzeduration 500000 -probesize 131072"
+
+# Cache track pages, never signed media URLs, so playback resolves fresh tokens.
+_SEARCH_LOCK = threading.RLock()
+_SEARCHES = {}
+_SEARCH_TTL = 600
+_SEARCH_MAX = 48
+
+
+def cached_search(query: str, max_tracks: int) -> list[str] | None:
+    key = query.strip().casefold()
+    with _SEARCH_LOCK:
+        item = _SEARCHES.get(key)
+        if item is None:
+            return None
+        urls, expiry = item
+        if time.monotonic() >= expiry:
+            _SEARCHES.pop(key, None)
+            return None
+        LOG.info("SoundCloud track search cache hit; resolving a fresh media URL")
+        return list(urls[:max_tracks])
+
+
+def remember_search(query: str, urls: list[str]) -> None:
+    if not urls:
+        return
+    with _SEARCH_LOCK:
+        key = query.strip().casefold()
+        _SEARCHES.pop(key, None)
+        if len(_SEARCHES) >= _SEARCH_MAX:
+            _SEARCHES.pop(next(iter(_SEARCHES)))
+        _SEARCHES[key] = (tuple(urls), time.monotonic() + _SEARCH_TTL)
+
+
+def forget_search(query: str) -> None:
+    with _SEARCH_LOCK:
+        _SEARCHES.pop(query.strip().casefold(), None)
+
+
 
 def resolve_soundcloud_https(
     webpage: str, requested_title: str, *,

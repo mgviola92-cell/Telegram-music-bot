@@ -13,16 +13,19 @@ LOG = logging.getLogger("telegram_music")
 
 
 class PreparedAudio:
-    def __init__(self, track: Any, downloader: Callable, cleanup: Callable) -> None:
+    def __init__(self, track: Any, downloader: Callable, cleanup: Callable, *,
+                 prefer_stream: bool = False) -> None:
         self.track = track
+        self.prefer_stream = prefer_stream
         self.cancel_signal = threading.Event()
         self.cleanup = cleanup
         self.discarded = False
         self.consumed = False
         self.cleaned = False
-        self.task = asyncio.create_task(
-            asyncio.to_thread(downloader, track.source, track.video, self.cancel_signal)
-        )
+        args = (track.source, track.video, self.cancel_signal)
+        if prefer_stream:
+            args += (True,)
+        self.task = asyncio.create_task(asyncio.to_thread(downloader, *args))
         self.task.add_done_callback(self._on_done)
 
     def _on_done(self, task: asyncio.Task) -> None:

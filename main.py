@@ -27,7 +27,8 @@ from idle_media import configured_radio_url, ensure_idle_audio
 from youtube_health import youtube_guard
 from archive_source import get_archive_audio
 from prefetch import PreparedAudio
-from direct_stream import resolve_soundcloud_https
+from direct_stream import (resolve_soundcloud_https, DIRECT_AUDIO_FFMPEG,
+                           cached_search, remember_search, forget_search)
 from player_visuals import (player_caption, artwork_for, artwork_is_safe, stream_headers_for, allowed_audio_cdn, save_artwork)
 from pytgcalls import PyTgCalls
 from pytgcalls import filters as call_filters
@@ -197,13 +198,16 @@ def discard_prepared(player: Player) -> None:
 def prepare_next_song(player: Player) -> None:
     """Prepare only the immediate next audio while current VC audio plays."""
     upcoming = player.queue[0] if player.queue else None
-    if player.prepared is not None and player.prepared.track is upcoming:
+    if (player.prepared is not None and player.prepared.track is upcoming
+            and player.prepared.prefer_stream == player.stream_enabled):
         return
     discard_prepared(player)
     if (upcoming is not None and player.current is not None
             and upcoming.youtube and not upcoming.video
             and os.getenv("MUSIC_PREFETCH_ENABLED", "1") != "0"):
-        player.prepared = PreparedAudio(upcoming, download_song, clean_temp)
+        player.prepared = PreparedAudio(
+            upcoming, download_song, clean_temp, prefer_stream=player.stream_enabled,
+        )
         log.info("Prefetch began for next queued audio")
 
 
@@ -320,6 +324,12 @@ def soundcloud_results(query: str, max_tracks: int = 6, cancel_signal: threading
     from yt_dlp import YoutubeDL
     import re
 
+    if cancel_signal is not None and cancel_signal.is_set():
+        return []
+    cached = cached_search(query, max_tracks)
+    if cached is not None:
+        return cached
+
     opts = {
         "quiet": True,
         "no_warnings": True,
@@ -377,6 +387,7 @@ def soundcloud_results(query: str, max_tracks: int = 6, cancel_signal: threading
             urls.append(link)
         if len(urls) >= max_tracks:
             break
+    remember_search(query, urls)
     return urls
 
 def audius_source_enabled() -> bool:
@@ -592,6 +603,7 @@ def download_song(
                     "Audio source %s candidate unavailable (%s): %s",
                     provider, type(exc).__name__, str(exc)[:230],
                 )
+    forget_search(query)
     raise RuntimeError("No playable track from " + ", ".join(sorted(set(failures))))
 
 
@@ -1019,6 +1031,7 @@ async def main() -> None:
                             options = {"video_flags": MediaStream.Flags.IGNORE}
                             if allowed_audio_cdn(source):
                                 options["headers"] = stream_headers_for(source)
+                                options["ffmpeg_parameters"] = DIRECT_AUDIO_FFMPEG
                             stream = MediaStream(source, AudioQuality.HIGH, **options)
                         await play_with_reconnect(calls, chat_id, stream)
                     except Exception as live_exc:
@@ -1409,6 +1422,7 @@ async def main() -> None:
         if not await require_admin(msg):
             return
         player.stream_enabled = action == "on"
+        prepare_next_song(player)
         log.info("Direct stream setting chat %s: %s", msg.chat.id, action.upper())
         await msg.reply_text(
             "📡 Direct HTTPS: " + ("ON" if player.stream_enabled else "OFF")

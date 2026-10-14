@@ -155,13 +155,20 @@ four concurrent calls at acceptable quality. The cap can be adjusted by
 `MAX_ACTIVE_GROUPS` (hard maximum 8) after performance testing.
 Restarting Render clears group-specific toggle settings.
 
+## Streaming startup latency (October 2026)
+
+- Real VC logs have confirmed `direct=True` followed by playback success. This does not imply instant startup: search, media URL resolution and Telegram/FFmpeg initialization still take time.
+- Search results (SoundCloud track pages, not expiring signed audio URLs) are kept for ten minutes, bounded to 48 queries. Repeat searches resolve fresh media tokens without repeating the track search; failed resolutions invalidate the entry.
+- Known audio-only CDN streams use bounded FFmpeg probing (`-analyzeduration 500000 -probesize 131072`). Codec detection remains enabled; playback failures retain the local-media fallback.
+- Queue preparation uses the same direct-stream setting as `/play`, rather than always downloading the next song.
+
 ## Compact now-playing UI and automatic remote streaming (October 2026)
 
 - The single active Now Playing card shows **elapsed / duration**, a short Unicode progress bar and a decorative sound-wave pulse. A single message/caption is edited roughly every **25 seconds**; no recurring new messages are sent. Pausing freezes the displayed elapsed timer; resuming continues it. This is a time estimate, not sample-accurate audio analysis.
 - When SoundCloud's metadata includes artwork from an approved `sndcdn.com` HTTPS image host, the bot can show it as a **single photo with caption**. If the image is missing, fails, or Telegram cannot fetch it promptly, the panel falls back to plain text. The UI is posted asynchronously **after** VC playback begins, so artwork failure does not delay hearing music.
 - The **🎤 Lyrics ↗** button opens a Genius lyrics-search page. Copyrighted lyrics are **not copied or auto-posted into the Telegram group**. Availability/accuracy depends on the external site.
 - Default **direct HTTPS playback** uses a publicly playable, non-DRM, validated SoundCloud CDN URL with PyTgCalls `MediaStream(url, headers=...)`. It does *not* download the entire song into memory; FFmpeg buffers chunks. This is consistent with PyTgCalls' remote-stream examples, but it is not guaranteed faster than downloads, and expiry, redirects, restrictions, missing headers or network quality can still cause a failure. If PyTgCalls rejects the URL immediately, the bot retries through its existing local-file download path.
-- **Direct streaming defaults ON for each group**, including after Render restarts. `/play` automatically tries a public SoundCloud HTTPS stream, with local download fallback if unavailable. Admins can use `/stream off` to switch future requests to local download, or `/stream on` to re-enable it; manual overrides last until Render restarts. Existing one-track-ahead prefetch stays enabled for queued audio, and prefetched songs may continue to use a local file even when direct streaming is enabled.
+- **Direct streaming defaults ON for each group**, including after Render restarts. `/play` automatically tries a public SoundCloud HTTPS stream, with local download fallback if unavailable. Admins can use `/stream off` to switch future requests to local download, or `/stream on` to re-enable it; manual overrides last until Render restarts. One-track-ahead prefetch follows the group streaming mode: it resolves a direct stream when enabled, with local download fallback when necessary.
 - Source URLs must use the official public HTTPS SoundCloud media host family. The streaming resolver refuses unrelated/private-network hosts, blocked/premium/DRM audio and does not pass cookies or authorization headers. Copyright and creator permissions still apply.
 - The cosmetic UI does **not** change the 4-VC Render Free concurrency cap or remove the platform's performance limits.
 

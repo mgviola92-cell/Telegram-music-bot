@@ -42,7 +42,13 @@ if __name__=="__main__":
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from archive_source import archive_search, read_json, allowed_license, ArchiveRedirects
     from urllib.request import build_opener
-    opener=build_opener(ArchiveRedirects())
+    from urllib.parse import urlsplit
+    class DiagnoseArchiveRedirects(ArchiveRedirects):
+        def redirect_request(self, req, fp, code, msg, headers, newurl):
+            parsed=urlsplit(newurl)
+            print("Archive CDN redirect",parsed.scheme,parsed.hostname)
+            return super().redirect_request(req,fp,code,msg,headers,newurl)
+    opener=build_opener(DiagnoseArchiveRedirects())
     for row in archive_search("ambient",opener=opener)[:5]:
         identifier=row.get("identifier")
         if not identifier:

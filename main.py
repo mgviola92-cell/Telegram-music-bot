@@ -1140,6 +1140,7 @@ async def main() -> None:
             "/shuffle /remove 1 /clear /loop — Admin Controls\n"
             "/radio on|off — Authorized radio fallback\n"
             "/idle on|off — Queue ကုန်ရင် VC ထဲဆက်နေမလား\n"
+            "/stream on|off — Experimental direct HTTPS audio\n"
             "/ping — bot online ဖြစ်မဖြစ် စစ်မယ်။\n\n"
             "Direct HTTPS audio link တွေအတွက် server-side host allowlist လိုတယ်။",
             reply_markup=add_button,
@@ -1388,6 +1389,30 @@ async def main() -> None:
             (". /play နဲ့ ပြန်စနိုင်တယ်။" if action == "on" else "")
         )
 
+    @bot.on_message(filters.command("stream") & filters.group)
+    async def stream_command(_: Client, msg: Message) -> None:
+        """Optional direct CDN audio; existing local playback remains the default."""
+        player = players[msg.chat.id]
+        action = msg.command[1].lower() if len(msg.command) > 1 else "status"
+        if action == "status":
+            await msg.reply_text(
+                "📡 Direct HTTPS Streaming (experimental): "
+                + ("ON" if player.stream_enabled else "OFF")
+                + "\n/stream on | /stream off — Group Admin"
+            )
+            return
+        if action not in {"on", "off"}:
+            await msg.reply_text("📡 /stream on | /stream off | /stream status")
+            return
+        if not await require_admin(msg):
+            return
+        player.stream_enabled = action == "on"
+        await msg.reply_text(
+            "📡 Direct HTTPS: " + ("ON" if player.stream_enabled else "OFF")
+            + "\nနောက်ထပ် /play မှ စမ်းမယ်။ "
+            "မရရင် ပုံမှန် Download Playback ကို ပြန်သုံးမယ်။"
+        )
+
     @bot.on_message(filters.command("shuffle") & filters.group)
     async def shuffle_command(_: Client, msg: Message) -> None:
         if not await require_admin(msg):
@@ -1517,9 +1542,14 @@ async def main() -> None:
             try:
                 if action == "pause":
                     await calls.pause(msg.chat.id)
+                    if not player.paused:
+                        player.paused_since = time.monotonic()
                     player.paused = True
                 else:
                     await calls.resume(msg.chat.id)
+                    if player.paused and player.paused_since:
+                        player.paused_seconds += time.monotonic() - player.paused_since
+                    player.paused_since = 0.
                     player.paused = False
                 await update_player_panel(msg.chat.id, player)
                 await msg.reply_text("⏸ Paused." if action == "pause" else "▶️ Resumed.")
@@ -1589,9 +1619,14 @@ async def main() -> None:
             try:
                 if action == "pause":
                     await calls.pause(chat_id)
+                    if not player.paused:
+                        player.paused_since = time.monotonic()
                     player.paused = True
                 elif action == "resume":
                     await calls.resume(chat_id)
+                    if player.paused and player.paused_since:
+                        player.paused_seconds += time.monotonic() - player.paused_since
+                    player.paused_since = 0.
                     player.paused = False
                 elif action == "loop":
                     player.loop_current = not player.loop_current

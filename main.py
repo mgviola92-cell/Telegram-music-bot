@@ -352,33 +352,42 @@ def audius_source_enabled() -> bool:
     return bool(os.getenv("AUDIUS_API_KEY"))
 
 
+def youtube_audio_enabled() -> bool:
+    """YouTube audiovisual extraction is off by default on this server.
+
+    Verification has repeatedly failed on Render's IP; do not waste time
+    testing it on each user request or attempt alternate account clients.
+    """
+    return os.getenv("YOUTUBE_ENABLED", "0") == "1"
+
+
 def source_candidates(
     query: str, video: bool, cancel_signal: threading.Event | None = None
 ):
-    """Lazy source choices: YouTube first, SoundCloud only if that fails.
+    """Resolve song requests through usable, independently licensed sources.
 
-    YouTube search metadata can fail on some cloud hosts; this does not try
-    to bypass sign-in checks or protected media. Spotify URLs are unsupported.
+    Direct YouTube URLs aren't silently replaced with unrelated recordings.
+    YouTube extraction is opt-in and never circumvents verification checks.
     """
+    youtube_active = youtube_audio_enabled()
     if is_youtube_url(query):
-        yield ("YouTube", query)
+        if youtube_active:
+            yield ("YouTube", query)
         return
     if video:
-        yield ("YouTube", "ytsearch1:" + query)
+        if youtube_active:
+            yield ("YouTube", "ytsearch1:" + query)
         return
-    # Search official artist recordings before third-party uploads.
     youtube = ("YouTube", "ytsearch1:" + query + " official")
-    priority = os.getenv("MUSIC_SOURCE_PRIORITY", "youtube").lower()
-    if priority != "soundcloud":
+    priority = os.getenv("MUSIC_SOURCE_PRIORITY", "soundcloud").lower()
+    if youtube_active and priority == "youtube":
         yield youtube
-        if audius_source_enabled():
-            yield ("Audius", query)
     if cancel_signal is None or not cancel_signal.is_set():
         for url in soundcloud_results(query, max_tracks=3, cancel_signal=cancel_signal):
             yield ("SoundCloud", url)
-    if priority == "soundcloud":
-        if audius_source_enabled():
-            yield ("Audius", query)
+    if audius_source_enabled():
+        yield ("Audius", query)
+    if youtube_active and priority != "youtube":
         yield youtube
 
 
@@ -961,6 +970,15 @@ async def main() -> None:
                 return
             if query.startswith(("https://", "http://")):
                 if is_youtube_url(query):
+                    if not youtube_audio_enabled():
+                        await msg.reply_text(
+                            "⚠️ YouTube က Render Server ရဲ့ Audio Request တွေကို "
+                            "Login Verification တောင်းနေတဲ့အတွက် YouTube VC Playback ကို "
+                            "လောလောဆယ် ပိတ်ထားတယ်။ YouTube App ထဲမှာ ဒီ Link ကို "
+                            "ဖွင့်နိုင်တယ်။ ဒီမှာတော့ /play <song name> နဲ့ "
+                            "အခြား Source ရှာနိုင်တယ်။"
+                        )
+                        return
                     track = Track("YouTube video" if video_mode else "YouTube audio",
                                   query, video=video_mode, youtube=True)
                 elif allowed_url(query, allowed_hosts):
@@ -970,6 +988,12 @@ async def main() -> None:
                     await msg.reply_text("⚠️ YouTube Link သို့မဟုတ် /play <song name> ထည့်ပေးပါ။")
                     return
             else:
+                if video_mode and not youtube_audio_enabled():
+                    await msg.reply_text(
+                        "⚠️ YouTube Video Source ကို လောလောဆယ် ပိတ်ထားတယ်။ "
+                        "ကိုယ်ပိုင် MP4 ကို Reply ပြီး /vplay သုံးနိုင်တယ်။"
+                    )
+                    return
                 track = Track(query, query, video=video_mode, youtube=True)
         else:
             await msg.reply_text(

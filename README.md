@@ -154,6 +154,14 @@ four concurrent calls at acceptable quality. The cap can be adjusted by
 `MAX_ACTIVE_GROUPS` (hard maximum 8) after performance testing.
 Restarting Render clears group-specific toggle settings.
 
+## Faster skip and queue transitions (October 2026)
+
+- `/skip`, `/next` and the inline Skip button now acknowledge immediately and switch audio via a background task. Duplicate skip requests are ignored while a switch is in progress; the worker only skips the track that was active when the request arrived.
+- While a song is playing, the bot **prefetches at most one next queued audio track** in the background. On skip or natural completion, the playback worker uses the prepared media file instead of running SoundCloud search and download after the skip. The next track must have been queued early enough for prefetch to complete to get the full speed benefit.
+- `/remove`, `/shuffle`, `/clear`, `/stop` and player changes discard or replace obsolete prepared media and clean temporary files. `MUSIC_PREFETCH_ENABLED=0` disables prefetch if Render Free memory/disk/network limits prove restrictive.
+- Bot event logging now separates **SoundCloud search latency** and **provider download latency** without storing users' song names in logs. This allows precise tuning of slow first-time `/play` requests. Initial uncached songs still require network search/download and may take many seconds. Prefetch does not guarantee instant playback if the next song was just queued.
+- The existing 4-group concurrent VC cap, silent idle, per-group queue, license-filtered sources and original music button permissions are unchanged.
+
 ## Faster playback and additional license-safe source (October 2026)
 
 - The user's Render logs on Oct 14 show repeated YouTube sign-in verification failures. Rather than wasting time on a failing extract attempt for **every request**, YouTube is disabled by default, while `yt-dlp` remains installed for SoundCloud extraction. No cookies, fake sessions, alternate accounts, bypasses, or unlicensed extraction are added.

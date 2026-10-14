@@ -49,7 +49,10 @@ class YouTubeSafetyTest(unittest.TestCase):
         self.assertEqual(guard.seconds_remaining(now=102), 0)
 
     def test_blocked_youtube_skips_extractor_for_direct_link(self):
-        with patch("main.youtube_guard.seconds_remaining", return_value=900), patch(
+        with patch.dict("os.environ", {
+            "YOUTUBE_ENABLED": "1", "ARCHIVE_ENABLED": "0",
+            "AUDIUS_ENABLED": "0", "MUSIC_SOURCE_PRIORITY": "youtube",
+        }), patch("main.youtube_guard.seconds_remaining", return_value=900), patch(
             "yt_dlp.YoutubeDL"
         ) as ydl:
             with self.assertRaisesRegex(RuntimeError, "YouTube verification cooldown"):
@@ -57,7 +60,10 @@ class YouTubeSafetyTest(unittest.TestCase):
             ydl.assert_not_called()
 
     def test_song_search_still_tries_other_providers_when_blocked(self):
-        with patch("main.youtube_guard.seconds_remaining", return_value=900), patch(
+        with patch.dict("os.environ", {
+            "YOUTUBE_ENABLED": "1", "ARCHIVE_ENABLED": "0",
+            "AUDIUS_ENABLED": "0", "MUSIC_SOURCE_PRIORITY": "youtube",
+        }), patch("main.youtube_guard.seconds_remaining", return_value=900), patch(
             "main.soundcloud_results", return_value=[
                 "https://soundcloud.com/artist/recording",
             ]

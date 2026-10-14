@@ -8,6 +8,7 @@ from collections import deque
 from typing import Any
 
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from player_visuals import lyrics_search_url
 
 
 def queue_remove(items: deque, position: int) -> Any:
@@ -41,7 +42,7 @@ def queue_display(current: str | None, titles: list[str], loop: bool = False) ->
     )
 
 
-def player_controls(chat_id: int, *, paused: bool = False, loop: bool = False) -> InlineKeyboardMarkup:
+def player_controls(chat_id: int, *, paused: bool = False, loop: bool = False, title: str = "") -> InlineKeyboardMarkup:
     """Small, group-bound callback data; mutating actions are admin-checked."""
     return InlineKeyboardMarkup([
         [
@@ -55,4 +56,5 @@ def player_controls(chat_id: int, *, paused: bool = False, loop: bool = False) -
                                  callback_data=f"mud:loop:{chat_id}"),
             InlineKeyboardButton("📜 Queue", callback_data=f"mud:queue:{chat_id}"),
         ],
+        [InlineKeyboardButton("🎤 Lyrics ↗", url=lyrics_search_url(title))],
     ])

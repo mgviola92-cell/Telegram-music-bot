@@ -60,21 +60,28 @@ if __name__=="__main__":
             if f.get("name","").lower().endswith(".mp3")
         ][:1]
         print("Archive candidate",identifier,"CC",license_kind,"sample_mp3",audio_files)
-        if license_kind and audio_files and identifier=="tedkerr-urbantheme":
-            from urllib.parse import quote
-            media_url="https://archive.org/download/"+quote(identifier,safe="")+"/"+quote(audio_files[0][0],safe="")
-            request=Request(media_url,headers={
-                "User-Agent":"MudyarMusicBot/1.0",
-                "Range":"bytes=0-2047"
-            })
-            try:
-                with opener.open(request,timeout=14) as file_response:
-                    header=file_response.read(2048)
-                    print("Archive licensed audio HTTP",file_response.status,
-                          "url_host",file_response.geturl().split("/")[2],
-                          "first_chunk_bytes",len(header))
-            except Exception as error:
-                print("Archive audio unavailable",type(error).__name__,str(error)[:130])
+    # Test a previously identified CC BY 3.0 item; no full song download.
+    from urllib.parse import quote
+    known_id="jamendo-136087"
+    meta=read_json("https://archive.org/metadata/"+known_id,opener=opener)
+    cc=allowed_license(meta.get("metadata",{}).get("licenseurl",""))
+    licensed=next((
+        entry for entry in meta.get("files",[])
+        if entry.get("name","").lower().endswith(".mp3")
+        and int(entry.get("size") or 0)<8*1024*1024
+    ),None)
+    if cc and licensed:
+        media_url="https://archive.org/download/"+quote(known_id,safe="")+"/"+quote(licensed["name"],safe="")
+        try:
+            with opener.open(Request(media_url,headers={
+                "User-Agent":"MudyarMusicBot/1.0", "Range":"bytes=0-2047"
+            }),timeout=16) as response:
+                fragment=response.read(2048)
+                print("Archive CC-BY audio HTTP",response.status,
+                      "final_host",response.geturl().split("/")[2],
+                      "fragment_len",len(fragment))
+        except Exception as error:
+            print("Archive CC-BY audio failure",type(error).__name__,str(error)[:110])
     probe("Jamendo","https://api.jamendo.com/v3.0/tracks/",{
         "client_id":"709fa152","format":"json","limit":3,"search":"ambient","audioformat":"mp31",
     })

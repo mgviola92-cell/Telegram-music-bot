@@ -26,6 +26,7 @@ from song_cache import get_cached_song, save_cached_song
 from idle_media import configured_radio_url, ensure_idle_audio
 from youtube_health import youtube_guard
 from archive_source import get_archive_audio
+from prefetch import PreparedAudio
 from pytgcalls import PyTgCalls
 from pytgcalls import filters as call_filters
 from pytgcalls.types import AudioQuality, ChatUpdate, GroupCallConfig, MediaStream, StreamEnded, VideoQuality
@@ -74,6 +75,8 @@ class Player:
     keep_idle: bool = True
     idle_notice_sent: bool = False
     idle_early_ends: int = 0
+    prepared: PreparedAudio | None = None
+    skip_pending: bool = False
 
 
 def voice_slot_count(players: dict[int, Player]) -> int:
@@ -173,6 +176,26 @@ def allowed_url(value: str, allowed_hosts: set[str]) -> bool:
         )
     except ValueError:
         return False
+
+
+def discard_prepared(player: Player) -> None:
+    previous = player.prepared
+    player.prepared = None
+    if previous is not None:
+        previous.discard()
+
+
+def prepare_next_song(player: Player) -> None:
+    """Prepare only the immediate next audio while current VC audio plays."""
+    upcoming = player.queue[0] if player.queue else None
+    if player.prepared is not None and player.prepared.track is upcoming:
+        return
+    discard_prepared(player)
+    if (upcoming is not None and player.current is not None
+            and upcoming.youtube and not upcoming.video
+            and os.getenv("MUSIC_PREFETCH_ENABLED", "1") != "0"):
+        player.prepared = PreparedAudio(upcoming, download_song, clean_temp)
+        log.info("Prefetch began for next queued audio")
 
 
 def is_youtube_url(value: str) -> bool:
@@ -750,6 +773,7 @@ async def main() -> None:
         try:
             if repeat and player.loop_current and player.current is not None:
                 player.queue.appendleft(player.current)
+                discard_prepared(player)
             clean_temp(player.temp_file)
             player.temp_file = None
             player.current = None
@@ -765,10 +789,26 @@ async def main() -> None:
                 try:
                     source = song.source
                     if song.youtube:
-                        local_file, title, duration_seconds = await asyncio.wait_for(
-                            asyncio.to_thread(download_song, source, song.video, cancel_signal),
-                            timeout=110,
-                        )
+                        prepared = player.prepared
+                        if prepared is not None and prepared.track is song:
+                            player.prepared = None
+                            log.info("Next queued track is using background prefetch")
+                            try:
+                                local_file, title, duration_seconds = await asyncio.wait_for(
+                                    prepared.consume(), timeout=100
+                                )
+                            except Exception:
+                                log.info("Prefetch unavailable; trying ordinary track resolution")
+                                local_file, title, duration_seconds = await asyncio.wait_for(
+                                    asyncio.to_thread(download_song, source, song.video, cancel_signal),
+                                    timeout=100,
+                                )
+                        else:
+                            discard_prepared(player)
+                            local_file, title, duration_seconds = await asyncio.wait_for(
+                                asyncio.to_thread(download_song, source, song.video, cancel_signal),
+                                timeout=100,
+                            )
                         song.duration_seconds = duration_seconds
                         if cancel_signal.is_set():
                             clean_temp(local_file)
@@ -836,6 +876,8 @@ async def main() -> None:
                     player.recovery_attempts = 0
                     player.temp_file = local_file
                     player.started_at = time.monotonic()
+                    # The next requested song downloads while this one plays.
+                    prepare_next_song(player)
                     notice = ("🎬 " if song.video else "🎵 ") + "Now playing: " + song.title
                     previous_panel = player.panel_id
                     try:
@@ -895,6 +937,7 @@ async def main() -> None:
                     except Exception:
                         log.warning("Could not announce track error in chat %s", chat_id)
 
+            discard_prepared(player)
             # Keep the assistant connected between requests; explicit /stop
             # still leaves. The silent fallback is not claimed as a radio station.
             if await start_idle(chat_id, player, progress):
@@ -1050,6 +1093,7 @@ async def main() -> None:
                 await progress.edit_text("⚠️ Queue ပြည့်နေပြီ (10 tracks)။")
                 return
             player.queue.append(track)
+            prepare_next_song(player)
             await progress.edit_text("✅ Queue ထဲထည့်ပြီးပြီ — " + track.title)
             return
         async with player.lock:
@@ -1087,6 +1131,8 @@ async def main() -> None:
                 return
 
             player.queue.append(track)
+            if player.current is not None:
+                prepare_next_song(player)
             if player.current is None:
                 try:
                     # Never cancel Pyrogram's long-lived HandlerTask; only

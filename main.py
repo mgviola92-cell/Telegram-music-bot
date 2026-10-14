@@ -84,6 +84,7 @@ class Player:
     paused_seconds: float = 0.0
     panel_is_photo: bool = False
     progress_task: asyncio.Task | None = None
+    announce_task: asyncio.Task | None = None
     stream_enabled: bool = False
 
 
@@ -645,22 +646,129 @@ async def main() -> None:
         await msg.reply_text("🛡 ဒီ Playback Control ကို Group Admin ပဲ သုံးနိုင်တယ်။")
         return False
 
-    async def update_player_panel(chat_id: int, player: Player) -> None:
+    def elapsed_for(player: Player) -> float:
+        if player.current is None or player.started_at <= 0:
+            return 0.
+        now = time.monotonic()
+        withheld = player.paused_seconds
+        if player.paused and player.paused_since > 0:
+            withheld += now - player.paused_since
+        return max(0., now - player.started_at - withheld)
+
+    async def edit_panel(chat_id: int, player: Player) -> None:
         if player.panel_id is None or player.current is None:
             return
+        song = player.current
+        text = player_caption(
+            song.title, elapsed_for(player), song.duration_seconds,
+            paused=player.paused,
+        )
+        buttons = player_controls(
+            chat_id, paused=player.paused,
+            loop=player.loop_current, title=song.title,
+        )
         try:
-            await bot.edit_message_reply_markup(
-                chat_id, player.panel_id,
-                reply_markup=player_controls(
-                    chat_id, paused=player.paused, loop=player.loop_current
-                ),
+            if player.panel_is_photo:
+                await bot.edit_message_caption(
+                    chat_id, player.panel_id, caption=text,
+                    reply_markup=buttons,
+                )
+            else:
+                await bot.edit_message_text(
+                    chat_id, player.panel_id, text,
+                    reply_markup=buttons,
+                )
+        except Exception as exc:
+            if "MESSAGE_NOT_MODIFIED" not in str(exc).upper():
+                log.info("Player UI update unavailable %s (%s)", chat_id, type(exc).__name__)
+
+    async def update_player_panel(chat_id: int, player: Player) -> None:
+        await edit_panel(chat_id, player)
+
+    async def update_progress_until_changed(chat_id: int, song: Track) -> None:
+        player = players[chat_id]
+        try:
+            while player.current is song:
+                await asyncio.sleep(25)
+                if player.current is not song:
+                    return
+                if not player.paused:
+                    await edit_panel(chat_id, player)
+        except asyncio.CancelledError:
+            return
+
+    async def announce_now_playing(
+        chat_id: int, player: Player, song: Track, progress: Message | None
+    ) -> None:
+        """Publishing UI never blocks playback locks or a /skip request."""
+        image = artwork_for(song.source) if not song.video else None
+        title = player_caption(
+            song.title, elapsed_for(player), song.duration_seconds,
+            paused=player.paused,
+        )
+        buttons = player_controls(
+            chat_id, paused=player.paused, loop=player.loop_current,
+            title=song.title,
+        )
+        previous = player.panel_id
+        panel = None
+        is_photo = False
+        try:
+            if image and artwork_is_safe(image):
+                try:
+                    panel = await asyncio.wait_for(
+                        bot.send_photo(chat_id, photo=image, caption=title, reply_markup=buttons),
+                        timeout=5,
+                    )
+                    is_photo = True
+                except Exception as exc:
+                    log.info("Artwork unavailable (%s); using lightweight text UI",
+                             type(exc).__name__)
+            if panel is None:
+                if progress is not None:
+                    try:
+                        panel = await progress.edit_text(title, reply_markup=buttons)
+                    except Exception:
+                        panel = None
+                if panel is None:
+                    panel = await bot.send_message(chat_id, title, reply_markup=buttons)
+            if player.current is not song:
+                try:
+                    await bot.delete_messages(chat_id, panel.id)
+                except Exception:
+                    pass
+                return
+            player.panel_id = panel.id
+            player.panel_is_photo = is_photo
+            if previous is not None and previous != panel.id:
+                try:
+                    await bot.delete_messages(chat_id, previous)
+                except Exception:
+                    pass
+            if is_photo and progress is not None:
+                try:
+                    await progress.delete()
+                except Exception:
+                    pass
+            if player.progress_task is not None and not player.progress_task.done():
+                player.progress_task.cancel()
+            player.progress_task = asyncio.create_task(
+                update_progress_until_changed(chat_id, song)
             )
-        except Exception:
-            pass
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            log.info("Unable to post player card in %s (%s)", chat_id, type(exc).__name__)
 
     async def clear_player_panel(chat_id: int, player: Player) -> None:
+        for task in (player.announce_task, player.progress_task):
+            if task is not None and not task.done() and task is not asyncio.current_task():
+                task.cancel()
+        player.announce_task = None
+        player.progress_task = None
         old_id = player.panel_id
         player.panel_id = None
+        player.panel_is_photo = False
         if old_id is not None:
             try:
                 await bot.delete_messages(chat_id, old_id)
@@ -941,26 +1049,15 @@ async def main() -> None:
                     player.recovery_attempts = 0
                     player.temp_file = local_file
                     player.started_at = time.monotonic()
+                    player.paused_seconds = 0.
+                    player.paused_since = 0.
                     # The next requested song downloads while this one plays.
                     prepare_next_song(player)
-                    notice = ("🎬 " if song.video else "🎵 ") + "Now playing: " + song.title
-                    previous_panel = player.panel_id
-                    try:
-                        markup = player_controls(chat_id, paused=False, loop=player.loop_current)
-                        if progress:
-                            await progress.edit_text(notice, reply_markup=markup)
-                            new_panel = progress
-                            progress = None
-                        else:
-                            new_panel = await bot.send_message(chat_id, notice, reply_markup=markup)
-                        player.panel_id = new_panel.id
-                        if previous_panel is not None and previous_panel != new_panel.id:
-                            try:
-                                await bot.delete_messages(chat_id, previous_panel)
-                            except Exception:
-                                pass
-                    except Exception:
-                        log.warning("Could not announce now playing in chat %s", chat_id)
+                    if player.announce_task is not None and not player.announce_task.done():
+                        player.announce_task.cancel()
+                    player.announce_task = asyncio.create_task(
+                        announce_now_playing(chat_id, player, song, progress)
+                    )
                     return
                 except asyncio.CancelledError:
                     cancel_signal.set()

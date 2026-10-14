@@ -7,10 +7,13 @@ Fallback to existing, already-working local media if direct playback fails.
 """
 import threading
 import time
+from logging import getLogger
 
 from player_visuals import (
     allowed_audio_cdn, save_artwork, save_stream_headers,
 )
+
+LOG = getLogger("telegram_music")
 
 
 def resolve_soundcloud_https(
@@ -40,21 +43,26 @@ def resolve_soundcloud_https(
     if cancel_signal is not None and cancel_signal.is_set():
         raise InterruptedError("Stream lookup cancelled")
     if not isinstance(info, dict) or info.get("is_drm"):
+        LOG.info("Direct stream rejected: empty metadata or DRM")
         return None
     if str(info.get("availability", "")).lower() in {"private", "subscriber_only", "needs_auth", "premium_only"}:
+        LOG.info("Direct stream rejected: restricted availability")
         return None
     if str(info.get("access", "playable")).lower() not in {"playable", "full", ""}:
+        LOG.info("Direct stream rejected: track access is restricted")
         return None
     duration = info.get("duration")
     try:
         duration = float(duration) if duration is not None else None
         if duration is not None and not (1 <= duration <= 600):
+            LOG.info("Direct stream rejected: duration outside allowed range")
             return None
     except (TypeError, ValueError):
         return None
     title = str(info.get("title") or "")[:85]
     artist = str(info.get("uploader") or "")[:75]
     if not title or (check is not None and not check(title, requested_title, artist)):
+        LOG.info("Direct stream rejected: recording does not match request")
         return None
 
     # HLS playlists and HTTPS media are passed to PyTgCalls directly.
@@ -75,10 +83,11 @@ def resolve_soundcloud_https(
         if isinstance(headers, dict):
             save_stream_headers(url, headers)
         save_artwork(requested_title, info.get("thumbnail"))
-        from logging import getLogger
-        getLogger("telegram_music").info(
+        LOG.info(
             "SoundCloud remote audio resolved in %.2fs (public HTTPS source)",
             time.monotonic() - started,
         )
         return url, f"{title} · SoundCloud (live)", duration
+    LOG.info("Direct stream rejected: no approved HTTPS audio URL (protocol=%s)",
+             str(info.get("protocol") or "unknown")[:40])
     return None

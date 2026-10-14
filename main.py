@@ -442,12 +442,14 @@ def download_song(
             raise InterruptedError("Download cancelled by stop")
         cached = get_cached_song(query, video)
         if cached is not None:
+            log.info("Audio source: cached local media (direct requested=%s)", prefer_stream)
             return cached
 
     def abort_if_stopped(_: dict | None = None) -> None:
         if cancel_signal is not None and cancel_signal.is_set():
             raise InterruptedError("Download cancelled by stop")
 
+    log.info("Audio resolution started (direct requested=%s, video=%s)", prefer_stream, video)
     failures: list[str] = []
     resolution_started = time.monotonic()
     provider_started = time.monotonic()
@@ -509,6 +511,7 @@ def download_song(
                 abort_if_stopped()
                 if direct is not None:
                     return direct
+                log.info("Direct SoundCloud URL unavailable; normal download fallback")
             except InterruptedError:
                 raise
             except Exception as exc:
@@ -1001,24 +1004,22 @@ async def main() -> None:
                         local_file = downloaded
                         source = local_file
 
-                    if song.video:
-                        # Conservative video quality for the initial Render Free test.
-                        stream = MediaStream(
-                            source,
-                            AudioQuality.MEDIUM,
-                            VideoQuality.SD_360p,
-                        )
-                    else:
-                        # Never try to create a video camera for audio-only media.
-                        options = {"video_flags": MediaStream.Flags.IGNORE}
-                        if allowed_audio_cdn(source):
-                            options["headers"] = stream_headers_for(source)
-                        stream = MediaStream(source, AudioQuality.HIGH, **options)
                     if cancel_signal.is_set():
                         raise asyncio.CancelledError()
                     log.info("VC play requested chat %s (direct=%s)",
                              chat_id, allowed_audio_cdn(source))
                     try:
+                        # Stream construction may probe a remote URL and fail.
+                        # Include it in the same fallback as calls.play().
+                        if song.video:
+                            stream = MediaStream(
+                                source, AudioQuality.MEDIUM, VideoQuality.SD_360p,
+                            )
+                        else:
+                            options = {"video_flags": MediaStream.Flags.IGNORE}
+                            if allowed_audio_cdn(source):
+                                options["headers"] = stream_headers_for(source)
+                            stream = MediaStream(source, AudioQuality.HIGH, **options)
                         await play_with_reconnect(calls, chat_id, stream)
                     except Exception as live_exc:
                         if not (allowed_audio_cdn(source) and song.youtube):
@@ -1147,7 +1148,7 @@ async def main() -> None:
         )
 
     @bot.on_message(
-        filters.command(["play", "vplay", "ping", "stop", "queue", "radio", "idle"]) &
+        filters.command(["play", "vplay", "ping", "stop", "queue", "radio", "idle", "stream"]) &
         (filters.group | filters.private),
         group=-1,
     )
@@ -1233,6 +1234,7 @@ async def main() -> None:
             return
 
         player = players[msg.chat.id]
+        log.info("Play mode chat %s: direct=%s", msg.chat.id, player.stream_enabled)
         try:
             progress = await msg.reply_text("⏳ Assistant အလိုအလျောက်ဝင်ပြီး VC ချိတ်နေတယ်...")
             log.info("Music request acknowledged in chat %s", msg.chat.id)
@@ -1407,6 +1409,7 @@ async def main() -> None:
         if not await require_admin(msg):
             return
         player.stream_enabled = action == "on"
+        log.info("Direct stream setting chat %s: %s", msg.chat.id, action.upper())
         await msg.reply_text(
             "📡 Direct HTTPS: " + ("ON" if player.stream_enabled else "OFF")
             + "\nနောက်ထပ် /play မှ စမ်းမယ်။ "

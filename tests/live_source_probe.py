@@ -60,6 +60,21 @@ if __name__=="__main__":
             if f.get("name","").lower().endswith(".mp3")
         ][:1]
         print("Archive candidate",identifier,"CC",license_kind,"sample_mp3",audio_files)
+        if license_kind and audio_files and identifier=="jamendo-136087":
+            from urllib.parse import quote
+            media_url="https://archive.org/download/"+quote(identifier,safe="")+"/"+quote(audio_files[0][0],safe="")
+            request=Request(media_url,headers={
+                "User-Agent":"MudyarMusicBot/1.0",
+                "Range":"bytes=0-2047"
+            })
+            try:
+                with opener.open(request,timeout=14) as file_response:
+                    header=file_response.read(2048)
+                    print("Archive licensed audio HTTP",file_response.status,
+                          "url_host",file_response.geturl().split("/")[2],
+                          "first_chunk_bytes",len(header))
+            except Exception as error:
+                print("Archive audio unavailable",type(error).__name__,str(error)[:130])
     probe("Jamendo","https://api.jamendo.com/v3.0/tracks/",{
         "client_id":"709fa152","format":"json","limit":3,"search":"ambient","audioformat":"mp31",
     })

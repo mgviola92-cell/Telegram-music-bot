@@ -18,7 +18,7 @@ class DirectPlaybackFallbackTest(unittest.IsolatedAsyncioTestCase):
         advance = next(n for n in outer.body if isinstance(n, ast.AsyncFunctionDef) and n.name == 'advance')
         song = main.Track('Example', 'Example', youtube=True)
         player = main.Player(queue=deque([song]), stream_enabled=True)
-        remote = 'https://cf-hls-media.sndcdn.com/example.m3u8'
+        remote = 'https://playback.media-streaming.soundcloud.cloud/example.m3u8'
         loader = MagicMock(side_effect=[(remote, 'Example', 120), ('local.mp3', 'Example', 120)])
         factory = MagicMock()
         factory.Flags.IGNORE = main.MediaStream.Flags.IGNORE

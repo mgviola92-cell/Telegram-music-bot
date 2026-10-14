@@ -41,7 +41,8 @@ def allowed_audio_cdn(url: str | None) -> bool:
         return (
             parsed.scheme == "https" and parsed.port in (None, 443)
             and not parsed.username and not parsed.password
-            and (host == "sndcdn.com" or host.endswith(".sndcdn.com"))
+            and (host == "sndcdn.com" or host.endswith(".sndcdn.com")
+                 or host == "playback.media-streaming.soundcloud.cloud")
         )
     except ValueError:
         return False

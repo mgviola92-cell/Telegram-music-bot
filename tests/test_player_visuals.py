@@ -92,6 +92,26 @@ class DirectStreamingMetadataTest(unittest.TestCase):
         youtube_dl.return_value.__enter__.return_value.extract_info.assert_called_once()
 
     @patch("yt_dlp.YoutubeDL")
+    def test_official_soundcloud_aac_hls_host_resolves(self, youtube_dl):
+        url = "https://playback.media-streaming.soundcloud.cloud/track/aac_160k/id/playlist.m3u8?token=example"
+        youtube_dl.return_value.__enter__.return_value.extract_info.return_value = {
+            "title": "Example", "duration": 120, "url": url,
+            "protocol": "m3u8_native", "http_headers": {"User-Agent": "test"},
+        }
+        result = resolve_soundcloud_https("https://soundcloud.com/artist/example", "Example")
+        self.assertEqual(result[0], url)
+        self.assertEqual(stream_headers_for(url), {"User-Agent": "test"})
+        self.assertFalse(artwork_is_safe(url))
+        for bad in (
+            "http://playback.media-streaming.soundcloud.cloud/a.m3u8",
+            "https://playback.media-streaming.soundcloud.cloud.evil.test/a.m3u8",
+            "https://evil.playback.media-streaming.soundcloud.cloud/a.m3u8",
+            "https://user:pass@playback.media-streaming.soundcloud.cloud/a.m3u8",
+            "https://playback.media-streaming.soundcloud.cloud:8080/a.m3u8",
+        ):
+            self.assertFalse(allowed_audio_cdn(bad))
+
+    @patch("yt_dlp.YoutubeDL")
     def test_long_signed_cdn_url_is_streamed(self, youtube_dl):
         url = "https://cf-hls-media.sndcdn.com/playlist.m3u8?Policy=" + "x" * 3000
         youtube_dl.return_value.__enter__.return_value.extract_info.return_value = {

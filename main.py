@@ -1250,7 +1250,7 @@ async def main() -> None:
             log.exception("Assistant auto-join failed in chat %s", msg.chat.id)
             await progress.edit_text("⚠️ Assistant Auto Join မရသေးဘူး။ Admin / Invite Settings စစ်ပါ။")
             return
-        await progress.edit_text("🔎 သီချင်းရှာ/Download လုပ်ပြီး VC ချိတ်နေတယ်...")
+        await progress.edit_text("🔎 သီချင်းရှာပြီး VC ဖွင့်ဖို့ ပြင်ဆင်နေတယ်...")
         # Do not make another /play wait for a long download to release
         # the chat lock; safely append while an existing loader owns it.
         if player.loading_task is not None and not player.loading_task.done():

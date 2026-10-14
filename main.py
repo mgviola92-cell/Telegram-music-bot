@@ -1236,6 +1236,7 @@ async def main() -> None:
                 await msg.reply_text("🔀 Shuffle အတွက် Queue ထဲ အနည်းဆုံး ၂ ပုဒ် လိုတယ်။")
                 return
             count = queue_shuffle(player.queue)
+            prepare_next_song(player)
         await msg.reply_text(f"🔀 Next Queue သီချင်း {count} ပုဒ် Shuffle လုပ်ပြီးပြီ။")
 
     @bot.on_message(filters.command("remove") & filters.group)
@@ -1249,6 +1250,7 @@ async def main() -> None:
         async with player.lock:
             try:
                 track = queue_remove(player.queue, int(msg.command[1]))
+                prepare_next_song(player)
             except IndexError:
                 await msg.reply_text("⚠️ Queue မှာ အဲဒီ နံပါတ် မရှိဘူး။")
                 return
@@ -1262,6 +1264,7 @@ async def main() -> None:
         async with player.lock:
             count = len(player.queue)
             player.queue.clear()
+            discard_prepared(player)
         await msg.reply_text(f"🧹 Next Queue {count} ပုဒ် ရှင်းပြီးပြီ။ လက်ရှိသီချင်း ဆက်ဖွင့်မယ်။")
 
     @bot.on_message(filters.command("loop") & filters.group)
@@ -1275,20 +1278,39 @@ async def main() -> None:
             is_on = player.loop_current
         await msg.reply_text("🔁 Repeat current: " + ("ON" if is_on else "OFF"))
 
+    async def skip_in_background(chat_id: int) -> None:
+        """Switch tracks without blocking Telegram /skip or inline callbacks."""
+        player = players[chat_id]
+        start = time.monotonic()
+        try:
+            async with player.lock:
+                if player.current is not None:
+                    await advance(chat_id)
+                log.info("Skip transition completed in chat %s after %.2fs",
+                         chat_id, time.monotonic() - start)
+        except asyncio.CancelledError:
+            log.info("Skip worker cancelled in chat %s", chat_id)
+        except Exception:
+            log.exception("Skip transition failed in chat %s", chat_id)
+        finally:
+            player.skip_pending = False
+
+    def queue_skip(chat_id: int) -> bool:
+        player = players[chat_id]
+        if player.current is None or player.skip_pending:
+            return False
+        player.skip_pending = True
+        asyncio.create_task(skip_in_background(chat_id))
+        return True
+
     @bot.on_message(filters.command(["skip", "next"]) & filters.group)
     async def skip_command(_: Client, msg: Message) -> None:
         if not await require_admin(msg):
             return
-        player = players[msg.chat.id]
-        async with player.lock:
-            if not player.current:
-                await msg.reply_text("သီချင်းဖွင့်ထားတာ မရှိသေးဘူး။")
-                return
-            try:
-                await asyncio.create_task(advance(msg.chat.id))
-            except asyncio.CancelledError:
-                return
-            await msg.reply_text("⏭ Skipped.")
+        if queue_skip(msg.chat.id):
+            await msg.reply_text("⏭ Next သီချင်းကို ပြောင်းနေပြီ…")
+        else:
+            await msg.reply_text("⏳ Skip လုပ်နေပြီးသား (သို့) ဖွင့်ထားတဲ့ သီချင်းမရှိဘူး။")
 
     @bot.on_message(filters.command(["stop", "end"]) & filters.group)
     async def stop_command(_: Client, msg: Message) -> None:
@@ -1297,6 +1319,7 @@ async def main() -> None:
         player = players[msg.chat.id]
         # Preempt any ongoing search or VC join before acquiring the lock.
         was_loading = cancel_active_loading(player)
+        discard_prepared(player)
         if was_loading:
             log.info("Stop interrupted loading chat %s", msg.chat.id)
         async with player.lock:
@@ -1375,6 +1398,7 @@ async def main() -> None:
             log.info("Player callback acknowledgement expired: %s", type(exc).__name__)
         if action == "stop":
             cancel_active_loading(player)
+            discard_prepared(player)
             async with player.lock:
                 player.queue.clear()
                 player.current = None
@@ -1392,6 +1416,10 @@ async def main() -> None:
                 except Exception as exc:
                     log.info("Button stop leave status %s: %s", chat_id, type(exc).__name__)
             return
+        if action == "skip":
+            if not queue_skip(chat_id):
+                log.info("Skip ignored in chat %s: already transitioning", chat_id)
+            return
         async with player.lock:
             if player.current is None:
                 return
@@ -1404,8 +1432,6 @@ async def main() -> None:
                     player.paused = False
                 elif action == "loop":
                     player.loop_current = not player.loop_current
-                elif action == "skip":
-                    await asyncio.create_task(advance(chat_id))
                 await update_player_panel(chat_id, player)
             except asyncio.CancelledError:
                 return

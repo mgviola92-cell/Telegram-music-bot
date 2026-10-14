@@ -25,6 +25,7 @@ from audius_source import fetch_audius_audio
 from song_cache import get_cached_song, save_cached_song
 from idle_media import configured_radio_url, ensure_idle_audio
 from youtube_health import youtube_guard
+from archive_source import get_archive_audio
 from pytgcalls import PyTgCalls
 from pytgcalls import filters as call_filters
 from pytgcalls.types import AudioQuality, ChatUpdate, GroupCallConfig, MediaStream, StreamEnded, VideoQuality
@@ -385,6 +386,8 @@ def source_candidates(
     if cancel_signal is None or not cancel_signal.is_set():
         for url in soundcloud_results(query, max_tracks=3, cancel_signal=cancel_signal):
             yield ("SoundCloud", url)
+    if os.getenv("ARCHIVE_ENABLED", "1") == "1":
+        yield ("Internet Archive", query)
     if audius_source_enabled():
         yield ("Audius", query)
     if youtube_active and priority != "youtube":
@@ -415,6 +418,25 @@ def download_song(query: str, video: bool, cancel_signal: threading.Event | None
                 log.info("YouTube verification cooldown (%ds remaining); skipping challenge", int(wait))
                 failures.append("YouTube verification cooldown")
                 continue
+        if provider == "Internet Archive":
+            # Independently hosted public CC BY/CC0 recordings, not
+            # copies of YouTube music or unlicensed commercial tracks.
+            try:
+                archived = get_archive_audio(
+                    target, cancel_signal=cancel_signal, check=suitable_recording
+                )
+                abort_if_stopped()
+                if archived is not None:
+                    path, label, seconds = archived
+                    if os.getenv("MUSIC_CACHE_ENABLED", "1") != "0":
+                        save_cached_song(query, video, path, label, seconds)
+                    return path, label, seconds
+            except InterruptedError:
+                raise
+            except Exception as exc:
+                log.warning("Archive source unavailable (%s)", type(exc).__name__)
+            failures.append("Internet Archive")
+            continue
         if provider == "Audius":
             # This is a documented third-party stream API for publicly
             # streamable recordings; it does not extract YouTube media.

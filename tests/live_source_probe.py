@@ -34,7 +34,7 @@ def probe(name,base,params):
         print(name,"error",type(exc).__name__,str(exc)[:95])
 if __name__=="__main__":
     probe("Internet Archive","https://archive.org/advancedsearch.php",{
-        "q":"mediatype:audio AND title:ambient AND (licenseurl:http*by/4.0* OR licenseurl:http*publicdomain/zero/1.0*)", "fl[]":["identifier","title","licenseurl"],
+        "q":"mediatype:audio AND title:ambient AND licenseurl:http* AND NOT licenseurl:http*nc* AND NOT licenseurl:http*nd* AND NOT licenseurl:http*sa*", "fl[]":["identifier","title","licenseurl"],
         "rows":2,"output":"json",
     })
     probe("Jamendo","https://api.jamendo.com/v3.0/tracks/",{

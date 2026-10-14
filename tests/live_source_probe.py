@@ -37,6 +37,9 @@ if __name__=="__main__":
         "q":"mediatype:audio AND title:ambient AND licenseurl:http* AND NOT licenseurl:http*nc* AND NOT licenseurl:http*nd* AND NOT licenseurl:http*sa*", "fl[]":["identifier","title","licenseurl"],
         "rows":2,"output":"json",
     })
+    from pathlib import Path
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from archive_source import archive_search, read_json, allowed_license, ArchiveRedirects
     from urllib.request import build_opener
     opener=build_opener(ArchiveRedirects())

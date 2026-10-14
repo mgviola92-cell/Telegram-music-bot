@@ -319,6 +319,7 @@ def soundcloud_results(query: str, max_tracks: int = 6, cancel_signal: threading
         "socket_timeout": 10,
         "retries": 0,
     }
+    search_started = time.monotonic()
     try:
         if cancel_signal is not None and cancel_signal.is_set():
             return []
@@ -328,8 +329,11 @@ def soundcloud_results(query: str, max_tracks: int = 6, cancel_signal: threading
         if cancel_signal is not None and cancel_signal.is_set():
             return []
     except Exception as exc:
-        log.warning("SoundCloud search unavailable: %s", type(exc).__name__)
+        log.warning("SoundCloud search unavailable after %.2fs (%s)",
+                    time.monotonic() - search_started, type(exc).__name__)
         return []
+    log.info("SoundCloud search completed in %.2fs (raw matches=%s)",
+             time.monotonic() - search_started, len(entries))
 
     words = set(re.findall(r"[a-z0-9]+", query.casefold()))
     ranked = sorted(
@@ -433,8 +437,13 @@ def download_song(query: str, video: bool, cancel_signal: threading.Event | None
             raise InterruptedError("Download cancelled by stop")
 
     failures: list[str] = []
+    resolution_started = time.monotonic()
+    provider_started = time.monotonic()
     for provider, target in source_candidates(query, video, cancel_signal=cancel_signal):
         abort_if_stopped()
+        log.info("Music provider %s selected after %.2fs",
+                 provider, time.monotonic() - resolution_started)
+        provider_started = time.monotonic()
         if provider == "YouTube":
             wait = youtube_guard.seconds_remaining()
             if wait > 0:
@@ -526,7 +535,9 @@ def download_song(query: str, video: bool, cancel_signal: threading.Event | None
                 title, query, str(result.get("uploader") or "")
             ):
                 raise ValueError("Non-matching or altered recording")
-            log.info("Resolved music through %s (track title may differ from query)", provider)
+            log.info("Resolved music through %s in %.2fs (total=%.2fs; track title may differ)",
+                     provider, time.monotonic() - provider_started,
+                     time.monotonic() - resolution_started)
             if provider == "YouTube":
                 youtube_guard.record_success()
             label = f"{title} · {provider}"
@@ -1278,13 +1289,14 @@ async def main() -> None:
             is_on = player.loop_current
         await msg.reply_text("🔁 Repeat current: " + ("ON" if is_on else "OFF"))
 
-    async def skip_in_background(chat_id: int) -> None:
-        """Switch tracks without blocking Telegram /skip or inline callbacks."""
+    async def skip_in_background(chat_id: int, expected_track: Track) -> None:
+        """Switch only the song that was active when /skip was received."""
         player = players[chat_id]
         start = time.monotonic()
         try:
             async with player.lock:
-                if player.current is not None:
+                # A natural song-end may have already changed the track.
+                if player.current is expected_track:
                     await advance(chat_id)
                 log.info("Skip transition completed in chat %s after %.2fs",
                          chat_id, time.monotonic() - start)
@@ -1300,7 +1312,7 @@ async def main() -> None:
         if player.current is None or player.skip_pending:
             return False
         player.skip_pending = True
-        asyncio.create_task(skip_in_background(chat_id))
+        asyncio.create_task(skip_in_background(chat_id, player.current))
         return True
 
     @bot.on_message(filters.command(["skip", "next"]) & filters.group)

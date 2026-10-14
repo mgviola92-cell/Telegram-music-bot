@@ -118,7 +118,10 @@ class MusicResolverTest(unittest.TestCase):
 class SourceSelectionTest(unittest.TestCase):
     def setUp(self):
         # Test the opt-in provider path, even when no real API key is present.
-        patcher = patch.dict("os.environ", {"AUDIUS_ENABLED": "1"})
+        patcher = patch.dict("os.environ", {
+            "AUDIUS_ENABLED": "1", "YOUTUBE_ENABLED": "1",
+            "ARCHIVE_ENABLED": "0",
+        })
         patcher.start()
         self.addCleanup(patcher.stop)
 
@@ -137,6 +140,29 @@ class SourceSelectionTest(unittest.TestCase):
                 list(source_candidates("Alan Walker Faded", False)),
                 [("YouTube", "ytsearch1:Alan Walker Faded official"),
                  ("Audius", "Alan Walker Faded")],
+            )
+
+    def test_fast_default_skips_youtube_and_uses_archive_after_soundcloud(self):
+        with patch.dict("os.environ", {
+            "YOUTUBE_ENABLED": "0", "ARCHIVE_ENABLED": "1",
+            "AUDIUS_ENABLED": "0"
+        }), patch("main.soundcloud_results", return_value=[
+            "https://soundcloud.com/artist/song"
+        ]):
+            self.assertEqual(
+                list(source_candidates("Faded Alan Walker", False)),
+                [
+                    ("SoundCloud", "https://soundcloud.com/artist/song"),
+                    ("Internet Archive", "Faded Alan Walker"),
+                ],
+            )
+            self.assertEqual(
+                list(source_candidates("https://youtube.com/watch?v=abc123", False)),
+                [],
+            )
+            self.assertEqual(
+                list(source_candidates("any music video", True)),
+                [],
             )
 
     def test_youtube_first_and_lazy_soundcloud(self):

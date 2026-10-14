@@ -5,15 +5,15 @@ Standalone Telegram voice-chat music bot. It is NOT part of the existing Game Bo
 ## MVP capabilities
 
 - Assistant user account automatically joins the group on the first /play request when allowed by chat permissions.
-- `/play Alan Walker Faded` searches and attempts to play a track (YouTube/yt-dlp).
-- `/vplay <title>` searches for a video (experimental 360p).
+- `/play Alan Walker Faded` tries SoundCloud immediately, then a rights-filtered Internet Archive fallback if necessary.
+- `/vplay` on a replied-to Telegram MP4 is supported; YouTube title/link video extraction is off by default.
 - Reply to a Telegram audio message with `/play`, or a Telegram MP4/video message with `/vplay`.
 - `/play https://...` and `/vplay https://...` for direct HTTPS media on explicitly allowed hosts only.
 - Per-group playback queue, `/queue`, `/now`, `/skip`/`/next`, `/pause`, `/resume`, `/stop`/`/end`.\n- Admin-only `/shuffle`, `/remove <position>`, `/clear`, and `/loop` for the current track.\n- Interactive **now-playing inline panel** with pause/resume, skip, stop, loop, and queue buttons; non-admin users may view the queue but cannot change playback.\n- Private `/start`, `/help` and `/cmd` card with an Add to Group button.
 - `/start`, `/help`, `/ping` and HTTP `/health` for Render/UptimeRobot.
-- Automatic next track on stream end (best effort); leave when the queue runs out.
+- Automatic next track on stream end (best effort); when the queue runs out stay silently connected, without a new idle announcement.
 
-Song-title audio requests now try YouTube search for an official recording first; if YouTube refuses access, the engine can optionally try Audius with configured developer API access, then tests up to three suitably matched SoundCloud results. Set `MUSIC_SOURCE_PRIORITY=soundcloud` to restore the original SoundCloud-first behavior. These sources may still fail due to provider checks, licensing/DRM, or server routing. A 15-minute local cache (two tracks, 36 MB overall and 24 MB per entry) can accelerate repeated songs on the same running instance; set `MUSIC_CACHE_ENABLED=0` to disable it. No login-cookies, proxy bypasses, or new third-party download APIs are installed. The matching SoundCloud upload can be a remix, cover, or otherwise different from the requested recording; the response includes the actual title and its source. YouTube may refuse requests from Render cloud IPs with a sign-in challenge, and SoundCloud may also fail. Spotify direct playback is not implemented. A Telegram MP3 reply and a SoundCloud song have been confirmed to play in a real group VC; the revised controls still require a live smoke test. Passing Python tests alone does not confirm all playback controls.
+**Default audio order:** SoundCloud (up to three well-matched results), then Internet Archive (only eligible CC BY / CC0 MP3 uploads with attribution), then Audius if separately configured with authorized API access. `YOUTUBE_ENABLED=0` by default: YouTube keeps returning a sign-in verification challenge from Render, which unnecessarily delayed songs. Set `YOUTUBE_ENABLED=1` only if you have a properly authorized workflow that can actually obtain source access. A YouTube link without permission now gives a quick explanation and is not replaced with a different recording. Spotify and Apple Music metadata do not grant full-audio streaming rights. A 15-minute cache (up to two local tracks) can speed up repeated songs; a non-matching SoundCloud upload is not guaranteed to be the original recording. Internet Archive includes independent and open-license music, not a guaranteed catalog of current Myanmar or international chart hits. GitHub unit tests and an Archive MP3 HTTP 206 check do not prove real-VC playback until a group test.
 
 ## Render deployment
 
@@ -71,7 +71,7 @@ maintenance, resource limits, and restarts can still disconnect the assistant.
 - Render Free may restart and its filesystem is ephemeral; queues and temporary audio are in-memory/local only.
 - This MVP limits queued tracks to 10 per group and Telegram audio/video messages to 20 MB (HTTPS Bot API getFile limit); video is experimental and limited to one concurrent stream.
 - Video is CPU-intensive; Render Free has extremely limited CPU (observed service limit 0.15 CPU) and 512 MB RAM. Four concurrent calls is a trial cap, **not** a guarantee of smooth audio; lowering the cap may be necessary.
-- Telegram file replies are fetched through the HTTPS Bot API first, with a shorter MTProto fallback when the HTTP route is unavailable. Downloaded Telegram, SoundCloud and YouTube files are temporary. Only share media you have permission to play.
+- Telegram file replies use HTTPS Bot API first with MTProto fallback. Downloaded Telegram, SoundCloud and open-license Archive files are temporary. Only share music you have permission to play.
 - No automatic deploy: commits are deployed manually after GitHub workflow checks, and then VC is tested with users.
 - The default `MAX_ACTIVE_GROUPS=4` is a trial cap, not evidence of stable concurrent streaming. Idle calls count against that cap; a new song request evicts the oldest idle group before denying service. Groups may install the bot without this concurrent-VC limit.
 
@@ -94,7 +94,7 @@ Not yet adapted: Spotify or Apple Music audio playback (their metadata APIs do n
 | Command | Permission | Description |
 | --- | --- | --- |
 | `/play title` or audio reply `/play` | Members | Search / stream or queue media |
-| `/vplay title` or video reply `/vplay` | Members | Experimental video |
+| Telegram MP4/video reply `/vplay` | Members | Experimental video. Title-based YouTube video extraction is off by default |
 | `/queue`, `/now`, `/nowplaying` | Members | Show current and upcoming songs |
 | `/pause`, `/resume`, `/skip`, `/next` | Group admins | Control active stream |
 | `/stop`, `/end` | Group admins | Stop, leave call and reset queue |
@@ -112,14 +112,14 @@ The inline player buttons are attached only to the active Now Playing message an
 
 - Render Logs repeatedly show `Sign in to confirm you're not a bot` on YouTube requests from the service. Successful metadata lookup **does not** mean that a downloadable or redistributable YouTube audio stream has been authorized. No change here guarantees original YouTube audio in Telegram VC.
 - The documented YouTube IFrame API plays videos inside YouTube's embedded player. It does not supply standalone audio files for redistribution to Telegram calls.
-- When the provider returns two YouTube sign-in verification errors within ten minutes, the in-process `youtube_health.YouTubeGuard` temporarily stops sending further YouTube requests for 15 minutes. This preserves a faster fallback to eligible other audio providers without attempting to defeat the verification process. A direct YouTube URL during the cooldown reports it unavailable instead of silently using a different recording. After the cooldown, one normal YouTube attempt is permitted again.
+- **YouTube extraction is disabled by default on Render (`YOUTUBE_ENABLED=0`).** If an authorized owner explicitly enables it and the provider returns two verification errors in ten minutes, the in-process `youtube_health.YouTubeGuard` pauses further YouTube attempts for 15 minutes. This preserves a faster fallback to eligible other audio providers without attempting to defeat the verification process. A direct YouTube URL during the cooldown reports it unavailable instead of silently using a different recording. After the cooldown, one normal YouTube attempt is permitted again.
 - Verification cooldown is separate from the existing per-song cache, voice recovery and radio/idle behavior. It resets on service restart. Incorrect legacy `extractor_args.youtube.client` settings were removed.
 - If a permitted alternate audio provider is also unavailable, the bot gives a clear source-unavailable reply and suggests playing the video through YouTube's own player or using an authorized Telegram audio attachment. Upload/share only media you have rights to use.
 
 ## Current music source strategy and speed notes (October 2026)
 
 - **Original YouTube recordings are not guaranteed.** Render's cloud IP has received YouTube's sign-in verification response; code cannot promise to stream protected YouTube audio.
-- For song-title audio requests, search YouTube first, then optionally the documented **Audius** public streaming API, then SoundCloud matches. Explicit YouTube links remain YouTube-only, to avoid silently replacing the user's exact recording with a different upload.
+- For song-title audio requests, **SoundCloud is checked first**, then **CC BY / CC0 Internet Archive** audio. Audius is optional and only attempted with an explicitly configured API key. YouTube is not checked at all by default. Direct YouTube links show a clear explanation rather than substituting a different recording.
 - Audius search succeeds in the live GitHub Runner probe, but **public stream attempts returned HTTP 403** without a configured official API key. The fallback is therefore **disabled by default**, not advertised as working. To try it with authorized Audius developer access, set `AUDIUS_API_KEY` privately in the Music Bot's Render environment; it enables Audius automatically. `AUDIUS_ENABLED=0` always disables it, `AUDIUS_ENABLED=1` enables it explicitly. Some tracks may still disallow third-party streaming. Never paste API keys in Telegram, GitHub source or chats.
 - Each Audius response is checked against allowed HTTPS redirect hosts, maximum media length and size, and public stream flags; unsupported/unavailable content goes to the next provider.
 - **TgCrypto 1.2.5** is a Python encryption speed-up for Pyrogram/MTProto, not a cure for YouTube verification and not a solution to Render Free audio CPU limits. The failed proof-token browser plugins were removed to keep the runtime lightweight.
@@ -132,7 +132,7 @@ When the queue empties, **the assistant stays in its current group Voice Chat**.
 It tries an approved live radio stream first, but only if the owner has privately configured
 an authorized station URL. Without one, it uses a **15-minute looping silent WAV**.
 This is a quiet VC waiting mode, **not** a real Myanmar radio station. Music requests
-preempt idle immediately. `/stop` always clears the queue and leaves.
+preempt idle immediately. **No idle status message is posted to the group.** `/stop` always clears the queue and leaves.
 
 **Radio setup (Music Bot Render service only):** configure
 `RADIO_STREAM_URL=https://<authorized-station-host>/<direct-audio-path>` and
@@ -153,6 +153,15 @@ Only songs in use are guaranteed preference, and Render Free may not support
 four concurrent calls at acceptable quality. The cap can be adjusted by
 `MAX_ACTIVE_GROUPS` (hard maximum 8) after performance testing.
 Restarting Render clears group-specific toggle settings.
+
+## Faster playback and additional license-safe source (October 2026)
+
+- The user's Render logs on Oct 14 show repeated YouTube sign-in verification failures. Rather than wasting time on a failing extract attempt for **every request**, YouTube is disabled by default, while `yt-dlp` remains installed for SoundCloud extraction. No cookies, fake sessions, alternate accounts, bypasses, or unlicensed extraction are added.
+- Open-license Internet Archive music is a **genuine alternate catalog**: public metadata search returned HTTP 200, and a CC BY 3.0 MP3 Range request returned HTTP 206 from an Archive-operated CDN. The bot only accepts items whose metadata explicitly advertises CC BY 3.0/4.0 or CC0 1.0 and provides track/uploader attribution. A license label supplied by an uploader cannot fully establish rights; respect any takedown or dispute.
+- Stream matching requires at least some requested title terms in the file and cross-checks creator/title. `ARCHIVE_ENABLED=0` disables this fallback if the API becomes slow; otherwise it is used only **after SoundCloud candidates fail**.
+- Jamendo's developer API test key currently returns **suspended application (code 11)** in live probes; the API was not enabled as a production source. Audius still needs a valid developer-access key/permission. Adding provider names without working API access does not make mainstream licensed tracks playable.
+- When a song ends with an empty queue, a muted VC stream keeps the assistant present but posts **no idle chat notification**. Group toggle `/idle on|off` still controls the waiting behavior.
+- `/vplay` is still available for an authorized Telegram MP4 reply, but YouTube-video-by-title playback requires explicit access and is off by default.
 
 ## Playback stability improvements (October 2026)
 

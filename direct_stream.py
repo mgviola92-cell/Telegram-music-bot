@@ -1,4 +1,4 @@
-"""Opt-in direct HTTPS audio stream resolver for publicly playable SoundCloud tracks.
+"""Default direct HTTPS audio stream resolver for publicly playable SoundCloud tracks.
 
 This does not fetch a whole audio file into RAM. PyTgCalls/FFmpeg reads
 small network chunks from the authorized media CDN. No access controls,

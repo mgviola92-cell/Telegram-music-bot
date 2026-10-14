@@ -85,7 +85,7 @@ class Player:
     panel_is_photo: bool = False
     progress_task: asyncio.Task | None = None
     announce_task: asyncio.Task | None = None
-    stream_enabled: bool = False
+    stream_enabled: bool = True
 
 
 def voice_slot_count(players: dict[int, Player]) -> int:
@@ -1393,12 +1393,12 @@ async def main() -> None:
 
     @bot.on_message(filters.command("stream") & filters.group)
     async def stream_command(_: Client, msg: Message) -> None:
-        """Optional direct CDN audio; existing local playback remains the default."""
+        """Direct CDN audio is enabled by default; local media remains the fallback."""
         player = players[msg.chat.id]
         action = msg.command[1].lower() if len(msg.command) > 1 else "status"
         if action == "status":
             await msg.reply_text(
-                "📡 Direct HTTPS Streaming (experimental): "
+                "📡 Direct HTTPS Streaming: "
                 + ("ON" if player.stream_enabled else "OFF")
                 + "\n/stream on | /stream off — Group Admin"
             )

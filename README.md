@@ -6,7 +6,7 @@ Standalone Telegram voice-chat music bot. It is NOT part of the existing Game Bo
 
 - Assistant user account automatically joins the group on the first /play request when allowed by chat permissions.
 - `/play Alan Walker Faded` tries SoundCloud immediately, then a rights-filtered Internet Archive fallback if necessary.
-- During playback the Now Playing card has a progress bar, optional trusted SoundCloud cover art and a lyrics lookup link. Admins can experimentally enable direct HTTPS audio with `/stream on`.
+- During playback the Now Playing card has a progress bar, optional trusted SoundCloud cover art and a lyrics lookup link. Direct HTTPS audio is enabled automatically; no `/stream on` is required.
 - `/vplay` on a replied-to Telegram MP4 is supported; YouTube title/link video extraction is off by default.
 - Reply to a Telegram audio message with `/play`, or a Telegram MP4/video message with `/vplay`.
 - `/play https://...` and `/vplay https://...` for direct HTTPS media on explicitly allowed hosts only.
@@ -155,13 +155,13 @@ four concurrent calls at acceptable quality. The cap can be adjusted by
 `MAX_ACTIVE_GROUPS` (hard maximum 8) after performance testing.
 Restarting Render clears group-specific toggle settings.
 
-## Compact now-playing UI and opt-in remote streaming (October 2026)
+## Compact now-playing UI and automatic remote streaming (October 2026)
 
 - The single active Now Playing card shows **elapsed / duration**, a short Unicode progress bar and a decorative sound-wave pulse. A single message/caption is edited roughly every **25 seconds**; no recurring new messages are sent. Pausing freezes the displayed elapsed timer; resuming continues it. This is a time estimate, not sample-accurate audio analysis.
 - When SoundCloud's metadata includes artwork from an approved `sndcdn.com` HTTPS image host, the bot can show it as a **single photo with caption**. If the image is missing, fails, or Telegram cannot fetch it promptly, the panel falls back to plain text. The UI is posted asynchronously **after** VC playback begins, so artwork failure does not delay hearing music.
 - The **🎤 Lyrics ↗** button opens a Genius lyrics-search page. Copyrighted lyrics are **not copied or auto-posted into the Telegram group**. Availability/accuracy depends on the external site.
-- Optional **direct HTTPS playback** uses a publicly playable, non-DRM, validated SoundCloud CDN URL with PyTgCalls `MediaStream(url, headers=...)`. It does *not* download the entire song into memory; FFmpeg buffers chunks. This is consistent with PyTgCalls' remote-stream examples, but it is not guaranteed faster than downloads, and expiry, redirects, restrictions, missing headers or network quality can still cause a failure. If PyTgCalls rejects the URL immediately, the bot retries through its existing local-file download path.
-- For safety, **direct streaming defaults OFF for each group** until proven in an actual Voice Chat. Admins can test with `/stream on`; `/stream off` immediately returns future requests to normal downloaded playback. The setting resets after Render restarts. Existing one-track-ahead prefetch stays enabled for queued audio, and prefetched songs may continue to use a local file even when direct streaming is enabled.
+- Default **direct HTTPS playback** uses a publicly playable, non-DRM, validated SoundCloud CDN URL with PyTgCalls `MediaStream(url, headers=...)`. It does *not* download the entire song into memory; FFmpeg buffers chunks. This is consistent with PyTgCalls' remote-stream examples, but it is not guaranteed faster than downloads, and expiry, redirects, restrictions, missing headers or network quality can still cause a failure. If PyTgCalls rejects the URL immediately, the bot retries through its existing local-file download path.
+- **Direct streaming defaults ON for each group**, including after Render restarts. `/play` automatically tries a public SoundCloud HTTPS stream, with local download fallback if unavailable. Admins can use `/stream off` to switch future requests to local download, or `/stream on` to re-enable it; manual overrides last until Render restarts. Existing one-track-ahead prefetch stays enabled for queued audio, and prefetched songs may continue to use a local file even when direct streaming is enabled.
 - Source URLs must use the official public HTTPS SoundCloud media host family. The streaming resolver refuses unrelated/private-network hosts, blocked/premium/DRM audio and does not pass cookies or authorization headers. Copyright and creator permissions still apply.
 - The cosmetic UI does **not** change the 4-VC Render Free concurrency cap or remove the platform's performance limits.
 

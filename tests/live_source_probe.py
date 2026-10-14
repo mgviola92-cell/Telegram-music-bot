@@ -60,7 +60,7 @@ if __name__=="__main__":
             if f.get("name","").lower().endswith(".mp3")
         ][:1]
         print("Archive candidate",identifier,"CC",license_kind,"sample_mp3",audio_files)
-        if license_kind and audio_files and identifier=="jamendo-136087":
+        if license_kind and audio_files and identifier=="tedkerr-urbantheme":
             from urllib.parse import quote
             media_url="https://archive.org/download/"+quote(identifier,safe="")+"/"+quote(audio_files[0][0],safe="")
             request=Request(media_url,headers={

@@ -120,7 +120,7 @@ class SourceSelectionTest(unittest.TestCase):
         # Test the opt-in provider path, even when no real API key is present.
         patcher = patch.dict("os.environ", {
             "AUDIUS_ENABLED": "1", "YOUTUBE_ENABLED": "1",
-            "ARCHIVE_ENABLED": "0",
+            "ARCHIVE_ENABLED": "0", "MUSIC_SOURCE_PRIORITY": "youtube",
         })
         patcher.start()
         self.addCleanup(patcher.stop)
@@ -170,10 +170,9 @@ class SourceSelectionTest(unittest.TestCase):
             iterator = source_candidates("Alan Walker Faded", video=False)
             self.assertEqual(next(iterator), ("YouTube", "ytsearch1:Alan Walker Faded official"))
             search.assert_not_called()
-            self.assertEqual(next(iterator), ("Audius", "Alan Walker Faded"))
-            search.assert_not_called()
             self.assertEqual(next(iterator), ("SoundCloud", "https://soundcloud.com/artist/song"))
             self.assertEqual(search.call_count, 1)
+            self.assertEqual(next(iterator), ("Audius", "Alan Walker Faded"))
 
     def test_direct_youtube_skips_soundcloud(self):
         with patch("main.soundcloud_results") as search:

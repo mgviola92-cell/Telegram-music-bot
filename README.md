@@ -159,7 +159,7 @@ Restarting Render clears group-specific toggle settings.
 
 - Real VC logs have confirmed `direct=True` followed by playback success. This does not imply instant startup: search, media URL resolution and Telegram/FFmpeg initialization still take time.
 - Search results (SoundCloud track pages, not expiring signed audio URLs) are kept for ten minutes, bounded to 48 queries. Repeat searches resolve fresh media tokens without repeating the track search; failed resolutions invalidate the entry.
-- Known audio-only CDN streams use bounded FFmpeg probing (`-analyzeduration 500000 -probesize 131072`). Codec detection remains enabled; playback failures retain the local-media fallback.
+- Direct audio uses the standard PyTgCalls/FFmpeg probing settings. Reduced probing was reverted after a real-VC report of silent playback; a successful calls.play response does not establish audible sound. Playback failures retain the local-media fallback.
 - Queue preparation uses the same direct-stream setting as `/play`, rather than always downloading the next song.
 
 ## Compact now-playing UI and automatic remote streaming (October 2026)

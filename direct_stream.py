@@ -15,9 +15,6 @@ from player_visuals import (
 
 LOG = getLogger("telegram_music")
 
-# Keep codec detection, but bound initial probing for known audio-only CDN streams.
-DIRECT_AUDIO_FFMPEG = "-analyzeduration 500000 -probesize 131072"
-
 # Cache track pages, never signed media URLs, so playback resolves fresh tokens.
 _SEARCH_LOCK = threading.RLock()
 _SEARCHES = {}

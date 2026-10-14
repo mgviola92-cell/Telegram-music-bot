@@ -27,7 +27,7 @@ from idle_media import configured_radio_url, ensure_idle_audio
 from youtube_health import youtube_guard
 from archive_source import get_archive_audio
 from prefetch import PreparedAudio
-from direct_stream import (resolve_soundcloud_https, DIRECT_AUDIO_FFMPEG,
+from direct_stream import (resolve_soundcloud_https,
                            cached_search, remember_search, forget_search)
 from player_visuals import (player_caption, artwork_for, artwork_is_safe, stream_headers_for, allowed_audio_cdn, save_artwork)
 from pytgcalls import PyTgCalls
@@ -1031,7 +1031,6 @@ async def main() -> None:
                             options = {"video_flags": MediaStream.Flags.IGNORE}
                             if allowed_audio_cdn(source):
                                 options["headers"] = stream_headers_for(source)
-                                options["ffmpeg_parameters"] = DIRECT_AUDIO_FFMPEG
                             stream = MediaStream(source, AudioQuality.HIGH, **options)
                         await play_with_reconnect(calls, chat_id, stream)
                     except Exception as live_exc:

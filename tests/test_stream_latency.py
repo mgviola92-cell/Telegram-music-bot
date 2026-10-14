@@ -8,7 +8,7 @@ import unittest
 from unittest.mock import patch
 
 import direct_stream
-from direct_stream import cached_search, remember_search, forget_search, DIRECT_AUDIO_FFMPEG
+from direct_stream import cached_search, remember_search, forget_search
 from pytgcalls.ffmpeg import build_command
 from pytgcalls.types.raw import AudioParameters
 
@@ -58,17 +58,17 @@ class SearchReuseTest(unittest.TestCase):
 
 @unittest.skipUnless(shutil.which('ffmpeg') and shutil.which('ffprobe'), 'FFmpeg tools required')
 class AudioHlsProbeTest(unittest.TestCase):
-    def test_reduced_probe_still_detects_and_decodes_aac_hls(self):
+    def test_default_probe_detects_and_decodes_aac_hls(self):
         with tempfile.TemporaryDirectory() as folder:
             playlist = str(Path(folder) / 'test.m3u8')
             subprocess.run([
                 'ffmpeg', '-v', 'error', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=3',
                 '-c:a', 'aac', '-b:a', '96k', '-f', 'hls', '-hls_time', '1', playlist,
             ], check=True, capture_output=True, timeout=20)
-            probe = build_command('ffprobe', DIRECT_AUDIO_FFMPEG, playlist, AudioParameters(48000, 2))
+            probe = build_command('ffprobe', None, playlist, AudioParameters(48000, 2))
             metadata = json.loads(subprocess.run(probe, check=True, capture_output=True,
                                                  timeout=20).stdout)
             self.assertTrue(any(s['codec_type'] == 'audio' for s in metadata['streams']))
-            command = build_command('ffmpeg', DIRECT_AUDIO_FFMPEG, playlist, AudioParameters(48000, 2))
+            command = build_command('ffmpeg', None, playlist, AudioParameters(48000, 2))
             output = subprocess.run(command, check=True, capture_output=True, timeout=20).stdout
             self.assertGreater(len(output), 48000)

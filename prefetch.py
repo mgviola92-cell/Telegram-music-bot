@@ -33,6 +33,13 @@ class PreparedAudio:
             result = task.result()
         except (asyncio.CancelledError, Exception):
             return
+        if not self.discarded and result:
+            self.track.title = result[1]
+            self.track.duration_seconds = result[2]
+            self.track.metadata_resolved = True
+            notify = getattr(self, "on_metadata", None)
+            if notify is not None:
+                notify()
         if self.discarded and not self.consumed and not self.cleaned and result:
             self.cleaned = True
             self.cleanup(result[0])
@@ -59,3 +66,19 @@ class PreparedAudio:
             raise InterruptedError("Prefetch discarded during download")
         self.consumed = True
         return result
+
+
+class AsyncPreparedAudio(PreparedAudio):
+    """Same ownership/cancellation contract for the parallel async resolver."""
+    def __init__(self, track, resolver, cleanup, *, prefer_stream=False):
+        self.track, self.prefer_stream = track, prefer_stream
+        self.cancel_signal = threading.Event()
+        self.cleanup = cleanup
+        self.discarded = self.consumed = self.cleaned = False
+        self.task = asyncio.create_task(resolver(track, prefer_stream))
+        self.task.add_done_callback(self._on_done)
+
+    def discard(self):
+        if self.consumed or self.discarded:return
+        super().discard()
+        if not self.task.done():self.task.cancel()

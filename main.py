@@ -21,18 +21,20 @@ from aiohttp import ClientSession, ClientTimeout, web
 from pyrogram import Client, filters
 from pyrogram.enums import ChatMemberStatus
 from pyrogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
-from music_ui import player_controls, queue_display, queue_remove, queue_shuffle
+from music_ui import player_controls, queue_display, queue_remove, queue_shuffle, queue_track_title
 from audius_source import fetch_audius_audio
 from song_cache import get_cached_song, save_cached_song
 from idle_media import configured_radio_url, ensure_idle_audio
 from youtube_health import youtube_guard
 from archive_source import get_archive_audio
-from prefetch import PreparedAudio
+from prefetch import PreparedAudio, AsyncPreparedAudio
 from stream_probe import probe_audio_url
 from network_audio import DirectAudioStream
 from bot_source_probe import run_bot_source_probe
 from lybot_source import LyBotSource, BotSourceUnavailable, resolve_with_fallback, run_live_probe
 from voice_transport import clear_stale_voice, ensure_native_sender, AudioTransportUnavailable
+from source_race import ParallelSources
+from track_metadata import remember_metadata, lookup_metadata
 from direct_stream import (resolve_soundcloud_https,
                            cached_search, remember_search, forget_search)
 from player_visuals import (player_caption, artwork_for, artwork_is_safe, stream_headers_for, allowed_audio_cdn, save_artwork)
@@ -61,6 +63,7 @@ class Track:
     video: bool = False
     youtube: bool = False
     duration_seconds: float | None = None
+    metadata_resolved: bool = False
 
 
 @dataclass
@@ -93,6 +96,11 @@ class Player:
     progress_task: asyncio.Task | None = None
     announce_task: asyncio.Task | None = None
     stream_enabled: bool = True
+    resolver: object | None = None
+    metadata_tasks: dict = field(default_factory=dict)
+    queue_notice_id: int | None = None
+    queue_changed: object | None = None
+    queue_refresh_task: asyncio.Task | None = None
 
 
 def voice_slot_count(players: dict[int, Player]) -> int:
@@ -269,10 +277,21 @@ def prepare_next_song(player: Player) -> None:
     if (upcoming is not None and player.current is not None
             and upcoming.youtube and not upcoming.video
             and os.getenv("MUSIC_PREFETCH_ENABLED", "1") != "0"):
-        player.prepared = PreparedAudio(
-            upcoming, download_song, clean_temp, prefer_stream=player.stream_enabled,
-        )
+        if player.resolver is not None:
+            player.prepared = AsyncPreparedAudio(upcoming, player.resolver, clean_temp,
+                                                 prefer_stream=player.stream_enabled)
+        else:
+            player.prepared = PreparedAudio(
+                upcoming, download_song, clean_temp, prefer_stream=player.stream_enabled,
+            )
+        player.prepared.on_metadata = player.queue_changed
         log.info("Prefetch began for next queued audio")
+
+
+def cancel_queue_metadata(player):
+    for _, task in list(player.metadata_tasks.values()):
+        task.cancel()
+    player.metadata_tasks.clear()
 
 
 def is_youtube_url(value: str) -> bool:
@@ -448,6 +467,8 @@ def soundcloud_results(query: str, max_tracks: int = 6, cancel_signal: threading
         if hostname != "soundcloud.com" and not hostname.endswith(".soundcloud.com"):
             continue
         if link not in urls:
+            if not urls:
+                remember_metadata(query, title + (" – " + artist if artist else "") + " · SoundCloud", entry.get("duration"))
             urls.append(link)
         if len(urls) >= max_tracks:
             break
@@ -754,7 +775,43 @@ async def main() -> None:
         in_memory=True,
     )
     calls = PyTgCalls(assistant, workers=min(max_groups, 4))
-    lybot = LyBotSource(assistant) if os.getenv("LYBOT_ENABLED", "1") != "0" else None
+    source_names = [name.strip() for name in os.getenv("MUSIC_BOT_SOURCES", "LyBot,Song_Vkm_bot,VoiceShazamBot").split(",")
+                    if name.strip() in {"LyBot", "Song_Vkm_bot", "VoiceShazamBot"}]
+    lybot = (ParallelSources([LyBotSource(assistant, name) for name in dict.fromkeys(source_names)], clean_temp)
+             if os.getenv("LYBOT_ENABLED", "1") != "0" else None)
+    metadata_slots = asyncio.Semaphore(2)
+
+    async def resolve_for_queue(song, prefer_stream):
+        primary = PreparedAudio(song, download_song, clean_temp, prefer_stream=prefer_stream)
+        if lybot is not None and not song.video and not is_youtube_url(song.source) and not stream_only_enabled():
+            return await lybot.race(primary, song.source)
+        return await primary.consume()
+
+    async def describe_primary(query):
+        known = lookup_metadata(query)
+        if known:
+            return known
+        await asyncio.to_thread(soundcloud_results, query, 1)
+        return lookup_metadata(query)
+
+    def describe_queued(player, track):
+        if (not track.youtube or track.video or track.metadata_resolved or lybot is None
+                or (player.prepared is not None and player.prepared.track is track)):
+            return
+        async def update():
+            try:
+                async with metadata_slots:
+                    result = await lybot.describe(track.source, describe_primary)
+                if result and any(item is track for item in player.queue) and not track.metadata_resolved:
+                    track.title, track.duration_seconds = result
+                    track.metadata_resolved = True
+                    if player.queue_changed is not None:
+                        player.queue_changed()
+            finally:
+                row = player.metadata_tasks.get(id(track))
+                if row and row[1] is asyncio.current_task():
+                    player.metadata_tasks.pop(id(track), None)
+        player.metadata_tasks[id(track)] = asyncio.create_task(update())
 
     async def is_chat_admin(chat_id: int, user_id: int | None) -> bool:
         if not user_id:
@@ -1073,7 +1130,17 @@ async def main() -> None:
                     if song.youtube:
                         use_lybot = (lybot is not None and not song.video
                                      and not stream_only_enabled() and not is_youtube_url(source))
-                        if use_lybot:
+                        if use_lybot and player.resolver is not None:
+                            prepared = player.prepared
+                            player.prepared = None
+                            if (prepared is None or prepared.track is not song
+                                    or prepared.prefer_stream != player.stream_enabled):
+                                if prepared is not None:
+                                    prepared.discard()
+                                prepared = AsyncPreparedAudio(song, player.resolver, clean_temp,
+                                                              prefer_stream=player.stream_enabled)
+                            local_file, title, duration_seconds = await prepared.consume()
+                        elif use_lybot:
                             prepared = player.prepared
                             player.prepared = None
                             if (prepared is None or prepared.track is not song
@@ -1117,6 +1184,7 @@ async def main() -> None:
                             return
                         source = local_file
                         song.title = title
+                        song.metadata_resolved = True
                     elif song.telegram_file:
                         target = str(
                             Path(tempfile.gettempdir())
@@ -1195,12 +1263,15 @@ async def main() -> None:
                         )
                         song.duration_seconds = duration_seconds
                         song.title = title
+                        song.metadata_resolved = True
                         source = local_file
                         stream = audio_stream(source)
                         await play_with_reconnect(calls, chat_id, stream)
                         await wait_for_audio_frames(calls, chat_id)
                     log.info("VC play success chat %s", chat_id)
                     player.current = song
+                    if player.queue_changed is not None:
+                        player.queue_changed()
                     player.idle_mode = None
                     player.idle_started_at = 0
                     player.idle_notice_sent = False
@@ -1302,7 +1373,7 @@ async def main() -> None:
             "Group VC ဖွင့်ပြီး /play Faded လို့ သီချင်းနာမည် ရိုက်နိုင်တယ်။\n"
             "Audio File ကို Reply လုပ်ပြီး /play လည်းရတယ်။\n"
             "Video: ကိုယ်ပိုင် MP4 ကို Reply လုပ်ပြီး /vplay သုံးပါ။\n"
-            "Music: SoundCloud ကို အဓိကသုံးပြီး မရရင် LyBot အရန် Source ကို စမ်းမယ်။\n"
+            "Music: SoundCloud / LyBot / Song_Vkm / VoiceShazam မှာ တစ်ပြိုင်တည်းရှာမယ်။\n"
             "YouTube VC Audio: Server Verification ကြောင့် လောလောဆယ် ပိတ်ထားတယ်။\n"
             "Private Group: Music Bot ကို Admin + Invite Users ပေးထားပါ။\n"
             "/play /vplay /queue /now /skip /pause /resume /stop\n"
@@ -1361,6 +1432,7 @@ async def main() -> None:
             track = Track(
                 str(title)[:100], media.file_id, telegram_file=True, video=video_mode,
                 duration_seconds=float(media.duration) if getattr(media, "duration", None) else None,
+                metadata_resolved=True,
             )
         elif len(msg.command) >= 2:
             query = msg.text.split(maxsplit=1)[1].strip()
@@ -1402,6 +1474,8 @@ async def main() -> None:
             return
 
         player = players[msg.chat.id]
+        player.resolver = resolve_for_queue
+        player.queue_changed = lambda: schedule_queue_refresh(msg.chat.id)
         log.info("Play mode chat %s: direct=%s", msg.chat.id, player.stream_enabled)
         try:
             progress = await msg.reply_text("⏳ Assistant အလိုအလျောက်ဝင်ပြီး VC ချိတ်နေတယ်...")
@@ -1427,7 +1501,8 @@ async def main() -> None:
                 return
             player.queue.append(track)
             prepare_next_song(player)
-            await progress.edit_text("✅ Queue ထဲထည့်ပြီးပြီ — " + track.title)
+            describe_queued(player, track)
+            await progress.edit_text("✅ Queue ထဲထည့်ပြီးပြီ — " + queue_track_title(track))
             return
         async with player.lock:
             # An external VC disconnect can leave player.current set even
@@ -1466,6 +1541,7 @@ async def main() -> None:
             player.queue.append(track)
             if player.current is not None:
                 prepare_next_song(player)
+                describe_queued(player, track)
             if player.current is None:
                 try:
                     # Never cancel Pyrogram's long-lived HandlerTask; only
@@ -1478,20 +1554,43 @@ async def main() -> None:
                         pass
                     return
             else:
-                await progress.edit_text("✅ Queue ထဲထည့်ပြီးပြီ — " + track.title)
+                await progress.edit_text("✅ Queue ထဲထည့်ပြီးပြီ — " + queue_track_title(track))
+
+    def queue_text(player):
+        return queue_display(
+            queue_track_title(player.current) if player.current else
+            "📻 Radio (idle)" if player.idle_mode == "radio" else None,
+            [queue_track_title(song) for song in player.queue], loop=player.loop_current)
+
+    def schedule_queue_refresh(chat_id):
+        player = players[chat_id]
+        if player.queue_notice_id is None or (player.queue_refresh_task is not None and not player.queue_refresh_task.done()):
+            return
+        async def refresh():
+            from pyrogram.enums import ParseMode
+            await asyncio.sleep(0.5)
+            try:
+                await bot.edit_message_text(chat_id, player.queue_notice_id,
+                                            queue_text(player), parse_mode=ParseMode.DISABLED)
+            except Exception:
+                pass
+        player.queue_refresh_task = asyncio.create_task(refresh())
+
+    async def send_queue(chat_id):
+        from pyrogram.enums import ParseMode
+        player = players[chat_id]
+        previous = player.queue_notice_id
+        panel = await bot.send_message(chat_id, queue_text(player), parse_mode=ParseMode.DISABLED)
+        player.queue_notice_id = panel.id
+        if previous is not None:
+            try:
+                await bot.delete_messages(chat_id, previous)
+            except Exception:
+                pass
 
     @bot.on_message(filters.command(["queue", "now", "nowplaying"]) & filters.group)
     async def queue_command(_: Client, msg: Message) -> None:
-        player = players[msg.chat.id]
-        async with player.lock:
-            message = queue_display(
-                (player.current.title if player.current else
-                 "📻 Radio (idle)" if player.idle_mode == "radio" else
-                 "🔇 Quiet idle" if player.idle_mode == "silence" else None),
-                [song.title for song in player.queue],
-                loop=player.loop_current,
-            )
-        await msg.reply_text(message)
+        await send_queue(msg.chat.id)
 
     @bot.on_message(filters.command("radio") & filters.group)
     async def radio_command(_: Client, msg: Message) -> None:
@@ -1626,6 +1725,7 @@ async def main() -> None:
         async with player.lock:
             count = len(player.queue)
             player.queue.clear()
+            cancel_queue_metadata(player)
             discard_prepared(player)
         await msg.reply_text(f"🧹 Next Queue {count} ပုဒ် ရှင်းပြီးပြီ။ လက်ရှိသီချင်း ဆက်ဖွင့်မယ်။")
 
@@ -1687,6 +1787,7 @@ async def main() -> None:
             log.info("Stop interrupted loading chat %s", msg.chat.id)
         async with player.lock:
             player.queue.clear()
+            cancel_queue_metadata(player)
             player.current = None
             player.started_at = 0.0
             player.paused = False
@@ -1749,11 +1850,8 @@ async def main() -> None:
             await cb.answer("ဒီ Player Card သက်တမ်းကုန်ပြီ။ /now သုံးပါ။", show_alert=True)
             return
         if action == "queue":
-            titles = [item.title for item in player.queue]
-            info = queue_display(
-                player.current.title, titles[:2], loop=player.loop_current
-            )[:195]
-            await cb.answer(info, show_alert=True)
+            await cb.answer()
+            await send_queue(chat_id)
             return
         if not await is_chat_admin(chat_id, cb.from_user.id if cb.from_user else None):
             await cb.answer("🛡 Group Admin တွေကပဲ Control နှိပ်နိုင်တယ်။", show_alert=True)
@@ -1770,6 +1868,7 @@ async def main() -> None:
             discard_prepared(player)
             async with player.lock:
                 player.queue.clear()
+                cancel_queue_metadata(player)
                 player.current = None
                 player.paused = False
                 player.loop_current = False
@@ -2040,7 +2139,7 @@ async def main() -> None:
         ready = True
         log.info("Music Bot started; maximum active voice chats: %s", max_groups)
         log.info("Named audio stream-only mode: %s", stream_only_enabled())
-        log.info("LyBot audio fallback enabled: %s", lybot is not None)
+        log.info("Parallel music sources enabled: %s", source_names if lybot else [])
         probe_query = os.getenv("MUSIC_STREAM_PROBE_QUERY", "").strip()[:160]
         if probe_query:
             probe_task = asyncio.create_task(run_stream_probe(probe_query))
@@ -2069,7 +2168,8 @@ async def main() -> None:
                 loading_tasks.append(player.loading_task)
             cancel_active_loading(player)
             discard_prepared(player)
-            for ui_task in (player.announce_task, player.progress_task):
+            cancel_queue_metadata(player)
+            for ui_task in (player.announce_task, player.progress_task, player.queue_refresh_task):
                 if ui_task is not None:
                     ui_task.cancel()
         await asyncio.gather(*loading_tasks, return_exceptions=True)

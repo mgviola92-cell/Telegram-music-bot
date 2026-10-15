@@ -124,5 +124,15 @@ class QueuePrefetchTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(player.prepared)
 
 
-if __name__ == "__main__":
-    unittest.main()
+    async def test_async_prefetch_updates_queue_to_actual_resolved_track(self):
+        from prefetch import AsyncPreparedAudio
+        track=Track('purple pgb wink','purple pgb wink',youtube=True)
+        async def resolver(track,prefer_stream):
+            return 'song.mp3','Purple – Wink & pGb · LyBot',163
+        slot=AsyncPreparedAudio(track,resolver,lambda p:None,prefer_stream=True)
+        await slot.task
+        await asyncio.sleep(0)
+        self.assertEqual(track.title,'Purple – Wink & pGb · LyBot')
+        self.assertTrue(track.metadata_resolved)
+        self.assertEqual(track.source,'purple pgb wink')
+        await slot.consume()

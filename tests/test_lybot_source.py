@@ -96,3 +96,26 @@ class LyBotTest(unittest.IsolatedAsyncioTestCase):
                 with self.assertRaises(BotSourceUnavailable):await source.resolve('Song')
             self.assertFalse(folder.exists())
             self.assertFalse(source.lock.locked())
+
+    async def test_new_bot_direct_audio_with_zero_duration_is_probed(self):
+        import io,wave
+        buf=io.BytesIO()
+        with wave.open(buf,'wb') as wav:
+            wav.setnchannels(1);wav.setsampwidth(2);wav.setframerate(8000)
+            wav.writeframes(b'\0\0'*8000)
+        data=buf.getvalue()
+        audio=Obj(title='Purple',performer='Wink & pGb',file_size=len(data),duration=0,file_name='song.wav')
+        message=Obj(id=14,outgoing=False,audio=audio)
+        class Client:
+            async def get_users(self,name):return Obj(id=456,is_bot=True,username='VoiceShazamBot')
+            async def send_message(self,*a,**kw):return Obj(id=10)
+            async def get_chat_history(self,*a,**kw):yield message
+            async def stream_media(self,*a,**kw):yield data
+        source=LyBotSource(Client(),'VoiceShazamBot')
+        with patch.object(source,'cached',return_value=None),patch('lybot_source.save_cached_song'):
+            path,title,duration=await source.resolve('purple pgb wink')
+        try:
+            self.assertEqual(duration,1)
+            self.assertIn('Purple – Wink & pGb',title)
+            self.assertIn('VoiceShazamBot',title)
+        finally:shutil.rmtree(Path(path).parent)

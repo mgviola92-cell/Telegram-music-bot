@@ -4,6 +4,7 @@ Inspired by common VC-music bot interaction patterns; implemented from scratch.
 No network calls, database, media downloads, or additional dependencies.
 """
 import random
+import re
 from collections import deque
 from typing import Any
 
@@ -31,15 +32,26 @@ def queue_shuffle(items: deque) -> int:
     return len(entries)
 
 
+def clean_track_title(title):
+    title = re.sub(r"\s+·\s+(?:SoundCloud|LyBot|Song_Vkm_bot|VoiceShazamBot|Internet Archive|Audius).*?$", "", str(title), flags=re.I)
+    title = re.sub(r"\.(?:mp3|m4a|ogg|opus|wav|flac|aac)\b", "", title, flags=re.I)
+    title = re.sub(r"\(?MP3[_ -]?\d+K\)?|\bLYRICS?\s+VIDEO\b|\bOFFICIAL\s+(?:MUSIC\s+)?VIDEO\b", "", title, flags=re.I)
+    return re.sub(r"\s+", " ", title).strip(" ·-_—–")[:100]
+
+
+def queue_track_title(track):
+    if not getattr(track, 'metadata_resolved', False) and getattr(track, 'youtube', False):
+        return '🔎 သီချင်းရှာနေဆဲ…'
+    return clean_track_title(track.title)
+
+
 def queue_display(current: str | None, titles: list[str], loop: bool = False) -> str:
-    current_line = (current or "မရှိသေးဘူး")[:110]
-    up_next = "\n".join(f"{i}. {title[:90]}" for i, title in enumerate(titles, 1))
-    return (
-        "🎧 မုဒြာ Music Queue\n"
-        f"🎵 Playing: {current_line}\n"
-        f"🔁 Repeat current: {'ON' if loop else 'OFF'}\n\n"
-        "📜 Up next:\n" + (up_next or "Queue အလွတ်")
-    )
+    current_line = clean_track_title(current) if current else 'မရှိသေးဘူး'
+    rows = "\n".join(f"{i}. {clean_track_title(title)}" for i,title in enumerate(titles,1))
+    return ("🎧 မုဒြာ Music Queue\n\n"
+            f"▶️ လက်ရှိဖွင့်နေသည်\n{current_line}\n\n"
+            f"⏭ နောက်ထပ် ({len(titles)})\n" + (rows or 'Queue အလွတ်') +
+            f"\n\n🔁 Repeat current: {'ON' if loop else 'OFF'}")
 
 
 def player_controls(chat_id: int, *, paused: bool = False, loop: bool = False, title: str = "") -> InlineKeyboardMarkup:

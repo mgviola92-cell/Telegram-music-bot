@@ -44,3 +44,17 @@ class MusicFeaturesTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class QueueMetadataTest(unittest.TestCase):
+    def test_unresolved_query_is_not_presented_as_a_song_title(self):
+        from main import Track
+        from music_ui import queue_track_title
+        track=Track('purple pgb wink','purple pgb wink',youtube=True)
+        self.assertNotIn('purple pgb wink',queue_track_title(track))
+        track.title='Purple – Wink & pGb · Song_Vkm_bot'
+        track.metadata_resolved=True
+        self.assertEqual(queue_track_title(track),'Purple – Wink & pGb')
+
+    def test_queue_title_removes_file_and_source_noise(self):
+        from music_ui import clean_track_title
+        self.assertEqual(clean_track_title('Purple LYRICS VIDEO(MP3_160K).mp3 · SoundCloud (live)'), 'Purple')

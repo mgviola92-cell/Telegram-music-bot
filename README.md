@@ -211,19 +211,27 @@ After an audio play request, the loader waits up to eight seconds for the native
 Optional diagnostic: `MUSIC_STREAM_PROBE_QUERY` resolves that named track on startup and compares three FFmpeg commands, each reading only a half-second PCM sample into RAM with a 15-second deadline. It does not join a VC. Errors redact URLs/tokens. Keep this variable empty during normal operation.
 
 
-### LyBot fallback for named audio
+### Parallel music sources and resolved queue titles
 
-`/play <song name>` keeps the existing direct SoundCloud path. With `LYBOT_ENABLED=1`
-(the default), named audio resolution waits up to 12 seconds for the primary
-provider, then tries the verified `@LyBot` using the existing assistant account.
-The LyBot request and transfer have a 28-second deadline; a busy bridge waits at
-most 2 seconds for its single request lock. Cancellation cleans partial media.
-No sign-in challenge, subscription, or payment button is handled automatically.
-Explicit YouTube URLs, videos and strict stream-only mode retain their existing behavior.
+Named `/play` searches SoundCloud, `@LyBot`, `@Song_Vkm_bot` and `@VoiceShazamBot`
+concurrently. The first ready audio wins; slower searches are cancelled instead
+of being waited on. Telegram providers search metadata in parallel, while at most
+one Telegram file is transferred per music request. A ready SoundCloud stream
+can cancel a slower Telegram transfer. The overall source race is bounded to 30
+seconds; the existing 15-minute / 2-file / 36 MiB media cache remains shared.
+Each Telegram bot serializes its own search UI; searches and transfers are bounded.
 
-LyBot audio uses a bounded temporary local file (20 MiB / 10 minutes maximum),
-then the normal FFmpeg/VC player. This fallback is not disk-free direct streaming.
-A 15-minute cache reuses the existing shared 2-file / 36 MiB cache budget.
-A matching cached fallback skips another search. No bot token or session is logged.
-Set `LYBOT_ENABLED=0` to disable this fallback. The opt-in startup diagnostic
-`MUSIC_BOT_PROBE_UNTIL` is off at `0`, and only accepts a timestamp within 15 minutes.
+`MUSIC_BOT_SOURCES` is an optional comma-separated subset of the three bot handles.
+`LYBOT_ENABLED=0` disables the Telegram bridge. Explicit YouTube URLs, video and
+strict stream-only mode retain their separate behavior. Telegram audio uses a
+temporary local file; SoundCloud direct streaming remains disk-free.
+Unknown Telegram durations are checked with FFprobe before playback (20 MiB / 10
+minute limits). No subscription or payment buttons are handled automatically.
+
+The immediate next song is prefetched with the same source race. Further queue
+entries resolve metadata only, with two background lookups at a time. Queue
+messages show resolved title/artist, or a searching status while unresolved,
+never the original query as a confirmed song. Queue buttons open a full chat
+message instead of a 195-character popup; metadata updates edit it in place.
+The opt-in `MUSIC_BOT_PROBE_UNTIL` diagnostic is normally `0`; when enabled for at
+most 15 minutes it tests all configured bot providers without joining a VC.

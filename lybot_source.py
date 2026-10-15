@@ -18,7 +18,7 @@ class BotSourceUnavailable(RuntimeError):
     pass
 
 
-def song_button(message):
+def song_button(message, query=None):
     # LyBot's observed search UI: song rows carry title – artist callbacks.
     # Never click subscription, navigation, URL or payment buttons.
     for row in getattr(getattr(message, 'reply_markup', None), 'inline_keyboard', []) or []:
@@ -26,7 +26,8 @@ def song_button(message):
             label = str(button.text).strip()
             if (' – ' in label or ' - ' in label) and getattr(button, 'callback_data', None):
                 if not any(word in label.casefold() for word in ('subscribe', 'premium', 'payment', 'buy ')):
-                    return label
+                    if query is None or matches_query(type("Label", (), {"title": label, "performer": ""})(), query):
+                        return label
     return None
 
 
@@ -40,107 +41,167 @@ def matches_selection(media, label):
     return bool(title and selected_title and title == selected_title)
 
 
+class AudioCandidate:
+    def __init__(self, source, query, message, label, duration):
+        self.source, self.query, self.message = source, query, message
+        self.label, self.duration = label, duration
+
+
+def matches_query(media, query):
+    import re
+    def tokens(value):
+        normalized = unicodedata.normalize("NFKC", str(value)).casefold()
+        words = "".join(c if c.isalnum() or unicodedata.category(c).startswith("M") else " " for c in normalized)
+        return set(words.split())
+    wanted = tokens(query)
+    actual = tokens(str(getattr(media, 'title', '') or '') + ' ' + str(getattr(media, 'performer', '') or ''))
+    return bool(wanted and len(wanted & actual) / len(wanted) >= 0.6)
+
+
 class LyBotSource:
-    def __init__(self, client):
-        self.client = client
+    def __init__(self, client, username='LyBot', *, trace=False):
+        if username not in {'LyBot', 'Song_Vkm_bot', 'VoiceShazamBot'}:
+            raise ValueError('Unapproved music bot')
+        self.client, self.username, self.trace = client, username, trace
         self.lock = asyncio.Lock()
         self.peer = None
         self.cooldown_until = 0.
+        self.candidates = {}
+        self.started = username == 'LyBot'
 
     def cached(self, query):
-        return get_cached_song('lybot:' + query, False)
+        return get_cached_song(self.username.casefold() + ':' + query, False)
 
-    async def resolve(self, query):
+    async def find(self, query):
         query = query.strip()
         if not query or len(query) > 120 or query.startswith(('http://', 'https://', '/')):
-            raise BotSourceUnavailable('LyBot fallback accepts song names only')
-        cached = self.cached(query)
-        if cached:
-            LOG.info('Audio source: LyBot cached Telegram audio')
-            return cached
+            raise BotSourceUnavailable('Music bot search accepts song names only')
+        key = query.casefold()
+        existing = self.candidates.get(key)
+        if existing and existing[1] > time.monotonic():
+            return existing[0]
         if time.monotonic() < self.cooldown_until:
-            raise BotSourceUnavailable('LyBot temporarily unavailable')
+            raise BotSourceUnavailable('Source temporarily unavailable')
         try:
             await asyncio.wait_for(self.lock.acquire(), timeout=2)
         except TimeoutError:
-            raise BotSourceUnavailable('LyBot is busy; please try again shortly') from None
-        directory = None
+            raise BotSourceUnavailable('Source is busy') from None
         callback = None
-        started = time.monotonic()
+        seen = set()
         try:
-            async with asyncio.timeout(28):
-                cached = self.cached(query)
-                if cached:
-                    return cached
+            async with asyncio.timeout(18):
+                existing = self.candidates.get(key)
+                if existing and existing[1] > time.monotonic():
+                    return existing[0]
                 if self.peer is None:
-                    peer = await self.client.get_users('LyBot')
-                    if not peer.is_bot or str(peer.username).casefold() != 'lybot':
-                        raise BotSourceUnavailable('LyBot identity check failed')
+                    peer = await self.client.get_users(self.username)
+                    if not peer.is_bot or str(peer.username).casefold() != self.username.casefold():
+                        raise BotSourceUnavailable('Music bot identity check failed')
                     self.peer = peer
+                if not self.started:
+                    await self.client.send_message(self.peer.id, '/start')
+                    await asyncio.sleep(0.5)
+                    self.started = True
                 sent = await self.client.send_message(self.peer.id, query, disable_web_page_preview=True)
-                selected_id = None
-                selected_label = ""
+                selected_id, selected_label = None, ''
                 while True:
                     messages = [m async for m in self.client.get_chat_history(self.peer.id, limit=15)
                                 if m.id > sent.id and not getattr(m, 'outgoing', False)]
                     for message in reversed(messages):
                         media = audio_media(message)
-                        if (media is not None and selected_id is not None and message.id > selected_id
-                                and matches_selection(media, selected_label)):
+                        if self.trace and message.id not in seen:
+                            from stream_probe import safe_error
+                            seen.add(message.id)
+                            buttons = [[str(b.text)[:80] for b in row] for row in getattr(getattr(message, 'reply_markup', None), 'inline_keyboard', []) or []]
+                            LOG.info('Music bot probe @%s response: audio=%s text=%s buttons=%s', self.username, bool(media), safe_error(str(getattr(message, 'text', '') or getattr(message, 'caption', '') or ''))[:400], buttons)
+                        matched = (selected_id is not None and message.id > selected_id and matches_selection(media, selected_label)) if media else False
+                        if media and (matched or (selected_id is None and matches_query(media, query))):
                             size = int(getattr(media, 'file_size', 0) or 0)
                             duration = float(getattr(media, 'duration', 0) or 0)
-                            if not 0 < size <= MAX_BYTES or not 0 < duration <= 600:
-                                raise BotSourceUnavailable('LyBot audio exceeds the playback limits')
-                            suffix = Path(str(getattr(media, 'file_name', '') or '')).suffix.lower()
-                            if suffix not in {'.mp3', '.m4a', '.ogg', '.opus', '.aac', '.flac', '.wav'}:
-                                suffix = '.audio'
-                            directory = Path(tempfile.mkdtemp(prefix='mudyar_media_'))
-                            path = directory / ('lybot' + suffix)
-                            count = 0
-                            with path.open('wb') as output:
-                                async for chunk in self.client.stream_media(message, limit=21):
-                                    count += len(chunk)
-                                    if count > size or count > MAX_BYTES:
-                                        raise BotSourceUnavailable('LyBot audio size changed')
-                                    output.write(chunk)
-                            if count != size:
-                                raise BotSourceUnavailable('LyBot audio was incomplete')
-                            title = str(getattr(media, 'title', '') or query)[:85]
-                            artist = str(getattr(media, 'performer', '') or '')[:60]
-                            label = f'{title}' + (f' – {artist}' if artist else '') + ' · LyBot'
-                            save_cached_song('lybot:' + query, False, str(path), label, duration)
-                            LOG.info('Audio source: LyBot Telegram audio ready in %.2fs (%d bytes)',
-                                     time.monotonic()-started, count)
-                            directory = None  # Playback now owns this disposable file.
-                            return str(path), label, duration
+                            if not 0 < size <= MAX_BYTES or duration > 600:
+                                raise BotSourceUnavailable('Audio exceeds playback limits')
+                            title = str(getattr(media, 'title', '') or selected_label or query)[:100]
+                            artist = str(getattr(media, 'performer', '') or '')[:70]
+                            label = title + (f' – {artist}' if artist else '') + ' · ' + self.username
+                            candidate = AudioCandidate(self, query, message, label, duration or None)
+                            self.candidates.pop(key, None)
+                            if len(self.candidates) >= 24:
+                                self.candidates.pop(next(iter(self.candidates)))
+                            self.candidates[key] = (candidate, time.monotonic()+600)
+                            return candidate
                         if selected_id is None:
-                            label = song_button(message)
+                            label = song_button(message, query=query)
                             if label:
-                                selected_id = message.id
-                                selected_label = label
+                                selected_id, selected_label = message.id, label
                                 callback = asyncio.create_task(select_song(self.client, message, label))
-                    # Polling is bounded by the total deadline, not per-result retries.
                     await asyncio.sleep(1)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            self.cooldown_until = time.monotonic() + 30
-            LOG.info('LyBot fallback unavailable (%s)', type(exc).__name__)
-            if isinstance(exc, BotSourceUnavailable):
-                raise
-            raise BotSourceUnavailable('LyBot did not provide playable audio in time') from None
+            self.cooldown_until = time.monotonic()+30
+            LOG.info('Music source @%s unavailable (%s)', self.username, type(exc).__name__)
+            raise BotSourceUnavailable('Music bot did not return a matching track in time') from None
         finally:
             if callback is not None:
                 if not callback.done():
                     callback.cancel()
                 await asyncio.gather(callback, return_exceptions=True)
+            self.lock.release()
+
+    async def download(self, candidate):
+        cached = self.cached(candidate.query)
+        if cached:
+            return cached
+        directory = None
+        try:
+            async with asyncio.timeout(18):
+                media = audio_media(candidate.message)
+                size = int(media.file_size)
+                suffix = Path(str(getattr(media, 'file_name', '') or '')).suffix.lower()
+                if suffix not in {'.mp3', '.m4a', '.ogg', '.opus', '.aac', '.flac', '.wav'}:
+                    suffix = '.audio'
+                directory = Path(tempfile.mkdtemp(prefix='mudyar_media_'))
+                path = directory / ('telegram' + suffix)
+                count = 0
+                with path.open('wb') as output:
+                    async for chunk in self.client.stream_media(candidate.message, limit=21):
+                        count += len(chunk)
+                        if count > size or count > MAX_BYTES:
+                            raise BotSourceUnavailable('Audio size changed')
+                        output.write(chunk)
+                if count != size:
+                    raise BotSourceUnavailable('Audio was incomplete')
+                duration = candidate.duration
+                if duration is None:
+                    process = await asyncio.create_subprocess_exec('ffprobe','-v','error','-show_entries','format=duration','-of','default=nw=1:nk=1',str(path),stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.DEVNULL)
+                    try:
+                        out, _ = await asyncio.wait_for(process.communicate(), timeout=4)
+                        duration = float(out.strip())
+                    finally:
+                        if process.returncode is None:
+                            process.kill()
+                            await process.wait()
+                    if not 0 < duration <= 600:
+                        raise BotSourceUnavailable('Audio exceeds the duration limit')
+                save_cached_song(self.username.casefold()+':'+candidate.query,False,str(path),candidate.label,duration)
+                LOG.info('Audio source @%s ready (%d bytes)', self.username, count)
+                directory = None
+                return str(path), candidate.label, duration
+        finally:
             if directory is not None:
                 shutil.rmtree(directory, ignore_errors=True)
-            self.lock.release()
+
+    async def resolve(self, query):
+        cached = self.cached(query)
+        if cached:
+            return cached
+        return await self.download(await self.find(query))
 
 
 async def resolve_with_fallback(prepared, query, source, *, primary_timeout=12):
     """Use a cached fallback immediately; otherwise bound primary lookup time."""
+    if hasattr(source, "race") and type(source).__name__ == "ParallelSources":
+        return await source.race(prepared, query)
     cached = source.cached(query)
     if cached:
         prepared.discard()
@@ -158,18 +219,25 @@ async def resolve_with_fallback(prepared, query, source, *, primary_timeout=12):
 
 
 async def run_live_probe(source, enabled_until):
-    """Opt-in startup test of the same provider used by /play; no VC joining."""
+    """Opt-in live checks of all configured bots; never joins a group VC."""
     if not 0 < enabled_until - time.time() <= 900:
         return
-    path = None
-    try:
-        from bot_source_probe import decode_sample
-        path, title, duration = await source.resolve('Chan Chan Buddha Puzaniya')
-        result = await decode_sample(Path(path).read_bytes(), seconds=15)
-        LOG.info('LyBot production source probe: title=%s duration=%s bytes=%s pcm_bytes=%s peak=%s exit=%s',
-                 title, duration, Path(path).stat().st_size, result['pcm_bytes'], result['peak'], result['exit_code'])
-    except Exception as exc:
-        LOG.warning('LyBot production source probe failed (%s)', type(exc).__name__)
-    finally:
-        if path:
-            shutil.rmtree(Path(path).parent, ignore_errors=True)
+    async def probe(provider):
+        path = None
+        started = time.monotonic()
+        provider.trace = True
+        try:
+            from bot_source_probe import decode_sample
+            import hashlib
+            path, title, duration = await provider.resolve('Purple Wink pGb')
+            data = Path(path).read_bytes()
+            result = await decode_sample(data, seconds=15)
+            LOG.info('Music source live probe @%s: seconds=%.2f title=%s duration=%s bytes=%s pcm_bytes=%s peak=%s exit=%s hash=%s',
+                     provider.username,time.monotonic()-started,title,duration,len(data),result['pcm_bytes'],result['peak'],result['exit_code'],hashlib.sha256(data).hexdigest()[:12])
+        except Exception as exc:
+            LOG.warning('Music source live probe @%s failed (%s)',provider.username,type(exc).__name__)
+        finally:
+            provider.trace = False
+            if path:
+                shutil.rmtree(Path(path).parent,ignore_errors=True)
+    await asyncio.gather(*(probe(provider) for provider in getattr(source,'sources',[source])))

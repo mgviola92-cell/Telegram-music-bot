@@ -17,11 +17,12 @@ class CandidateSourceTests(unittest.IsolatedAsyncioTestCase):
         with patch('lybot_source.run_live_probe',new=AsyncMock()) as probe:
             await run_candidate_probes(object(),active,time.time()+60)
         self.assertEqual([c.args[0].username for c in probe.call_args_list],
-                         ['VoiceShazamBot','vkmusic_bot','mp3robot'])
+                         ['VoiceShazamBot','VKMusicalRobot','finder_muzbot','MusicToolsRobot','vkm_bot'])
         self.assertIs(probe.call_args_list[0].args[0],baseline)
         self.assertEqual(active.sources,[baseline])
 
     def test_unreviewed_usernames_still_rejected(self):
         with self.assertRaises(ValueError):LyBotSource(object(),'unapproved_bot')
-        for name in ('vkmusic_bot','mp3robot'):
+        with self.assertRaises(ValueError):LyBotSource(object(),'mp3robot')
+        for name in ('VKMusicalRobot','finder_muzbot','MusicToolsRobot','vkm_bot'):
             self.assertEqual(LyBotSource(object(),name).username,name)

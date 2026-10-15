@@ -12,7 +12,7 @@ from song_cache import get_cached_song, save_cached_song
 
 LOG = logging.getLogger('telegram_music')
 MAX_BYTES = 20 * 1024 * 1024
-APPROVED_BOTS = frozenset({"LyBot", "Song_Vkm_bot", "VoiceShazamBot", "vkmusic_bot", "mp3robot"})
+APPROVED_BOTS = frozenset({"LyBot", "Song_Vkm_bot", "VoiceShazamBot", "VKMusicalRobot", "finder_muzbot", "MusicToolsRobot", "vkm_bot"})
 
 
 class BotSourceUnavailable(RuntimeError):
@@ -261,5 +261,5 @@ async def run_candidate_probes(client, active, enabled_until):
     baseline = next((s for s in getattr(active, 'sources', []) if s.username == 'VoiceShazamBot'), None)
     if baseline is not None:
         await run_live_probe(baseline, enabled_until)
-    for name in ('vkmusic_bot', 'mp3robot'):
+    for name in ('VKMusicalRobot', 'finder_muzbot', 'MusicToolsRobot', 'vkm_bot'):
         await run_live_probe(LyBotSource(client, name), enabled_until)

@@ -32,7 +32,7 @@ from stream_probe import probe_audio_url
 from network_audio import DirectAudioStream
 from audio_options import AudioSettings, ProcessedAudioStream, EFFECTS
 from music_search import collect_choices, SearchSessions, youtube_title, related_query, choose_related, title_key
-from music_stats import record_play, stats_text
+from music_stats import record_play, stats_text, stats_popup
 from music_cleanup import housekeeping
 from feature_probe import run_feature_probe
 from bot_source_probe import run_bot_source_probe
@@ -117,6 +117,7 @@ class Player:
     queue_changed: object | None = None
     queue_refresh_task: asyncio.Task | None = None
     queue_revision: int = 0
+    control_menu: str = "main"
     audio_settings: AudioSettings = field(default_factory=AudioSettings)
     playing_settings: AudioSettings = field(default_factory=AudioSettings)
     autoplay_enabled: bool = False
@@ -944,6 +945,8 @@ async def main() -> None:
         buttons = player_controls(
             chat_id, paused=player.paused,
             loop=player.loop_current, title=song.title,
+            normalize=player.audio_settings.normalize, quality=player.audio_settings.quality,
+            effect=player.audio_settings.effect, menu=player.control_menu,
         )
         try:
             if player.panel_is_photo:
@@ -993,7 +996,9 @@ async def main() -> None:
             title += "\n\n🔇 VC Admin က Assistant ကို mute ထားတယ်။ Unmute / Allow to Speak ပေးပါ။"
         buttons = player_controls(
             chat_id, paused=player.paused, loop=player.loop_current,
-            title=song.title,
+            title=song.title, normalize=player.audio_settings.normalize,
+            quality=player.audio_settings.quality, effect=player.audio_settings.effect,
+            menu=player.control_menu,
         )
         previous = player.panel_id
         panel = None
@@ -1232,6 +1237,7 @@ async def main() -> None:
                 player.cancel_download = cancel_signal
                 song: Track = player.queue.popleft()
                 settings = player.audio_settings
+                resolve_started = time.monotonic()
                 local_file = None
                 try:
                     source = song.source
@@ -1335,8 +1341,9 @@ async def main() -> None:
                         except Exception as stale_exc:
                             log.info("Previous VC participation check unavailable (%s)", type(stale_exc).__name__)
                         fresh_voice_chats.add(chat_id)
-                    log.info("VC play requested chat %s (direct=%s)",
-                             chat_id, allowed_audio_cdn(source))
+                    log.info("VC play requested chat %s (direct=%s, source_ready=%.2fs)",
+                             chat_id, allowed_audio_cdn(source), time.monotonic() - resolve_started)
+                    connection_started = time.monotonic()
                     try:
                         # Stream construction may probe a remote URL and fail.
                         # Include it in the same fallback as calls.play().
@@ -1378,7 +1385,7 @@ async def main() -> None:
                                   audio_stream(source, settings=settings))
                         await play_with_reconnect(calls, chat_id, stream)
                         await wait_for_audio_frames(calls, chat_id)
-                    log.info("VC play success chat %s", chat_id)
+                    log.info("VC play success chat %s (connection_and_frame_check=%.2fs)", chat_id, time.monotonic() - connection_started)
                     song.output_speed = settings.speed if not song.video else 1.0
                     player.playing_settings = settings
                     if song.youtube or song.original_duration_seconds is None:
@@ -1386,6 +1393,7 @@ async def main() -> None:
                     if song.original_duration_seconds:
                         song.duration_seconds = song.original_duration_seconds / song.output_speed
                     player.current = song
+                    player.control_menu = "main"
                     player.recent_tracks.append(title_key(song.title))
                     asyncio.create_task(record_play(chat_id, song.title))
                     if player.queue_changed is not None:
@@ -1829,7 +1837,12 @@ async def main() -> None:
     @bot.on_message(filters.command(["toptracks", "stats"]) & filters.group)
     async def stats_command(_: Client, msg: Message) -> None:
         try:
-            await msg.reply_text(await stats_text(msg.chat.id), parse_mode=ParseMode.DISABLED)
+            action = msg.command[1].lower() if len(msg.command) > 1 else None
+            if action not in (None, "all", "group"):
+                await msg.reply_text("🏆 /toptracks all|group · /stats all|group")
+                return
+            global_scope = action == "all" or (action is None and msg.command[0].lower() == "toptracks")
+            await msg.reply_text(await stats_text(msg.chat.id, global_scope=global_scope), parse_mode=ParseMode.DISABLED)
         except Exception:
             await msg.reply_text("⚠️ သီချင်းမှတ်တမ်း ယာယီ မရသေးဘူး။")
 
@@ -2183,7 +2196,7 @@ async def main() -> None:
                 log.exception("Could not %s chat %s", action, msg.chat.id)
                 await msg.reply_text("⚠️ VC connection ပြန်စစ်ပါ။")
 
-    @bot.on_callback_query(filters.regex(r"^mud:(pause|resume|skip|stop|loop|queue):"))
+    @bot.on_callback_query(filters.regex(r"^mud:(pause|resume|skip|stop|loop|queue|normalize|quality|effects|top|back|topall|topgroup|qhigh|qmedium|qlow|fxnormal|fxnightcore|fxbassboost|fxslowed):"))
     async def panel_callback(_: Client, cb: CallbackQuery) -> None:
         """One panel per chat; stale buttons cannot control future tracks."""
         try:
@@ -2204,8 +2217,36 @@ async def main() -> None:
                                         [queue_track_title(song) for song in player.queue],
                                         loop=player.loop_current), show_alert=True)
             return
+        if action in ("topall", "topgroup"):
+            try:
+                text = await stats_popup(chat_id, global_scope=action == "topall")
+            except Exception:
+                text = "⚠️ သီချင်းမှတ်တမ်း ယာယီမရသေးဘူး။"
+            await cb.answer(text, show_alert=True)
+            return
+        if action in ("top", "back"):
+            player.control_menu = "top" if action == "top" else "main"
+            await cb.answer()
+            await update_player_panel(chat_id, player)
+            return
         if not await is_chat_admin(chat_id, cb.from_user.id if cb.from_user else None):
             await cb.answer("🛡 Group Admin တွေကပဲ Control နှိပ်နိုင်တယ်။", show_alert=True)
+            return
+        if action in ("normalize", "quality", "effects", "qhigh", "qmedium", "qlow",
+                      "fxnormal", "fxnightcore", "fxbassboost", "fxslowed"):
+            if action == "normalize":
+                player.audio_settings = replace(player.audio_settings, normalize=not player.audio_settings.normalize)
+                player.control_menu = "main"
+            elif action in ("quality", "effects"):
+                player.control_menu = action
+            elif action.startswith("q"):
+                player.audio_settings = replace(player.audio_settings, quality=action[1:])
+                player.control_menu = "quality"
+            else:
+                player.audio_settings = replace(player.audio_settings, effect=action[2:])
+                player.control_menu = "effects"
+            await cb.answer("နောက်သီချင်းကစ သက်ရောက်မယ်။" if action not in ("quality", "effects") else "ရွေးချယ်ပါ။")
+            await update_player_panel(chat_id, player)
             return
         # Answer promptly; music downloads or reconnection may last >30 seconds.
         # Calling cb.answer() after that makes Telegram return QUERY_ID_INVALID.

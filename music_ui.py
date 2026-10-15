@@ -54,22 +54,36 @@ def queue_display(current: str | None, titles: list[str], loop: bool = False) ->
             f"\n\n🔁 Repeat current: {'ON' if loop else 'OFF'}")
 
 
-def player_controls(chat_id: int, *, paused: bool = False, loop: bool = False, title: str = "") -> InlineKeyboardMarkup:
-    """Small, group-bound callback data; mutating actions are admin-checked."""
-    return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("▶️ Resume" if paused else "⏸ Pause",
-                                 callback_data=f"mud:{'resume' if paused else 'pause'}:{chat_id}"),
-            InlineKeyboardButton("⏭ Skip", callback_data=f"mud:skip:{chat_id}"),
-            InlineKeyboardButton("⏹ Stop", callback_data=f"mud:stop:{chat_id}"),
-        ],
-        [
-            InlineKeyboardButton("🔁 Loop ON" if loop else "🔁 Loop OFF",
-                                 callback_data=f"mud:loop:{chat_id}"),
-            InlineKeyboardButton("📜 Queue", callback_data=f"mud:queue:{chat_id}"),
-        ],
-        [InlineKeyboardButton("🎤 Lyrics ↗", url=lyrics_search_url(title))],
-    ])
+def player_controls(chat_id: int, *, paused: bool = False, loop: bool = False,
+                    title: str = "", normalize: bool = False, quality: str = "high",
+                    effect: str = "normal", menu: str = "main") -> InlineKeyboardMarkup:
+    """All controls stay on the current player card; mutations are admin-only."""
+    def button(label, action):
+        return InlineKeyboardButton(label, callback_data=f"mud:{action}:{chat_id}")
+    rows = [
+        [button("▶️ Resume" if paused else "⏸ Pause", "resume" if paused else "pause"),
+         button("⏭ Skip", "skip"), button("⏹ Stop", "stop")],
+        [button("🔁 Loop ON" if loop else "🔁 Loop OFF", "loop"), button("📜 Queue", "queue")],
+    ]
+    if menu == "quality":
+        rows.append([button(("✓ " if quality == value else "") + label, "q"+value)
+                     for label,value in (("High","high"),("Medium","medium"),("Low","low"))])
+    elif menu == "effects":
+        for pairs in ((("Normal","normal"),("Nightcore","nightcore")),
+                      (("Bass","bassboost"),("Slowed","slowed"))):
+            rows.append([button(("✓ " if effect == value else "") + label, "fx"+value) for label,value in pairs])
+    elif menu == "top":
+        rows.append([button("🌐 All Groups", "topall"), button("👥 This Group", "topgroup")])
+    else:
+        rows.extend([
+            [button("🔊 Normalize " + ("ON" if normalize else "OFF"), "normalize"),
+             button("🎚 Quality · " + quality.title(), "quality")],
+            [button("🎛 Effects" + (" · " + effect.title() if effect != "normal" else ""), "effects"),
+             button("🏆 Top Tracks", "top")]])
+    if menu != "main":
+        rows.append([button("‹ Back", "back")])
+    rows.append([InlineKeyboardButton("🎤 Lyrics ↗", url=lyrics_search_url(title))])
+    return InlineKeyboardMarkup(rows)
 
 
 def _clip_popup(text, units):
@@ -102,3 +116,12 @@ def queue_popup(current, titles, loop=False):
         rows.append('နောက်ထပ်သီချင်း မရှိသေးဘူး')
     rows.append('🔁 ' + ('ON' if loop else 'OFF'))
     return _clip_popup('\n'.join(rows), 198)
+
+
+def top_tracks_popup(rows, *, global_scope=False):
+    lines = ['🏆 ' + ('All Groups' if global_scope else 'This Group')]
+    for index, (title, plays) in enumerate(rows[:3], 1):
+        lines.append(f'{index}. {_clip_popup(clean_track_title(title), 42)} · {plays}')
+    if not rows:
+        lines.append('သီချင်းမှတ်တမ်း မရှိသေးဘူး။')
+    return _clip_popup('\n'.join(lines), 198)

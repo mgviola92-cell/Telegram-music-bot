@@ -6,7 +6,7 @@ import sqlite3
 import threading
 import time
 from pathlib import Path
-from music_ui import clean_track_title
+from music_ui import clean_track_title, top_tracks_popup
 from music_search import title_key
 
 
@@ -33,8 +33,12 @@ class MusicStats:
 
     def snapshot(self, chat):
         with self.lock:
-            rows = self.db.execute('SELECT title,plays FROM music_plays WHERE chat=? ORDER BY plays DESC,last_play DESC LIMIT 10', (chat,)).fetchall()
-            total = self.db.execute('SELECT COALESCE(SUM(plays),0),COUNT(*) FROM music_plays WHERE chat=?', (chat,)).fetchone()
+            if chat is None:
+                rows = self.db.execute('SELECT MAX(title),SUM(plays) AS count FROM music_plays GROUP BY song ORDER BY count DESC,MAX(last_play) DESC LIMIT 10').fetchall()
+                total = self.db.execute('SELECT COALESCE(SUM(plays),0),COUNT(DISTINCT song) FROM music_plays').fetchone()
+            else:
+                rows = self.db.execute('SELECT title,plays FROM music_plays WHERE chat=? ORDER BY plays DESC,last_play DESC LIMIT 10', (chat,)).fetchall()
+                total = self.db.execute('SELECT COALESCE(SUM(plays),0),COUNT(*) FROM music_plays WHERE chat=?', (chat,)).fetchone()
         return rows, total
 
     def close(self):
@@ -59,10 +63,16 @@ async def record_play(chat, title):
     except Exception as exc:
         logging.getLogger('telegram_music').info('Music statistics unavailable (%s)', type(exc).__name__)
 
-async def stats_text(chat):
-    rows, (plays, unique) = await asyncio.to_thread(store().snapshot, chat)
-    text = f'📊 Group Music\n▶ ဖွင့်ခဲ့မှု {plays} ကြိမ် · သီချင်း {unique} ပုဒ်\n\n'
+async def stats_text(chat, *, global_scope=False):
+    rows, (plays, unique) = await asyncio.to_thread(store().snapshot, None if global_scope else chat)
+    scope = "All Groups" if global_scope else "This Group"
+    text = f'📊 {scope} Music\n▶ ဖွင့်ခဲ့မှု {plays} ကြိမ် · သီချင်း {unique} ပုဒ်\n\n'
     text += '\n'.join(f'{i}. {title[:65]} — {count} ကြိမ်' for i,(title,count) in enumerate(rows,1)) or 'သီချင်းမှတ်တမ်း မရှိသေးဘူး။'
     if not os.getenv('MUSIC_STATS_PATH'):
         text += '\n\nမှတ်တမ်းကို server ပြန်တင်ချိန်မှာ reset ဖြစ်နိုင်တယ်။'
     return text
+
+
+async def stats_popup(chat, *, global_scope=False):
+    rows, _ = await asyncio.to_thread(store().snapshot, None if global_scope else chat)
+    return top_tracks_popup(rows, global_scope=global_scope)

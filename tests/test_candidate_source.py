@@ -17,7 +17,7 @@ class CandidateSourceTests(unittest.IsolatedAsyncioTestCase):
         with patch('lybot_source.run_live_probe',new=AsyncMock()) as probe:
             await run_candidate_probes(object(),active,time.time()+60)
         self.assertEqual([c.args[0].username for c in probe.call_args_list],
-                         ['VoiceShazamBot','VKMusicalRobot','finder_muzbot','MusicToolsRobot','vkm_bot'])
+                         ['VoiceShazamBot','VKMusicalRobot'])
         self.assertIs(probe.call_args_list[0].args[0],baseline)
         self.assertEqual(active.sources,[baseline])
 
@@ -26,3 +26,12 @@ class CandidateSourceTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ValueError):LyBotSource(object(),'mp3robot')
         for name in ('VKMusicalRobot','finder_muzbot','MusicToolsRobot','vkm_bot'):
             self.assertEqual(LyBotSource(object(),name).username,name)
+
+    def test_vk_numbered_result_matches_track_without_duration_badge(self):
+        from lybot_source import matches_selection, song_button
+        label='1. pGb - Purple (2:45)'
+        media=N(title='Purple',performer='pGb')
+        self.assertTrue(matches_selection(media,label))
+        self.assertFalse(matches_selection(N(title='Other',performer='pGb'),label))
+        message=N(reply_markup=N(inline_keyboard=[[N(text=label,callback_data='track-1')]]))
+        self.assertEqual(song_button(message,'Purple Wink pGb'),label)

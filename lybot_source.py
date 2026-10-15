@@ -44,6 +44,8 @@ def matches_selection(media, label):
                        if c.isalnum() or unicodedata.category(c).startswith("M"))
     import re
     label = re.sub(r"^\s*[•·]?\s*\d+:\d+\s*[•·]\s*", "", label)
+    label = re.sub(r"^\s*\d+\.\s*", "", label)
+    label = re.sub(r"\s*\(\d{1,2}:\d{2}\)\s*$", "", label)
     parts = re.split(r"\s+[—–-]\s+", label)
     title = normalized(getattr(media, "title", "") or "")
     return bool(title and any(normalized(part) == title for part in parts))
@@ -124,6 +126,8 @@ class LyBotSource:
                             from stream_probe import safe_error
                             seen.add(message.id)
                             buttons = [[str(b.text)[:80] for b in row] for row in getattr(getattr(message, 'reply_markup', None), 'inline_keyboard', []) or []]
+                            if media:
+                                LOG.info('Music bot probe @%s audio metadata: title=%s artist=%s duration=%s', self.username, str(getattr(media, 'title', '') or '')[:100], str(getattr(media, 'performer', '') or '')[:80], getattr(media, 'duration', None))
                             LOG.info('Music bot probe @%s response: audio=%s text=%s buttons=%s', self.username, bool(media), safe_error(str(getattr(message, 'text', '') or getattr(message, 'caption', '') or ''))[:400], buttons)
                         matched = (selected_id is not None and message.id > selected_id and matches_selection(media, selected_label)) if media else False
                         if media and (matched or (selected_id is None and matches_query(media, query))):
@@ -261,5 +265,5 @@ async def run_candidate_probes(client, active, enabled_until):
     baseline = next((s for s in getattr(active, 'sources', []) if s.username == 'VoiceShazamBot'), None)
     if baseline is not None:
         await run_live_probe(baseline, enabled_until)
-    for name in ('VKMusicalRobot', 'finder_muzbot', 'MusicToolsRobot', 'vkm_bot'):
+    for name in ('VKMusicalRobot',):
         await run_live_probe(LyBotSource(client, name), enabled_until)

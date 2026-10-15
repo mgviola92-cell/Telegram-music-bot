@@ -31,7 +31,7 @@ from prefetch import PreparedAudio, AsyncPreparedAudio
 from stream_probe import probe_audio_url
 from network_audio import DirectAudioStream
 from audio_options import AudioSettings, ProcessedAudioStream, EFFECTS
-from music_search import collect_choices, SearchSessions, youtube_title, related_query, choose_related, title_key
+from music_search import collect_choices, SearchSessions, youtube_title, related_query, choose_related, title_key, restricted_error, block_source, source_blocked
 from music_stats import record_play, stats_text, stats_popup
 from music_cleanup import housekeeping
 from feature_probe import run_feature_probe
@@ -586,6 +586,8 @@ def resolve_stream_only(query: str, cancel_signal: threading.Event | None = None
     selected_url = allowed_url(query, {"soundcloud.com", "www.soundcloud.com", "m.soundcloud.com"})
     targets = [query] if selected_url else soundcloud_results(query, max_tracks=3, cancel_signal=cancel_signal)
     for target in targets:
+        if source_blocked(target):
+            continue
         if cancel_signal is not None and cancel_signal.is_set():
             raise InterruptedError("Stream lookup cancelled")
         try:
@@ -597,6 +599,8 @@ def resolve_stream_only(query: str, cancel_signal: threading.Event | None = None
         except InterruptedError:
             raise
         except Exception as exc:
+            if restricted_error(exc):
+                block_source(target)
             log.info("Stream-only candidate unavailable (%s)", type(exc).__name__)
     if cancel_signal is not None and cancel_signal.is_set():
         raise InterruptedError("Stream lookup cancelled")
@@ -648,6 +652,9 @@ def download_song(
     provider_started = time.monotonic()
     for provider, target in source_candidates(query, video, cancel_signal=cancel_signal):
         abort_if_stopped()
+        if provider == "SoundCloud" and source_blocked(target):
+            failures.append("SoundCloud restricted")
+            continue
         log.info("Music provider %s selected after %.2fs",
                  provider, time.monotonic() - resolution_started)
         provider_started = time.monotonic()
@@ -708,6 +715,11 @@ def download_song(
             except InterruptedError:
                 raise
             except Exception as exc:
+                if restricted_error(exc):
+                    block_source(target)
+                    failures.append("SoundCloud restricted")
+                    log.info("SoundCloud track is restricted; skipping file download")
+                    continue
                 log.info("Direct SoundCloud stream unavailable (%s); normal download fallback",
                          type(exc).__name__)
         directory = Path(tempfile.mkdtemp(prefix="mudyar_media_"))
@@ -753,9 +765,9 @@ def download_song(
             if media_path.stat().st_size > MAX_YOUTUBE_BYTES:
                 raise ValueError("Track exceeds the 40 MB limit")
             title = str(result.get("title") or query)[:85]
-            if not video and not is_youtube_url(query) and not suitable_recording(
-                title, query, str(result.get("uploader") or "")
-            ):
+            if (not video and not is_youtube_url(query)
+                    and not allowed_url(query, {"soundcloud.com", "www.soundcloud.com", "m.soundcloud.com"})
+                    and not suitable_recording(title, query, str(result.get("uploader") or ""))):
                 raise ValueError("Non-matching or altered recording")
             log.info("Resolved music through %s in %.2fs (total=%.2fs; track title may differ)",
                      provider, time.monotonic() - provider_started,
@@ -773,6 +785,8 @@ def download_song(
             shutil.rmtree(directory, ignore_errors=True)
             abort_if_stopped()
             failures.append(provider)
+            if provider == "SoundCloud" and restricted_error(exc):
+                block_source(target)
             if provider == "YouTube" and youtube_guard.record_error(exc):
                 remaining = youtube_guard.seconds_remaining()
                 log.warning(
@@ -838,14 +852,34 @@ async def main() -> None:
     metadata_slots = asyncio.Semaphore(2)
 
     async def resolve_for_queue(song, prefer_stream):
+        strict = stream_only_enabled()
         if song.selected is not None:
-            if stream_only_enabled():
+            if strict:
                 raise StreamOnlyPlaybackError("Selected Telegram audio requires a file transfer")
-            return await song.selected.source.download(song.selected)
+            try:
+                return await song.selected.source.download(song.selected)
+            except (asyncio.CancelledError, InterruptedError):
+                raise
+            except Exception as exc:
+                log.info("Selected Telegram audio unavailable (%s); matching other sources", type(exc).__name__)
+                # Match the selected title/artist, never fall back to a broad original query.
+                requested = Track(queue_track_title(song), queue_track_title(song), youtube=True)
+                primary = PreparedAudio(requested, download_song, clean_temp, prefer_stream=prefer_stream, publish_metadata=False)
+                providers = [s for s in lybot.sources if s is not song.selected.source] if lybot else []
+                return await ParallelSources(providers, clean_temp).race(primary, requested.source)
         primary = PreparedAudio(song, download_song, clean_temp, prefer_stream=prefer_stream, publish_metadata=False)
-        if lybot is not None and not song.video and not song.source.startswith(("http://", "https://")) and not stream_only_enabled():
+        if lybot is not None and not song.video and not song.source.startswith(("http://", "https://")) and not strict:
             return await lybot.race(primary, song.source)
-        return await primary.consume()
+        try:
+            return await primary.consume()
+        except (asyncio.CancelledError, InterruptedError):
+            raise
+        except Exception as exc:
+            if (lybot is None or song.video or strict or not song.metadata_resolved
+                    or not allowed_url(song.source, {"soundcloud.com", "www.soundcloud.com", "m.soundcloud.com"})):
+                raise
+            log.info("Selected SoundCloud audio unavailable (%s); matching selected title on bot sources", type(exc).__name__)
+            return await lybot.resolve(queue_track_title(song))
 
     async def describe_primary(query):
         known = lookup_metadata(query)
@@ -1435,9 +1469,8 @@ async def main() -> None:
                     elif isinstance(exc, (TimeoutError, asyncio.TimeoutError)) or (
                         song.telegram_file and "download" in str(exc).lower()
                     ):
-                        error_message = ("⚠️ Telegram Media Download မအောင်မြင်ဘူး။ "
-                                         "HTTPS Bot API နဲ့ MTProto နှစ်ခုစလုံးမရနိုင်တာပါ။ "
-                                         "နောက်မှ ပြန်စမ်းပေးပါ။")
+                        error_message = ("⚠️ Telegram ဖိုင် ယူမရသေးဘူး။ ခဏနေ ပြန်စမ်းပါ။" if song.telegram_file else
+                                         "⚠️ သီချင်းရင်းမြစ်က အချိန်မီ audio မပေးနိုင်ဘူး။ ခဏနေ ပြန်စမ်းပါ။")
                     elif isinstance(exc, AudioTransportUnavailable):
                         error_message = "🔇 VC အသံပို့တဲ့ connection မရသေးဘူး။ Assistant ကို Allow to Speak ပေးထားလား စစ်ပါ။"
                     elif isinstance(exc, AudioFramesStalled):
@@ -1446,12 +1479,8 @@ async def main() -> None:
                         error_message = "🔇 သီချင်းရင်းမြစ်မှာ ဖွင့်နိုင်တဲ့ audio မတွေ့ဘူး။ အခြားသီချင်း သို့မဟုတ် audio file နဲ့ စမ်းပါ။"
                     elif song.youtube:
                         error_message = (
-                            "⚠️ YouTube ရဲ့ Login/Verification လိုအပ်နေတဲ့ Audio ကို "
-                            "Telegram VC ထဲ မဖွင့်နိုင်သေးဘူး။ "
-                            "SoundCloud ကလည်း ဒီသီချင်းအတွက် အသုံးပြုနိုင်တဲ့ "
-                            "Recording မပေးနိုင်ဘူး။ YouTube ကို တရားဝင် App မှာ "
-                            "ဖွင့်နိုင်တယ်။ ခွင့်ပြုထားတဲ့ Audio File ရှိရင် "
-                            "Reply ပြီး /play စမ်းနိုင်တယ်။"
+                            "⚠️ ရွေးထားတဲ့သီချင်းအတွက် ဖွင့်နိုင်တဲ့ audio ကို ရင်းမြစ်တွေမှာ မရသေးဘူး။ "
+                            "အခြား version ရွေးပါ၊ သို့မဟုတ် သီချင်းနာမည်နဲ့ အဆိုတော် ထည့်ပြီး ပြန်ရှာပါ။"
                         )
                     else:
                         error_message = ("⚠️ VC သို့မဟုတ် Media Error တက်နေတယ်။ "

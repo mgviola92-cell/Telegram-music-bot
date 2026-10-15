@@ -4,10 +4,33 @@ import json
 import re
 import time
 import unicodedata
+import threading
 from dataclasses import dataclass
 from urllib.parse import urlsplit, parse_qs
 from aiohttp import ClientSession, ClientTimeout
 from music_ui import clean_track_title
+
+
+_BLOCKED = {}
+_BLOCK_LOCK = threading.RLock()
+
+def restricted_error(error):
+    text = str(error).casefold()
+    return any(word in text for word in ('drm protected', 'drm-protected', 'subscriber-only', 'subscriber_only'))
+
+def block_source(url):
+    with _BLOCK_LOCK:
+        if len(_BLOCKED) >= 128:
+            _BLOCKED.pop(next(iter(_BLOCKED)))
+        _BLOCKED[url] = time.monotonic() + 1800
+
+def source_blocked(url):
+    with _BLOCK_LOCK:
+        expiry = _BLOCKED.get(url, 0)
+        if expiry > time.monotonic():
+            return True
+        _BLOCKED.pop(url, None)
+        return False
 
 
 @dataclass
@@ -81,9 +104,15 @@ def soundcloud_choices(query):
         data = searcher.extract_info('scsearch10:' + query, download=False)
     choices = []
     for row in (data or {}).get('entries', []) or []:
-        if not row or row.get('is_drm'):
+        if (not row or row.get('is_drm') or row.get('has_drm')
+                or row.get('availability') in ('private','subscriber_only','needs_auth','premium_only')
+                or row.get('access') in ('blocked','preview')):
             continue
         link = row.get('webpage_url') or row.get('url')
+        if not isinstance(link, str):
+            continue
+        if source_blocked(link):
+            continue
         host = (urlsplit(link).hostname or '').lower() if isinstance(link, str) else ''
         try:
             duration = float(row['duration']) if row.get('duration') is not None else None

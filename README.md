@@ -256,3 +256,6 @@ Validation uses real FFmpeg PCM decoding for every quality/effect/normalization 
 
 
 The current song card includes Normalize, Quality, Effects and Top Tracks buttons. Submenus replace only the same card's keyboard and remain selected through progress updates; Back restores the normal controls. Audio changes require group admin access and apply next track. Top Tracks offers All Groups / This Group popups (up to three entries, Telegram's 200-character alert limit), without posting another group message. Expired player cards cannot mutate settings.
+
+
+Selected-result fallback: `/search` first tries the selected recording. If that source is unavailable, it searches configured bot sources using the selected title/artist, not the original broad query. A failed selected bot transfer tries the remaining providers and normal source resolution for that same title. Strict stream-only mode still forbids Telegram file fallback. Confirmed DRM/subscriber restrictions are skipped for 30 minutes and filtered from subsequent search results; metadata-only listings cannot prove every recording is playable. Source failures use generic audio/source messages, never the legacy named-track flag as evidence of YouTube verification.

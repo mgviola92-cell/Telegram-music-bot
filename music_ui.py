@@ -41,7 +41,7 @@ def clean_track_title(title):
 
 def queue_track_title(track):
     if not getattr(track, 'metadata_resolved', False) and getattr(track, 'youtube', False):
-        return '🔎 သီချင်းရှာနေဆဲ…'
+        return '⚠️ Source ရှာမရသေး' if getattr(track, 'metadata_failed', False) else '🔎 သီချင်းရှာနေဆဲ…'
     return clean_track_title(track.title)
 
 
@@ -70,3 +70,35 @@ def player_controls(chat_id: int, *, paused: bool = False, loop: bool = False, t
         ],
         [InlineKeyboardButton("🎤 Lyrics ↗", url=lyrics_search_url(title))],
     ])
+
+
+def _clip_popup(text, units):
+    text = str(text)
+    if len(text.encode('utf-16-le')) // 2 <= units:
+        return text
+    result, used = [], 0
+    for char in text:
+        size = 2 if ord(char) > 0xFFFF else 1
+        if used + size > units - 1:
+            break
+        result.append(char)
+        used += size
+    return ''.join(result).rstrip() + '…'
+
+
+def queue_popup(current, titles, loop=False):
+    """Fit whole compact queue rows within Telegram's callback text limit."""
+    rows = [f'🎧 Queue · {len(titles)} ပုဒ်',
+            '▶ ' + _clip_popup(clean_track_title(current) if current else 'မရှိသေးဘူး', 42)]
+    if titles:
+        rows.append('')
+        limit = 3
+        width = 32 if len(titles) >= 3 else 46
+        rows.extend(f'{i}. {_clip_popup(clean_track_title(title), width)}'
+                    for i,title in enumerate(titles[:limit],1))
+        if len(titles) > limit:
+            rows.append(f'+{len(titles)-limit} ပုဒ်')
+    else:
+        rows.append('နောက်ထပ်သီချင်း မရှိသေးဘူး')
+    rows.append('🔁 ' + ('ON' if loop else 'OFF'))
+    return _clip_popup('\n'.join(rows), 198)

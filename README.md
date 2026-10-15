@@ -232,7 +232,9 @@ the assistant to subscribe is skipped immediately; it does not delay other sourc
 The immediate next song is prefetched with the same source race. Further queue
 entries resolve metadata only, with two background lookups at a time. Queue
 messages show resolved title/artist, or a searching status while unresolved,
-never the original query as a confirmed song. Queue buttons open a full chat
-message instead of a 195-character popup; metadata updates edit it in place.
+never the original query as a confirmed song. Queue buttons show a compact callback popup (no extra group message). Existing
+`/play` queue acknowledgements are edited to the resolved title/artist as metadata
+arrives; they do not remain on the initial searching text. The explicit `/queue`
+command still replies with the full queue on request.
 The opt-in `MUSIC_BOT_PROBE_UNTIL` diagnostic is normally `0`; when enabled for at
 most 15 minutes it tests all configured bot providers without joining a VC.

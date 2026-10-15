@@ -21,7 +21,7 @@ from aiohttp import ClientSession, ClientTimeout, web
 from pyrogram import Client, filters
 from pyrogram.enums import ChatMemberStatus
 from pyrogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
-from music_ui import player_controls, queue_display, queue_remove, queue_shuffle, queue_track_title
+from music_ui import player_controls, queue_display, queue_remove, queue_shuffle, queue_track_title, queue_popup
 from audius_source import fetch_audius_audio
 from song_cache import get_cached_song, save_cached_song
 from idle_media import configured_radio_url, ensure_idle_audio
@@ -35,6 +35,7 @@ from lybot_source import LyBotSource, BotSourceUnavailable, resolve_with_fallbac
 from voice_transport import clear_stale_voice, ensure_native_sender, AudioTransportUnavailable
 from source_race import ParallelSources
 from track_metadata import remember_metadata, lookup_metadata
+from queue_receipts import acknowledge_queued, schedule_receipts
 from direct_stream import (resolve_soundcloud_https,
                            cached_search, remember_search, forget_search)
 from player_visuals import (player_caption, artwork_for, artwork_is_safe, stream_headers_for, allowed_audio_cdn, save_artwork)
@@ -64,6 +65,9 @@ class Track:
     youtube: bool = False
     duration_seconds: float | None = None
     metadata_resolved: bool = False
+    metadata_failed: bool = False
+    queue_receipt: object | None = None
+    queue_receipt_text: str | None = None
 
 
 @dataclass
@@ -98,7 +102,6 @@ class Player:
     stream_enabled: bool = True
     resolver: object | None = None
     metadata_tasks: dict = field(default_factory=dict)
-    queue_notice_id: int | None = None
     queue_changed: object | None = None
     queue_refresh_task: asyncio.Task | None = None
     queue_revision: int = 0
@@ -787,7 +790,7 @@ async def main() -> None:
     metadata_slots = asyncio.Semaphore(2)
 
     async def resolve_for_queue(song, prefer_stream):
-        primary = PreparedAudio(song, download_song, clean_temp, prefer_stream=prefer_stream)
+        primary = PreparedAudio(song, download_song, clean_temp, prefer_stream=prefer_stream, publish_metadata=False)
         if lybot is not None and not song.video and not is_youtube_url(song.source) and not stream_only_enabled():
             return await lybot.race(primary, song.source)
         return await primary.consume()
@@ -810,6 +813,11 @@ async def main() -> None:
                 if result and any(item is track for item in player.queue) and not track.metadata_resolved:
                     track.title, track.duration_seconds = result
                     track.metadata_resolved = True
+                    track.metadata_failed = False
+                    if player.queue_changed is not None:
+                        player.queue_changed()
+                elif not result and any(item is track for item in player.queue):
+                    track.metadata_failed = True
                     if player.queue_changed is not None:
                         player.queue_changed()
             finally:
@@ -1484,7 +1492,7 @@ async def main() -> None:
 
         player = players[msg.chat.id]
         player.resolver = resolve_for_queue
-        player.queue_changed = lambda: schedule_queue_refresh(msg.chat.id)
+        player.queue_changed = lambda: schedule_receipts(player)
         log.info("Play mode chat %s: direct=%s", msg.chat.id, player.stream_enabled)
         try:
             progress = await msg.reply_text("⏳ Assistant အလိုအလျောက်ဝင်ပြီး VC ချိတ်နေတယ်...")
@@ -1511,7 +1519,7 @@ async def main() -> None:
             player.queue.append(track)
             prepare_next_song(player)
             describe_queued(player, track)
-            await progress.edit_text("✅ Queue ထဲထည့်ပြီးပြီ — " + queue_track_title(track))
+            await acknowledge_queued(player, track, progress)
             return
         async with player.lock:
             # An external VC disconnect can leave player.current set even
@@ -1563,7 +1571,7 @@ async def main() -> None:
                         pass
                     return
             else:
-                await progress.edit_text("✅ Queue ထဲထည့်ပြီးပြီ — " + queue_track_title(track))
+                await acknowledge_queued(player, track, progress)
 
     def queue_text(player):
         return queue_display(
@@ -1571,40 +1579,10 @@ async def main() -> None:
             "📻 Radio (idle)" if player.idle_mode == "radio" else None,
             [queue_track_title(song) for song in player.queue], loop=player.loop_current)
 
-    def schedule_queue_refresh(chat_id):
-        player = players[chat_id]
-        player.queue_revision += 1
-        if player.queue_notice_id is None or (player.queue_refresh_task is not None and not player.queue_refresh_task.done()):
-            return
-        async def refresh():
-            from pyrogram.enums import ParseMode
-            while True:
-                await asyncio.sleep(0.5)
-                revision = player.queue_revision
-                try:
-                    await bot.edit_message_text(chat_id, player.queue_notice_id,
-                                                queue_text(player), parse_mode=ParseMode.DISABLED)
-                except Exception:
-                    return
-                if revision == player.queue_revision:
-                    return
-        player.queue_refresh_task = asyncio.create_task(refresh())
-
-    async def send_queue(chat_id):
-        from pyrogram.enums import ParseMode
-        player = players[chat_id]
-        previous = player.queue_notice_id
-        panel = await bot.send_message(chat_id, queue_text(player), parse_mode=ParseMode.DISABLED)
-        player.queue_notice_id = panel.id
-        if previous is not None:
-            try:
-                await bot.delete_messages(chat_id, previous)
-            except Exception:
-                pass
-
     @bot.on_message(filters.command(["queue", "now", "nowplaying"]) & filters.group)
     async def queue_command(_: Client, msg: Message) -> None:
-        await send_queue(msg.chat.id)
+        from pyrogram.enums import ParseMode
+        await msg.reply_text(queue_text(players[msg.chat.id]), parse_mode=ParseMode.DISABLED)
 
     @bot.on_message(filters.command("radio") & filters.group)
     async def radio_command(_: Client, msg: Message) -> None:
@@ -1864,8 +1842,9 @@ async def main() -> None:
             await cb.answer("ဒီ Player Card သက်တမ်းကုန်ပြီ။ /now သုံးပါ။", show_alert=True)
             return
         if action == "queue":
-            await cb.answer()
-            await send_queue(chat_id)
+            await cb.answer(queue_popup(queue_track_title(player.current),
+                                        [queue_track_title(song) for song in player.queue],
+                                        loop=player.loop_current), show_alert=True)
             return
         if not await is_chat_admin(chat_id, cb.from_user.id if cb.from_user else None):
             await cb.answer("🛡 Group Admin တွေကပဲ Control နှိပ်နိုင်တယ်။", show_alert=True)

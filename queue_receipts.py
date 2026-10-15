@@ -1,0 +1,54 @@
+"""Update existing /play queue acknowledgements when real metadata arrives."""
+import asyncio
+from music_ui import queue_track_title
+from pyrogram.enums import ParseMode
+
+
+def receipt_text(track, *, playing=False):
+    if getattr(track, 'metadata_failed', False) and not getattr(track, 'metadata_resolved', False):
+        return '⚠️ Queue ထဲထည့်ထားတယ်။ သီချင်း Source ရှာမရသေးဘူး။'
+    title = queue_track_title(track)
+    return ('▶️ ဖွင့်နေပြီ — ' if playing else '✅ Queue ထဲထည့်ပြီးပြီ — ') + title
+
+
+async def sync_receipts(player):
+    entries = list(player.queue)
+    if player.current is not None:
+        entries.append(player.current)
+    for track in entries:
+        message = getattr(track, 'queue_receipt', None)
+        if message is None:
+            continue
+        text = receipt_text(track, playing=track is player.current)
+        if text == getattr(track, 'queue_receipt_text', None):
+            continue
+        try:
+            await message.edit_text(text, parse_mode=ParseMode.DISABLED)
+            track.queue_receipt_text = text
+        except Exception:
+            pass
+
+
+def schedule_receipts(player):
+    player.queue_revision += 1
+    entries = list(player.queue) + ([player.current] if player.current else [])
+    if not any(getattr(t, 'queue_receipt', None) is not None for t in entries):
+        return
+    if player.queue_refresh_task is not None and not player.queue_refresh_task.done():
+        return
+    async def refresh():
+        while True:
+            await asyncio.sleep(.2)
+            revision = player.queue_revision
+            await sync_receipts(player)
+            if revision == player.queue_revision:
+                return
+    player.queue_refresh_task = asyncio.create_task(refresh())
+
+
+async def acknowledge_queued(player, track, message):
+    track.queue_receipt = message
+    text = receipt_text(track)
+    await message.edit_text(text, parse_mode=ParseMode.DISABLED)
+    track.queue_receipt_text = text
+    schedule_receipts(player)

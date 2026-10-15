@@ -14,8 +14,9 @@ LOG = logging.getLogger("telegram_music")
 
 class PreparedAudio:
     def __init__(self, track: Any, downloader: Callable, cleanup: Callable, *,
-                 prefer_stream: bool = False) -> None:
+                 prefer_stream: bool = False, publish_metadata: bool = True) -> None:
         self.track = track
+        self.publish_metadata = publish_metadata
         self.prefer_stream = prefer_stream
         self.cancel_signal = threading.Event()
         self.cleanup = cleanup
@@ -31,12 +32,20 @@ class PreparedAudio:
     def _on_done(self, task: asyncio.Task) -> None:
         try:
             result = task.result()
-        except (asyncio.CancelledError, Exception):
+        except asyncio.CancelledError:
             return
-        if not self.discarded and result:
+        except Exception:
+            if self.publish_metadata and not self.discarded:
+                self.track.metadata_failed = True
+                notify = getattr(self, "on_metadata", None)
+                if notify is not None:
+                    notify()
+            return
+        if self.publish_metadata and not self.discarded and result:
             self.track.title = result[1]
             self.track.duration_seconds = result[2]
             self.track.metadata_resolved = True
+            self.track.metadata_failed = False
             notify = getattr(self, "on_metadata", None)
             if notify is not None:
                 notify()
@@ -72,6 +81,7 @@ class AsyncPreparedAudio(PreparedAudio):
     """Same ownership/cancellation contract for the parallel async resolver."""
     def __init__(self, track, resolver, cleanup, *, prefer_stream=False):
         self.track, self.prefer_stream = track, prefer_stream
+        self.publish_metadata = True
         self.cancel_signal = threading.Event()
         self.cleanup = cleanup
         self.discarded = self.consumed = self.cleaned = False

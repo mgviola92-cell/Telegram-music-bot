@@ -71,7 +71,8 @@ class SearchTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(sessions.select('token',0,-100,7),choice)
         self.assertIsNone(sessions.select('token',0,-100,7))
         with patch('music_search.time.monotonic',return_value=0):sessions.put('expired',-100,7,[choice])
-        self.assertIsNone(sessions.select('expired',0,-100,7))
+        with patch('music_search.time.monotonic',return_value=181):
+            self.assertIsNone(sessions.select('expired',0,-100,7))
 
     def test_related_tracks_avoid_recent_titles(self):
         choices=[SearchChoice('Purple – Wink','purple'),SearchChoice('Other – Wink','other')]

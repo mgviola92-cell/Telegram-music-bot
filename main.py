@@ -28,6 +28,7 @@ from youtube_health import youtube_guard
 from archive_source import get_archive_audio
 from prefetch import PreparedAudio
 from stream_probe import probe_audio_url
+from network_audio import DirectAudioStream
 from direct_stream import (resolve_soundcloud_https,
                            cached_search, remember_search, forget_search)
 from player_visuals import (player_caption, artwork_for, artwork_is_safe, stream_headers_for, allowed_audio_cdn, save_artwork)
@@ -87,7 +88,7 @@ class Player:
     panel_is_photo: bool = False
     progress_task: asyncio.Task | None = None
     announce_task: asyncio.Task | None = None
-    stream_enabled: bool = False
+    stream_enabled: bool = True
 
 
 def voice_slot_count(players: dict[int, Player]) -> int:
@@ -120,6 +121,13 @@ def ended_early(elapsed: float, duration_seconds: float | None) -> bool:
     if duration_seconds and duration_seconds > 0:
         return elapsed + 12 < duration_seconds
     return elapsed < 25
+
+
+def audio_stream(source: str, quality=AudioQuality.HIGH):
+    if allowed_audio_cdn(source):
+        return DirectAudioStream(source)
+    return MediaStream(source, quality, video_flags=MediaStream.Flags.IGNORE,
+                       audio_flags=MediaStream.Flags.REQUIRED)
 
 
 async def play_with_reconnect(calls: PyTgCalls, chat_id: int, stream: MediaStream) -> None:
@@ -1132,11 +1140,7 @@ async def main() -> None:
                                 source, AudioQuality.MEDIUM, VideoQuality.SD_360p,
                             )
                         else:
-                            options = {"video_flags": MediaStream.Flags.IGNORE,
-                                       "audio_flags": MediaStream.Flags.REQUIRED}
-                            if allowed_audio_cdn(source):
-                                options["headers"] = stream_headers_for(source)
-                            stream = MediaStream(source, AudioQuality.HIGH, **options)
+                            stream = audio_stream(source)
                         await play_with_reconnect(calls, chat_id, stream)
                         if not song.video:
                             await wait_for_audio_frames(calls, chat_id)
@@ -1161,11 +1165,7 @@ async def main() -> None:
                         song.duration_seconds = duration_seconds
                         song.title = title
                         source = local_file
-                        stream = MediaStream(
-                            source, AudioQuality.HIGH,
-                            video_flags=MediaStream.Flags.IGNORE,
-                            audio_flags=MediaStream.Flags.REQUIRED,
-                        )
+                        stream = audio_stream(source)
                         await play_with_reconnect(calls, chat_id, stream)
                         await wait_for_audio_frames(calls, chat_id)
                     log.info("VC play success chat %s", chat_id)
@@ -1856,7 +1856,8 @@ async def main() -> None:
                     if player.recovery_attempts < 1:
                         player.recovery_attempts += 1
                         source = player.temp_file or song.source
-                        if not source or (player.temp_file and not Path(source).is_file()):
+                        if not source or (player.temp_file and not allowed_audio_cdn(source)
+                                          and not Path(source).is_file()):
                             log.warning("VC recovery file absent in chat %s", chat_id)
                         else:
                             try:
@@ -1865,11 +1866,7 @@ async def main() -> None:
                                         source, AudioQuality.MEDIUM, VideoQuality.SD_360p
                                     )
                                 else:
-                                    media = MediaStream(
-                                        source, AudioQuality.HIGH,
-                                        video_flags=MediaStream.Flags.IGNORE,
-                                        audio_flags=MediaStream.Flags.REQUIRED,
-                                    )
+                                    media = audio_stream(source)
                                 await play_with_reconnect(calls, chat_id, media)
                                 player.started_at = time.monotonic()
                                 log.info("VC watchdog repaired chat %s", chat_id)
@@ -1962,11 +1959,7 @@ async def main() -> None:
                             source, AudioQuality.MEDIUM, VideoQuality.SD_360p
                         )
                     else:
-                        stream = MediaStream(
-                            source, AudioQuality.HIGH,
-                            video_flags=MediaStream.Flags.IGNORE,
-                            audio_flags=MediaStream.Flags.REQUIRED,
-                        )
+                        stream = audio_stream(source)
                     await play_with_reconnect(calls, update.chat_id, stream)
                     player.started_at = time.monotonic()
                     log.info("Recovered prematurely ended VC media in chat %s", update.chat_id)

@@ -7,6 +7,7 @@ import time
 from pytgcalls.ffmpeg import build_command
 from pytgcalls.types.raw import AudioParameters
 from player_visuals import allowed_audio_cdn
+from network_audio import hls_command
 
 
 def safe_error(text: str) -> str:
@@ -23,24 +24,7 @@ async def probe_audio_url(url: str, headers: dict, *, timeout: float = 15, varia
         if command[index] == '-v':
             command[index + 1] = 'error'
     if variant in {"combined_headers", "hls_no_eof"}:
-        # Compare against the library's repeated -headers argument handling.
-        combined = "".join(f"{k}: {v}\r\n" for k, v in headers.items())
-        cleaned = []
-        index = 0
-        while index < len(command):
-            if command[index] == '-headers':
-                index += 2
-            else:
-                cleaned.append(command[index])
-                index += 1
-        command = cleaned
-        if combined:
-            location = command.index('-i')
-            command[location:location] = ['-headers', combined]
-    if variant == "hls_no_eof":
-        for index in range(len(command) - 1):
-            if command[index] == '-reconnect_at_eof':
-                command[index + 1] = '0'
+        command = hls_command(command, headers, disable_eof=variant == "hls_no_eof")
     command[-1:-1] = ['-t', '0.5']
     started = time.monotonic()
     process = await asyncio.create_subprocess_exec(

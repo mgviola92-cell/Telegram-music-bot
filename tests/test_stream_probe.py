@@ -1,6 +1,8 @@
 """Decode real test HLS over HTTP using the installed FFmpeg/PyTgCalls command."""
 from pathlib import Path
 import shutil
+import asyncio
+import shlex
 import subprocess
 import tempfile
 import unittest
@@ -8,6 +10,7 @@ from unittest.mock import patch
 from aiohttp import web
 
 from stream_probe import probe_audio_url, safe_error
+from network_audio import DirectAudioStream
 
 
 class ProbeSafetyTest(unittest.TestCase):
@@ -40,5 +43,22 @@ class ProbeDecodeTest(unittest.IsolatedAsyncioTestCase):
                 self.assertGreater(result['pcm_bytes'], 0)
                 self.assertLessEqual(result['pcm_bytes'], 100000)
                 self.assertGreater(result['peak'], 0)
+                with patch('network_audio.allowed_audio_cdn', return_value=True):
+                    stream = DirectAudioStream(f'http://127.0.0.1:{port}/test.m3u8')
+                stream._direct_headers.update({'User-Agent': 'Test Client', 'Accept': '*/*'})
+                await stream.check_stream()
+                command = shlex.split(stream.microphone.path)
+                self.assertEqual(command[command.index('-reconnect_at_eof') + 1], '0')
+                self.assertEqual(command.count('-headers'), 1)
+                block = command[command.index('-headers') + 1]
+                self.assertIn('User-Agent: Test Client\r\n', block)
+                self.assertIn('Accept: */*\r\n', block)
+                self.assertIn('s16le', command)
+                command[-1:-1] = ['-t', '0.5']
+                process = await asyncio.create_subprocess_exec(
+                    *command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+                stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=5)
+                self.assertEqual(process.returncode, 0, stderr)
+                self.assertGreater(len(stdout), 0)
             finally:
                 await runner.cleanup()

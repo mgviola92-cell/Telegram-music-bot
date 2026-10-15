@@ -33,6 +33,7 @@ class DirectPlaybackFallbackTest(unittest.IsolatedAsyncioTestCase):
         namespace = dict(vars(main))
         namespace.update(players={123: player}, download_song=loader,
                          MediaStream=factory, calls=MagicMock(),
+                         audio_stream=lambda src: factory(src, audio_flags=main.MediaStream.Flags.REQUIRED),
                          play_with_reconnect=playback, stream_only_enabled=lambda: strict,
                          wait_for_audio_frames=frame_check,
                          prepare_next_song=MagicMock(), clean_temp=MagicMock(),

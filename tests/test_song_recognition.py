@@ -119,3 +119,13 @@ class RecognitionTests(unittest.IsolatedAsyncioTestCase):
             self.assertIs(proxy.reply_text, message.reply_text)
             self.assertNotIn('a'*16, namespace['recognition_results'])
         asyncio.run(check())
+
+    async def test_metadata_cleanup_cancels_actual_tasks(self):
+        from main import Player, cancel_queue_metadata
+        player = Player()
+        task = asyncio.create_task(asyncio.sleep(60))
+        player.metadata_tasks[123] = task
+        cancel_queue_metadata(player)
+        await asyncio.gather(task, return_exceptions=True)
+        self.assertTrue(task.cancelled())
+        self.assertEqual(player.metadata_tasks, {})

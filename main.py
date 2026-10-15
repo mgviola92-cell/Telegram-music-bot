@@ -300,7 +300,7 @@ def prepare_next_song(player: Player) -> None:
 def cancel_queue_metadata(player):
     if player.queue_changed is not None:
         player.queue_changed()
-    for _, task in list(player.metadata_tasks.values()):
+    for task in list(player.metadata_tasks.values()):
         task.cancel()
     player.metadata_tasks.clear()
 
@@ -828,7 +828,7 @@ async def main() -> None:
                         player.queue_changed()
             finally:
                 row = player.metadata_tasks.get(id(track))
-                if row and row[1] is asyncio.current_task():
+                if row is asyncio.current_task():
                     player.metadata_tasks.pop(id(track), None)
         player.metadata_tasks[id(track)] = asyncio.create_task(update())
 

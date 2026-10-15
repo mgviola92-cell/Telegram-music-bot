@@ -24,6 +24,29 @@ class RadioChecks(unittest.IsolatedAsyncioTestCase):
                         for row in k.inline_keyboard for b in row))
         self.assertNotIn('https:',str(k))
 
+    async def test_directory_json_can_arrive_in_multiple_chunks(self):
+        import json
+        payload=json.dumps([{'name':'Local FM','url_resolved':'https://stream.zeno.fm/example'}]).encode()
+        class Content:
+            async def iter_chunked(self,size):
+                yield payload[:7]
+                yield payload[7:]
+        class Response:
+            content=Content()
+            def raise_for_status(self): pass
+            async def __aenter__(self): return self
+            async def __aexit__(self,*args): pass
+        class Session:
+            def __init__(self,**kwargs): pass
+            async def __aenter__(self): return self
+            async def __aexit__(self,*args): pass
+            def get(self,*args,**kwargs): return Response()
+        catalog=RadioCatalog()
+        with patch('radio_catalog.ClientSession',Session):
+            await catalog.load_local()
+        self.assertTrue(catalog.loaded)
+        self.assertEqual(catalog.stations['mm1'].name,'Local FM')
+
     async def test_failed_station_is_bounded_and_retried_later(self):
         c=RadioCatalog()
         with patch('radio_catalog.decode_check',side_effect=RuntimeError) as check:

@@ -90,9 +90,11 @@ class RadioCatalog:
                         async with session.get(f'https://{host}/json/stations/bycountrycodeexact/MM',
                                                headers={'User-Agent':'MudyarMusicBot/1.0'}) as response:
                             response.raise_for_status()
-                            raw = await response.content.read(200001)
-                            if len(raw) > 200000:
-                                raise ValueError('Catalogue too large')
+                            raw = bytearray()
+                            async for chunk in response.content.iter_chunked(16384):
+                                raw.extend(chunk)
+                                if len(raw) > 200000:
+                                    raise ValueError('Catalogue too large')
                             items = json.loads(raw)
                     seen = set()
                     for item in items:

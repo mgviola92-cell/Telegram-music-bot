@@ -36,6 +36,9 @@ from voice_transport import clear_stale_voice, ensure_native_sender, AudioTransp
 from source_race import ParallelSources
 from track_metadata import remember_metadata, lookup_metadata
 from queue_receipts import acknowledge_queued, schedule_receipts
+from song_recognition import SongRecognizer, recognition_media
+from pyrogram.enums import ParseMode
+from types import SimpleNamespace
 from direct_stream import (resolve_soundcloud_https,
                            cached_search, remember_search, forget_search)
 from player_visuals import (player_caption, artwork_for, artwork_is_safe, stream_headers_for, allowed_audio_cdn, save_artwork)
@@ -787,6 +790,9 @@ async def main() -> None:
                     if name.strip() in {"LyBot", "Song_Vkm_bot", "VoiceShazamBot"}]
     lybot = (ParallelSources([LyBotSource(assistant, name) for name in dict.fromkeys(source_names)], clean_temp)
              if os.getenv("LYBOT_ENABLED", "1") != "0" else None)
+    recognition_source = next((s for s in lybot.sources if s.username == "VoiceShazamBot"), None) if lybot else None
+    recognizer = SongRecognizer(bot, recognition_source) if recognition_source else None
+    recognition_results = {}
     metadata_slots = asyncio.Semaphore(2)
 
     async def resolve_for_queue(song, prefer_stream):
@@ -1389,6 +1395,7 @@ async def main() -> None:
             "🎧 မုဒြာ Music Bot — VC Player\n\n"
             "Group VC ဖွင့်ပြီး /play Faded လို့ သီချင်းနာမည် ရိုက်နိုင်တယ်။\n"
             "Audio File ကို Reply လုပ်ပြီး /play လည်းရတယ်။\n"
+            "/findsong — Video / Voice / Audio ကို reply လုပ်ပြီး သီချင်းရှာပါ။\n"
             "Video: ကိုယ်ပိုင် MP4 ကို Reply လုပ်ပြီး /vplay သုံးပါ။\n"
             "Music: SoundCloud / LyBot / Song_Vkm / VoiceShazam မှာ တစ်ပြိုင်တည်းရှာမယ်။\n"
             "YouTube VC Audio: Server Verification ကြောင့် လောလောဆယ် ပိတ်ထားတယ်။\n"
@@ -1572,6 +1579,60 @@ async def main() -> None:
                     return
             else:
                 await acknowledge_queued(player, track, progress)
+
+    @bot.on_message(filters.command("findsong"))
+    async def findsong_command(_: Client, msg: Message) -> None:
+        media = recognition_media(msg.reply_to_message)
+        if not media:
+            await msg.reply_text("🎵 Video / Voice / Audio ကို reply လုပ်ပြီး /findsong သုံးပါ။")
+            return
+        if not 0 < int(getattr(media, "file_size", 0) or 0) <= MAX_AUDIO_BYTES:
+            await msg.reply_text("⚠️ 20 MB အောက် Audio / Video ကို သုံးပါ။")
+            return
+        if recognizer is None:
+            await msg.reply_text("⚠️ VoiceShazam source မဖွင့်ထားသေးဘူး။")
+            return
+        if recognizer.busy:
+            await msg.reply_text("⏳ အခြားသီချင်း ခွဲခြားနေတယ်။ ခဏနေ ပြန်စမ်းပါ။")
+            return
+        progress = await msg.reply_text("🔎 အသံအပိုင်းတိုကို @VoiceShazamBot ဆီပို့ပြီး သီချင်းခွဲခြားနေတယ်…")
+        try:
+            title = await recognizer.recognize(msg.reply_to_message)
+            now = time.monotonic()
+            for key, result in list(recognition_results.items()):
+                if result[3] < now:
+                    recognition_results.pop(key, None)
+            if len(recognition_results) >= 64:
+                recognition_results.pop(next(iter(recognition_results)))
+            token = uuid.uuid4().hex[:16]
+            recognition_results[token] = (msg.chat.id, getattr(msg.from_user, "id", None), title, now + 600)
+            markup = InlineKeyboardMarkup([[InlineKeyboardButton("▶ ဖွင့်မယ်", callback_data="findplay:" + token)]]) if msg.chat.type in ("group", "supergroup") else None
+            await progress.edit_text("🎵 " + title + "\n\n/play " + title,
+                                     parse_mode=ParseMode.DISABLED, reply_markup=markup)
+            log.info("Song recognition completed in chat %s", msg.chat.id)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            log.info("Song recognition unavailable (%s)", type(exc).__name__)
+            await progress.edit_text("⚠️ ဒီအသံကနေ သီချင်းမခွဲခြားနိုင်သေးဘူး။ သီချင်းသံရှင်းတဲ့ အပိုင်းတိုနဲ့ ပြန်စမ်းပါ။")
+
+    @bot.on_callback_query(filters.regex(r"^findplay:[a-f0-9]{16}$"))
+    async def recognition_play(_: Client, cb: CallbackQuery) -> None:
+        token = cb.data.split(":", 1)[1]
+        result = recognition_results.get(token)
+        if not result or result[3] < time.monotonic() or not cb.message or cb.message.chat.id != result[0]:
+            await cb.answer("သက်တမ်းကုန်ပြီ။ /findsong ပြန်သုံးပါ။", show_alert=True)
+            return
+        if not cb.from_user or cb.from_user.id != result[1]:
+            await cb.answer("သီချင်းရှာထားသူပဲ ဒီခလုတ်ကို သုံးနိုင်တယ်။", show_alert=True)
+            return
+        recognition_results.pop(token, None)
+        await cb.answer()
+        await cb.message.edit_reply_markup(reply_markup=None)
+        proxy = SimpleNamespace(chat=cb.message.chat, from_user=cb.from_user,
+                                command=["play", result[2]], text="/play " + result[2],
+                                reply_to_message=None, reply_text=cb.message.edit_text)
+        await play_command(bot, proxy)
 
     def queue_text(player):
         return queue_display(

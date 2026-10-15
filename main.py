@@ -468,7 +468,7 @@ def soundcloud_results(query: str, max_tracks: int = 6, cancel_signal: threading
             continue
         if link not in urls:
             if not urls:
-                remember_metadata(query, title + (" – " + artist if artist else "") + " · SoundCloud", entry.get("duration"))
+                remember_metadata(query, title + (" – " + str(entry["artist"]) if entry.get("artist") else "") + " · SoundCloud", entry.get("duration"))
             urls.append(link)
         if len(urls) >= max_tracks:
             break

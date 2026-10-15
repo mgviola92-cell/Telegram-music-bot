@@ -24,7 +24,7 @@ def song_button(message, query=None):
     for row in getattr(getattr(message, 'reply_markup', None), 'inline_keyboard', []) or []:
         for button in row:
             label = str(button.text).strip()
-            if (' – ' in label or ' - ' in label) and getattr(button, 'callback_data', None):
+            if (' – ' in label or ' — ' in label or ' - ' in label) and getattr(button, 'callback_data', None):
                 if not any(word in label.casefold() for word in ('subscribe', 'premium', 'payment', 'buy ')):
                     if query is None or matches_query(type("Label", (), {"title": label, "performer": ""})(), query):
                         return label
@@ -35,10 +35,11 @@ def matches_selection(media, label):
     def normalized(value):
         return "".join(c for c in unicodedata.normalize("NFKC", str(value)).casefold()
                        if c.isalnum() or unicodedata.category(c).startswith("M"))
-    selected_title = normalized(label.rsplit(" – ", 1)[0] if " – " in label
-                                else label.rsplit(" - ", 1)[0])
+    import re
+    label = re.sub(r"^\s*[•·]?\s*\d+:\d+\s*[•·]\s*", "", label)
+    parts = re.split(r"\s+[—–-]\s+", label)
     title = normalized(getattr(media, "title", "") or "")
-    return bool(title and selected_title and title == selected_title)
+    return bool(title and any(normalized(part) == title for part in parts))
 
 
 class AudioCandidate:
@@ -120,9 +121,9 @@ class LyBotSource:
                             duration = float(getattr(media, 'duration', 0) or 0)
                             if not 0 < size <= MAX_BYTES or duration > 600:
                                 raise BotSourceUnavailable('Audio exceeds playback limits')
-                            title = str(getattr(media, 'title', '') or selected_label or query)[:100]
+                            title = str(getattr(media, 'title', '') or selected_label or Path(str(getattr(media, 'file_name', '') or '')).stem or 'Telegram audio')[:100]
                             artist = str(getattr(media, 'performer', '') or '')[:70]
-                            label = title + (f' – {artist}' if artist else '') + ' · ' + self.username
+                            label = title + (f' – {artist}' if artist and artist.casefold() not in title.casefold() else '') + ' · ' + self.username
                             candidate = AudioCandidate(self, query, message, label, duration or None)
                             self.candidates.pop(key, None)
                             if len(self.candidates) >= 24:

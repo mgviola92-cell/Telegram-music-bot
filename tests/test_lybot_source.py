@@ -119,3 +119,9 @@ class LyBotTest(unittest.IsolatedAsyncioTestCase):
             self.assertIn('Purple – Wink & pGb',title)
             self.assertIn('VoiceShazamBot',title)
         finally:shutil.rmtree(Path(path).parent)
+
+    def test_new_bot_duration_badge_and_artist_title_order(self):
+        message=Obj(reply_markup=Obj(inline_keyboard=[[Obj(text='• 2:49 • Purple — pGb & WINK',callback_data='track')]]))
+        self.assertEqual(song_button(message,query='purple pgb wink'),'• 2:49 • Purple — pGb & WINK')
+        self.assertTrue(matches_selection(Obj(title='Purple'),'• 2:49 • Purple — pGb & WINK'))
+        self.assertTrue(matches_selection(Obj(title='Purple'),'Wink & pGb — Purple'))

@@ -149,6 +149,31 @@ async def play_with_reconnect(calls: PyTgCalls, chat_id: int, stream: MediaStrea
         )
 
 
+class AudioFramesStalled(RuntimeError):
+    """The decoder was accepted but its outgoing media clock never advanced."""
+
+
+async def wait_for_audio_frames(calls: PyTgCalls, chat_id: int, *,
+                                timeout: float = 8, interval: float = 1) -> None:
+    """Check native outgoing frame progress, not UI elapsed wall-clock time."""
+    async def poll():
+        initial = await calls.time(chat_id)
+        previous = initial
+        while True:
+            await asyncio.sleep(interval)
+            current = await calls.time(chat_id)
+            if current > previous:
+                log.info("VC outgoing media clock advanced chat %s: %s -> %s",
+                         chat_id, initial, current)
+                return
+            previous = current
+    try:
+        await asyncio.wait_for(poll(), timeout=timeout)
+    except asyncio.TimeoutError:
+        log.warning("VC decoder accepted but outgoing media stalled chat %s", chat_id)
+        raise AudioFramesStalled("No outgoing audio frame progress after playback started") from None
+
+
 async def ensure_voice_audio(calls: PyTgCalls, chat_id: int, assistant_id: int) -> bool:
     """Restore local capture and report server-side admin mute without bypassing it."""
     own = None
@@ -1064,6 +1089,8 @@ async def main() -> None:
                                 options["headers"] = stream_headers_for(source)
                             stream = MediaStream(source, AudioQuality.HIGH, **options)
                         await play_with_reconnect(calls, chat_id, stream)
+                        if not song.video:
+                            await wait_for_audio_frames(calls, chat_id)
                     except Exception as live_exc:
                         if not (allowed_audio_cdn(source) and song.youtube):
                             raise
@@ -1085,6 +1112,7 @@ async def main() -> None:
                             audio_flags=MediaStream.Flags.REQUIRED,
                         )
                         await play_with_reconnect(calls, chat_id, stream)
+                        await wait_for_audio_frames(calls, chat_id)
                     log.info("VC play success chat %s", chat_id)
                     player.current = song
                     player.idle_mode = None
@@ -1123,6 +1151,8 @@ async def main() -> None:
                         error_message = ("⚠️ Telegram Media Download မအောင်မြင်ဘူး။ "
                                          "HTTPS Bot API နဲ့ MTProto နှစ်ခုစလုံးမရနိုင်တာပါ။ "
                                          "နောက်မှ ပြန်စမ်းပေးပါ။")
+                    elif isinstance(exc, AudioFramesStalled):
+                        error_message = "🔇 VC ချိတ်ထားပေမဲ့ အသံ data မထွက်လာဘူး။ ပြန်ချိတ်ဖို့ /stop ပြီး /play စမ်းပါ။"
                     elif type(exc).__name__ == "NoAudioSourceFound":
                         error_message = "🔇 သီချင်းရင်းမြစ်မှာ ဖွင့်နိုင်တဲ့ audio မတွေ့ဘူး။ အခြားသီချင်း သို့မဟုတ် audio file နဲ့ စမ်းပါ။"
                     elif song.youtube:
@@ -1640,6 +1670,7 @@ async def main() -> None:
         except Exception as exc:
             log.info("Player callback acknowledgement expired: %s", type(exc).__name__)
         if action == "stop":
+            log.info("Stop requested via player button chat %s", chat_id)
             cancel_active_loading(player)
             discard_prepared(player)
             async with player.lock:
@@ -1658,6 +1689,7 @@ async def main() -> None:
                     await asyncio.wait_for(calls.leave_call(chat_id), timeout=12)
                 except Exception as exc:
                     log.info("Button stop leave status %s: %s", chat_id, type(exc).__name__)
+            log.info("Button stop completed; queue cleared chat %s", chat_id)
             return
         if action == "skip":
             if not queue_skip(chat_id):

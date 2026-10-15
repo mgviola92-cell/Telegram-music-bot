@@ -203,3 +203,5 @@ Render Free can restart or suspend instances and cannot guarantee uninterrupted 
 ## Audio presence and microphone checks
 
 Audio playback and recovery require an actual audio stream (`MediaStream.Flags.REQUIRED`), so missing audio cannot silently produce a player card with no microphone source. A direct URL that fails audio detection uses the existing local download fallback without an unnecessary VC reconnect. After starting a song, the bot checks its assistant participant: admin mute is shown in the player card, local capture is unmuted, and a zero volume is restored to 100. An admin mute is never overridden. These checks and a successful play response do not prove that a listener heard sound; confirm in a real group VC.
+
+After an audio play request, the loader waits up to eight seconds for the native outgoing media clock to advance. A direct stream that is accepted but supplies no frames triggers the local fallback once; the same failure on local audio produces an explicit error. Clock progress proves decoder frame flow, not listener-side audibility. Stop button requests and completions are logged for restart tracing.

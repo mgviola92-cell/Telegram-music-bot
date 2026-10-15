@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, patch
 
-from main import ensure_voice_audio, play_with_reconnect
+from main import ensure_voice_audio, play_with_reconnect, wait_for_audio_frames, AudioFramesStalled
 from pytgcalls.types import MediaStream
 from pytgcalls.exceptions import NoAudioSourceFound
 
@@ -54,3 +54,23 @@ class VoiceMuteTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(await ensure_voice_audio(calls, -100123, 123))
         calls.unmute.assert_awaited_once()
         calls.change_volume_call.assert_not_awaited()
+
+
+class AudioFrameProgressTest(unittest.IsolatedAsyncioTestCase):
+    async def test_progressing_decoder_passes(self):
+        calls = SimpleNamespace(time=AsyncMock(side_effect=[0, 0, 10]))
+        with patch('main.asyncio.sleep', new=AsyncMock()):
+            await wait_for_audio_frames(calls, -100123)
+        self.assertEqual(calls.time.await_count, 3)
+
+    async def test_media_clock_timeout_is_explicit(self):
+        calls = SimpleNamespace(time=AsyncMock(return_value=0))
+        with self.assertRaises(AudioFramesStalled):
+            await wait_for_audio_frames(calls, -100123, timeout=.02, interval=.001)
+        self.assertGreater(calls.time.await_count, 1)
+
+    async def test_cancellation_does_not_trigger_fallback(self):
+        import asyncio
+        calls = SimpleNamespace(time=AsyncMock(side_effect=asyncio.CancelledError()))
+        with self.assertRaises(asyncio.CancelledError):
+            await wait_for_audio_frames(calls, -100123)

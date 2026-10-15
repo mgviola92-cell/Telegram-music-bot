@@ -10,7 +10,7 @@ import main
 
 
 class DirectPlaybackFallbackTest(unittest.IsolatedAsyncioTestCase):
-    async def check_fallback(self, *, constructor_failure):
+    async def check_fallback(self, *, constructor_failure, stalled=False):
         # Compile the actual closure body with its collaborators injected.
         # No Telegram credentials, network request, or VC session is created.
         source = ast.parse(Path(main.__file__).read_text())
@@ -26,13 +26,15 @@ class DirectPlaybackFallbackTest(unittest.IsolatedAsyncioTestCase):
         if constructor_failure:
             factory.side_effect = [ValueError('remote probe failed'), object()]
         playback = AsyncMock()
-        if not constructor_failure:
+        if not constructor_failure and not stalled:
             playback.side_effect = [RuntimeError('remote playback failed'), None]
+        frame_check = AsyncMock(side_effect=[main.AudioFramesStalled("stalled"), None] if stalled else None)
         announce = AsyncMock()
         namespace = dict(vars(main))
         namespace.update(players={123: player}, download_song=loader,
                          MediaStream=factory, calls=MagicMock(),
                          play_with_reconnect=playback,
+                         wait_for_audio_frames=frame_check,
                          prepare_next_song=MagicMock(), clean_temp=MagicMock(),
                          announce_now_playing=announce,
                          start_idle=AsyncMock(return_value=False),
@@ -55,3 +57,6 @@ class DirectPlaybackFallbackTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_remote_playback_failure_uses_local_audio(self):
         await self.check_fallback(constructor_failure=False)
+
+    async def test_accepted_but_stalled_direct_audio_uses_local_fallback(self):
+        await self.check_fallback(constructor_failure=False, stalled=True)

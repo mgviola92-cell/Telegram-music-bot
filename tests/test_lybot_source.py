@@ -125,3 +125,9 @@ class LyBotTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(song_button(message,query='purple pgb wink'),'• 2:49 • Purple — pGb & WINK')
         self.assertTrue(matches_selection(Obj(title='Purple'),'• 2:49 • Purple — pGb & WINK'))
         self.assertTrue(matches_selection(Obj(title='Purple'),'Wink & pGb — Purple'))
+
+    def test_subscription_gate_is_reported_without_clicking_join_or_payment(self):
+        from lybot_source import subscription_gate
+        gate=Obj(text="To access the bot features, you need to subscribe to resources:",reply_markup=Obj(inline_keyboard=[[Obj(text='➕ Subscribe'),Obj(text='Check subscriptions')]]))
+        self.assertTrue(subscription_gate(gate))
+        self.assertFalse(subscription_gate(Obj(text='Song search results',reply_markup=Obj(inline_keyboard=[[Obj(text='Purple — Wink & pGb')]]))))

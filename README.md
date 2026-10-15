@@ -226,7 +226,8 @@ Each Telegram bot serializes its own search UI; searches and transfers are bound
 strict stream-only mode retain their separate behavior. Telegram audio uses a
 temporary local file; SoundCloud direct streaming remains disk-free.
 Unknown Telegram durations are checked with FFprobe before playback (20 MiB / 10
-minute limits). No subscription or payment buttons are handled automatically.
+minute limits). No subscription or payment buttons are handled automatically. A source asking
+the assistant to subscribe is skipped immediately; it does not delay other sources.
 
 The immediate next song is prefetched with the same source race. Further queue
 entries resolve metadata only, with two background lookups at a time. Queue

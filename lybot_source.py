@@ -18,6 +18,12 @@ class BotSourceUnavailable(RuntimeError):
     pass
 
 
+def subscription_gate(message):
+    text = str(getattr(message, 'text', '') or '').casefold()
+    buttons = [str(b.text).casefold() for row in getattr(getattr(message, 'reply_markup', None), 'inline_keyboard', []) or [] for b in row]
+    return 'need to subscribe' in text and any('check subscriptions' in label for label in buttons)
+
+
 def song_button(message, query=None):
     # LyBot's observed search UI: song rows carry title – artist callbacks.
     # Never click subscription, navigation, URL or payment buttons.
@@ -110,6 +116,9 @@ class LyBotSource:
                                 if m.id > sent.id and not getattr(m, 'outgoing', False)]
                     for message in reversed(messages):
                         media = audio_media(message)
+                        if subscription_gate(message):
+                            LOG.info("Music source @%s requires assistant subscriptions; skipping this source", self.username)
+                            raise BotSourceUnavailable("Assistant subscription required")
                         if self.trace and message.id not in seen:
                             from stream_probe import safe_error
                             seen.add(message.id)

@@ -20,6 +20,18 @@ def audio_media(message):
     return None
 
 
+def matching_song_button(message):
+    rows = getattr(getattr(message, "reply_markup", None), "inline_keyboard", []) or []
+    for row in rows:
+        for button in row:
+            label = str(button.text)
+            normalized = label.casefold()
+            if ("buddha puzaniya" in normalized and "chan chan" in normalized
+                    and getattr(button, "callback_data", None)):
+                return label
+    return None
+
+
 async def decode_sample(data):
     """Check a half second of PCM from bounded Telegram bytes, only in memory."""
     process = await asyncio.create_subprocess_exec(
@@ -56,6 +68,7 @@ async def run_bot_source_probe(client, *, enabled_until, query='Chan Chan Buddha
         sent = await asyncio.wait_for(client.send_message(peer.id, query, disable_web_page_preview=True), timeout=15)
         log.info('Bot source probe query sent @LyBot')
         seen = set()
+        selected = False
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             async def read():
@@ -72,6 +85,14 @@ async def run_bot_source_probe(client, *, enabled_until, query='Chan Chan Buddha
                     seen.add(state)
                     log.info('Bot source probe response %s', json.dumps({'audio': bool(media), 'text': safe_error(text)[:700], 'buttons': buttons}, ensure_ascii=False))
                 if not media:
+                    label = matching_song_button(message)
+                    if label and not selected:
+                        selected = True
+                        log.info("Bot source probe selecting exact song result: %s", label)
+                        try:
+                            await asyncio.wait_for(message.click(label, timeout=10), timeout=12)
+                        except (asyncio.TimeoutError, TimeoutError):
+                            log.info("Bot source probe selection callback timed out; still waiting for audio")
                     continue
                 size = int(getattr(media, 'file_size', 0) or 0)
                 log.info('Bot source probe audio received %s', json.dumps({'title': str(getattr(media, 'title', '') or getattr(media, 'file_name', ''))[:120], 'size': size, 'duration': getattr(media, 'duration', None), 'seconds': round(time.monotonic()-started, 2)}, ensure_ascii=False))

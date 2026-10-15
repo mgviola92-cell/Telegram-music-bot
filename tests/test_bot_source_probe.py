@@ -2,7 +2,7 @@ import time
 import unittest
 from types import SimpleNamespace as Obj
 from unittest.mock import AsyncMock
-from bot_source_probe import audio_media, decode_sample, run_bot_source_probe
+from bot_source_probe import audio_media, decode_sample, run_bot_source_probe, matching_song_button
 
 class ProbeTest(unittest.IsolatedAsyncioTestCase):
     async def test_disabled_and_expired_do_not_send(self):
@@ -33,3 +33,10 @@ class ProbeTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result['exit_code'],0,result)
         self.assertEqual(result['pcm_bytes'],96000)
         self.assertGreater(result['peak'],0)
+
+    def test_selects_only_exact_requested_song_callback(self):
+        def msg(button):
+            return Obj(reply_markup=Obj(inline_keyboard=[[button]]))
+        self.assertIsNone(matching_song_button(msg(Obj(text='Subscribe',callback_data='join'))))
+        self.assertIsNone(matching_song_button(msg(Obj(text='Buddha Puzaniya – Chan Chan',url='https://example.com'))))
+        self.assertEqual(matching_song_button(msg(Obj(text='Buddha Puzaniya – Chan Chan',callback_data='song'))),'Buddha Puzaniya – Chan Chan')

@@ -101,6 +101,7 @@ class Player:
     queue_notice_id: int | None = None
     queue_changed: object | None = None
     queue_refresh_task: asyncio.Task | None = None
+    queue_revision: int = 0
 
 
 def voice_slot_count(players: dict[int, Player]) -> int:
@@ -269,6 +270,8 @@ def discard_prepared(player: Player) -> None:
 
 def prepare_next_song(player: Player) -> None:
     """Prepare only the immediate next audio while current VC audio plays."""
+    if player.queue_changed is not None:
+        player.queue_changed()
     upcoming = player.queue[0] if player.queue else None
     if (player.prepared is not None and player.prepared.track is upcoming
             and player.prepared.prefer_stream == player.stream_enabled):
@@ -289,6 +292,8 @@ def prepare_next_song(player: Player) -> None:
 
 
 def cancel_queue_metadata(player):
+    if player.queue_changed is not None:
+        player.queue_changed()
     for _, task in list(player.metadata_tasks.values()):
         task.cancel()
     player.metadata_tasks.clear()
@@ -870,6 +875,8 @@ async def main() -> None:
                 log.info("Player UI update unavailable %s (%s)", chat_id, type(exc).__name__)
 
     async def update_player_panel(chat_id: int, player: Player) -> None:
+        if player.queue_changed is not None:
+            player.queue_changed()
         await edit_panel(chat_id, player)
 
     async def update_progress_until_changed(chat_id: int, song: Track) -> None:
@@ -953,6 +960,8 @@ async def main() -> None:
             log.info("Unable to post player card in %s (%s)", chat_id, type(exc).__name__)
 
     async def clear_player_panel(chat_id: int, player: Player) -> None:
+        if player.queue_changed is not None:
+            player.queue_changed()
         for task in (player.announce_task, player.progress_task):
             if task is not None and not task.done() and task is not asyncio.current_task():
                 task.cancel()
@@ -1564,16 +1573,21 @@ async def main() -> None:
 
     def schedule_queue_refresh(chat_id):
         player = players[chat_id]
+        player.queue_revision += 1
         if player.queue_notice_id is None or (player.queue_refresh_task is not None and not player.queue_refresh_task.done()):
             return
         async def refresh():
             from pyrogram.enums import ParseMode
-            await asyncio.sleep(0.5)
-            try:
-                await bot.edit_message_text(chat_id, player.queue_notice_id,
-                                            queue_text(player), parse_mode=ParseMode.DISABLED)
-            except Exception:
-                pass
+            while True:
+                await asyncio.sleep(0.5)
+                revision = player.queue_revision
+                try:
+                    await bot.edit_message_text(chat_id, player.queue_notice_id,
+                                                queue_text(player), parse_mode=ParseMode.DISABLED)
+                except Exception:
+                    return
+                if revision == player.queue_revision:
+                    return
         player.queue_refresh_task = asyncio.create_task(refresh())
 
     async def send_queue(chat_id):

@@ -88,16 +88,16 @@ class GreetingPipe:
     def _write(self):
         chunk_size = BYTES_PER_SECOND // 50
         silence = bytes(chunk_size)
-        current = b''
-        chunk = b''
+        current = memoryview(b'')
+        chunk = memoryview(b'')
         while not self.stop.is_set():
             if not chunk:
                 if not current:
                     try:
-                        current = self.pending.get_nowait()
+                        current = memoryview(self.pending.get_nowait())
                     except queue.Empty:
                         pass
-                chunk, current = (current[:chunk_size],current[chunk_size:]) if current else (silence,b'')
+                chunk, current = (current[:chunk_size],current[chunk_size:]) if current else (memoryview(silence),memoryview(b''))
             try:
                 written = os.write(self.fd,chunk)
                 chunk = chunk[written:]

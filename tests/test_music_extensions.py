@@ -30,6 +30,9 @@ def closure(name, namespace):
 
 
 class SearchTests(unittest.IsolatedAsyncioTestCase):
+    def test_burmese_vowels_do_not_collapse_distinct_song_titles(self):
+        self.assertNotEqual(title_key('ကာ'),title_key('ကိ'))
+
     def test_youtube_id_validation_prevents_other_hosts_and_credentials(self):
         for link in ('https://youtu.be/abcdefghijk','https://www.youtube.com/watch?v=abcdefghijk',
                      'https://youtube.com/shorts/abcdefghijk','https://music.youtube.com/watch?v=abcdefghijk'):

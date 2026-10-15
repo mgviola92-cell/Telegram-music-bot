@@ -3,6 +3,7 @@ import asyncio
 import json
 import re
 import time
+import unicodedata
 from dataclasses import dataclass
 from urllib.parse import urlsplit, parse_qs
 from aiohttp import ClientSession, ClientTimeout
@@ -18,7 +19,8 @@ class SearchChoice:
 
 
 def title_key(value):
-    return ''.join(c for c in clean_track_title(value).casefold() if c.isalnum())
+    normalized = unicodedata.normalize('NFKC', clean_track_title(value)).casefold()
+    return ''.join(c for c in normalized if c.isalnum() or unicodedata.category(c).startswith('M'))
 
 
 def youtube_id(url):

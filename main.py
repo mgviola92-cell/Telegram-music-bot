@@ -27,6 +27,7 @@ from idle_media import configured_radio_url, ensure_idle_audio
 from youtube_health import youtube_guard
 from archive_source import get_archive_audio
 from prefetch import PreparedAudio
+from stream_probe import probe_audio_url
 from direct_stream import (resolve_soundcloud_https,
                            cached_search, remember_search, forget_search)
 from player_visuals import (player_caption, artwork_for, artwork_is_safe, stream_headers_for, allowed_audio_cdn, save_artwork)
@@ -516,6 +517,24 @@ def resolve_stream_only(query: str, cancel_signal: threading.Event | None = None
     if cancel_signal is not None and cancel_signal.is_set():
         raise InterruptedError("Stream lookup cancelled")
     raise StreamOnlyPlaybackError("No playable direct HTTPS audio URL; downloading is disabled")
+
+
+async def run_stream_probe(query: str) -> None:
+    cancel = threading.Event()
+    try:
+        log.info("FFmpeg-only diagnostic started; playback configuration unchanged")
+        url, _, _ = await asyncio.wait_for(
+            asyncio.to_thread(resolve_stream_only, query, cancel), timeout=45,
+        )
+        for variant in ("library", "combined_headers", "hls_no_eof"):
+            result = await probe_audio_url(url, stream_headers_for(url), variant=variant)
+            log.info("FFmpeg-only diagnostic result: %s", result)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        log.warning("FFmpeg-only diagnostic unavailable (%s)", type(exc).__name__)
+    finally:
+        cancel.set()
 
 
 def download_song(
@@ -1978,6 +1997,7 @@ async def main() -> None:
     ).start()
 
     watchdog_task: asyncio.Task | None = None
+    probe_task: asyncio.Task | None = None
     try:
         await calls.start()  # Starts the assistant MTProto client.
         identity = await assistant.get_me()
@@ -1988,10 +2008,16 @@ async def main() -> None:
         ready = True
         log.info("Music Bot started; maximum active voice chats: %s", max_groups)
         log.info("Named audio stream-only mode: %s", stream_only_enabled())
+        probe_query = os.getenv("MUSIC_STREAM_PROBE_QUERY", "").strip()[:160]
+        if probe_query:
+            probe_task = asyncio.create_task(run_stream_probe(probe_query))
         watchdog_task = asyncio.create_task(watch_voice_connections())
         await asyncio.Event().wait()
     finally:
         ready = False
+        if probe_task is not None:
+            probe_task.cancel()
+            await asyncio.gather(probe_task, return_exceptions=True)
         if watchdog_task is not None:
             watchdog_task.cancel()
             await asyncio.gather(watchdog_task, return_exceptions=True)

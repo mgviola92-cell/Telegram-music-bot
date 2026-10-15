@@ -22,6 +22,7 @@ class DirectPlaybackFallbackTest(unittest.IsolatedAsyncioTestCase):
         loader = MagicMock(side_effect=[(remote, 'Example', 120), ('local.mp3', 'Example', 120)])
         factory = MagicMock()
         factory.Flags.IGNORE = main.MediaStream.Flags.IGNORE
+        factory.Flags.REQUIRED = main.MediaStream.Flags.REQUIRED
         if constructor_failure:
             factory.side_effect = [ValueError('remote probe failed'), object()]
         playback = AsyncMock()
@@ -45,6 +46,7 @@ class DirectPlaybackFallbackTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(loader.call_args_list[0].args[-1], True)
         self.assertEqual(loader.call_args_list[1].args[-1], False)
         self.assertEqual(factory.call_args_list[-1].args[0], 'local.mp3')
+        self.assertEqual(factory.call_args_list[-1].kwargs['audio_flags'], main.MediaStream.Flags.REQUIRED)
         self.assertEqual(playback.await_count, 1 if constructor_failure else 2)
         self.assertIsNone(player.loading_task)
 

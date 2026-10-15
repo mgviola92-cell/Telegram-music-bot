@@ -199,3 +199,7 @@ Restarting Render clears group-specific toggle settings.
 - Local source and retry tests are offline: **successful GitHub Actions do not prove continuous live group-VC audio.** A real smoke test is still required after each deploy.
 
 Render Free can restart or suspend instances and cannot guarantee uninterrupted streaming. Background watchdogs run only when the Render instance is awake; disk cache and in-memory queue disappear on restart.
+
+## Audio presence and microphone checks
+
+Audio playback and recovery require an actual audio stream (`MediaStream.Flags.REQUIRED`), so missing audio cannot silently produce a player card with no microphone source. A direct URL that fails audio detection uses the existing local download fallback without an unnecessary VC reconnect. After starting a song, the bot checks its assistant participant: admin mute is shown in the player card, local capture is unmuted, and a zero volume is restored to 100. An admin mute is never overridden. These checks and a successful play response do not prove that a listener heard sound; confirm in a real group VC.

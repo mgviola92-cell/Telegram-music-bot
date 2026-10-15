@@ -135,7 +135,7 @@ async def play_with_reconnect(calls: PyTgCalls, chat_id: int, stream: MediaStrea
         raise
     except Exception as exc:
         reason = type(exc).__name__
-        if reason == "NoActiveGroupCall":
+        if reason in {"NoActiveGroupCall", "NoAudioSourceFound"}:
             raise
         log.warning("VC first join/play failed in chat %s (%s); trying reconnection", chat_id, reason)
         try:
@@ -147,6 +147,30 @@ async def play_with_reconnect(calls: PyTgCalls, chat_id: int, stream: MediaStrea
             calls.play(chat_id, stream, GroupCallConfig(auto_start=False)),
             timeout=40,
         )
+
+
+async def ensure_voice_audio(calls: PyTgCalls, chat_id: int, assistant_id: int) -> bool:
+    """Restore local capture and report server-side admin mute without bypassing it."""
+    own = None
+    try:
+        participants = await asyncio.wait_for(calls.get_participants(chat_id), timeout=4)
+        own = next((p for p in participants or [] if p.user_id == assistant_id), None)
+        if own is not None:
+            log.info("VC audio state chat %s: muted=%s admin_muted=%s volume=%s",
+                     chat_id, own.muted, own.muted_by_admin, own.volume)
+            if own.muted_by_admin:
+                return True
+    except Exception as exc:
+        log.info("VC participant audio check unavailable (%s)", type(exc).__name__)
+    try:
+        await asyncio.wait_for(calls.unmute(chat_id), timeout=4)
+        if own is not None and own.volume == 0:
+            await asyncio.wait_for(calls.change_volume_call(chat_id, 100), timeout=4)
+            log.info("Restored zero VC volume chat %s", chat_id)
+        log.info("VC microphone capture enabled chat %s", chat_id)
+    except Exception as exc:
+        log.warning("VC microphone enable unavailable chat %s (%s)", chat_id, type(exc).__name__)
+    return False
 
 
 def cancel_active_loading(player: Player) -> bool:
@@ -716,11 +740,16 @@ async def main() -> None:
         chat_id: int, player: Player, song: Track, progress: Message | None
     ) -> None:
         """Publishing UI never blocks playback locks or a /skip request."""
+        admin_muted = await ensure_voice_audio(calls, chat_id, identity.id)
+        if player.current is not song:
+            return
         image = artwork_for(song.source) if not song.video else None
         title = player_caption(
             song.title, elapsed_for(player), song.duration_seconds,
             paused=player.paused,
         )
+        if admin_muted:
+            title += "\n\n🔇 VC Admin က Assistant ကို mute ထားတယ်။ Unmute / Allow to Speak ပေးပါ။"
         buttons = player_controls(
             chat_id, paused=player.paused, loop=player.loop_current,
             title=song.title,
@@ -863,6 +892,7 @@ async def main() -> None:
                     MediaStream(
                         source, AudioQuality.MEDIUM,
                         video_flags=MediaStream.Flags.IGNORE,
+                        audio_flags=MediaStream.Flags.REQUIRED,
                     ),
                 )
             except asyncio.CancelledError:
@@ -1028,7 +1058,8 @@ async def main() -> None:
                                 source, AudioQuality.MEDIUM, VideoQuality.SD_360p,
                             )
                         else:
-                            options = {"video_flags": MediaStream.Flags.IGNORE}
+                            options = {"video_flags": MediaStream.Flags.IGNORE,
+                                       "audio_flags": MediaStream.Flags.REQUIRED}
                             if allowed_audio_cdn(source):
                                 options["headers"] = stream_headers_for(source)
                             stream = MediaStream(source, AudioQuality.HIGH, **options)
@@ -1051,6 +1082,7 @@ async def main() -> None:
                         stream = MediaStream(
                             source, AudioQuality.HIGH,
                             video_flags=MediaStream.Flags.IGNORE,
+                            audio_flags=MediaStream.Flags.REQUIRED,
                         )
                         await play_with_reconnect(calls, chat_id, stream)
                     log.info("VC play success chat %s", chat_id)
@@ -1091,6 +1123,8 @@ async def main() -> None:
                         error_message = ("⚠️ Telegram Media Download မအောင်မြင်ဘူး။ "
                                          "HTTPS Bot API နဲ့ MTProto နှစ်ခုစလုံးမရနိုင်တာပါ။ "
                                          "နောက်မှ ပြန်စမ်းပေးပါ။")
+                    elif type(exc).__name__ == "NoAudioSourceFound":
+                        error_message = "🔇 သီချင်းရင်းမြစ်မှာ ဖွင့်နိုင်တဲ့ audio မတွေ့ဘူး။ အခြားသီချင်း သို့မဟုတ် audio file နဲ့ စမ်းပါ။"
                     elif song.youtube:
                         error_message = (
                             "⚠️ YouTube ရဲ့ Login/Verification လိုအပ်နေတဲ့ Audio ကို "
@@ -1742,6 +1776,7 @@ async def main() -> None:
                                     media = MediaStream(
                                         source, AudioQuality.HIGH,
                                         video_flags=MediaStream.Flags.IGNORE,
+                                        audio_flags=MediaStream.Flags.REQUIRED,
                                     )
                                 await play_with_reconnect(calls, chat_id, media)
                                 player.started_at = time.monotonic()
@@ -1838,6 +1873,7 @@ async def main() -> None:
                         stream = MediaStream(
                             source, AudioQuality.HIGH,
                             video_flags=MediaStream.Flags.IGNORE,
+                            audio_flags=MediaStream.Flags.REQUIRED,
                         )
                     await play_with_reconnect(calls, update.chat_id, stream)
                     player.started_at = time.monotonic()

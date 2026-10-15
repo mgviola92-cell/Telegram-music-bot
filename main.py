@@ -25,6 +25,8 @@ from music_ui import player_controls, queue_display, queue_remove, queue_shuffle
 from audius_source import fetch_audius_audio
 from song_cache import get_cached_song, save_cached_song, maintain_cache
 from idle_media import configured_radio_url, ensure_idle_audio
+from radio_catalog import RadioCatalog
+from welcome_audio import WelcomeAudio
 from youtube_health import youtube_guard
 from archive_source import get_archive_audio
 from prefetch import PreparedAudio, AsyncPreparedAudio
@@ -49,7 +51,7 @@ from direct_stream import (resolve_soundcloud_https,
 from player_visuals import (player_caption, artwork_for, artwork_is_safe, stream_headers_for, allowed_audio_cdn, save_artwork)
 from pytgcalls import PyTgCalls
 from pytgcalls import filters as call_filters
-from pytgcalls.types import AudioQuality, ChatUpdate, GroupCallConfig, MediaStream, StreamEnded, VideoQuality
+from pytgcalls.types import AudioQuality, ChatUpdate, GroupCallConfig, MediaStream, StreamEnded, VideoQuality, GroupCallParticipant, UpdatedGroupCallParticipant
 
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO"),
@@ -100,6 +102,10 @@ class Player:
     idle_started_at: float = 0.0
     radio_retry_after: float = 0.0
     radio_enabled: bool = True
+    radio_station: str | None = None
+    radio_panel_id: int | None = None
+    radio_revision: int = 0
+    welcome_panel_id: int | None = None
     keep_idle: bool = True
     idle_notice_sent: bool = False
     idle_early_ends: int = 0
@@ -170,6 +176,20 @@ def audio_stream(source: str, quality=AudioQuality.HIGH, *, settings=None):
 
 
 async def play_with_reconnect(calls: PyTgCalls, chat_id: int, stream: MediaStream) -> None:
+    welcome = getattr(calls, "welcome_audio", None)
+    if not isinstance(welcome, WelcomeAudio):
+        return await _play_with_reconnect(calls, chat_id, stream)
+    wrapped, pipe = welcome.prepare(chat_id, stream)
+    try:
+        await _play_with_reconnect(calls, chat_id, wrapped)
+    except BaseException:
+        if pipe:
+            pipe.close()
+        raise
+    welcome.commit(chat_id, pipe)
+
+
+async def _play_with_reconnect(calls: PyTgCalls, chat_id: int, stream: MediaStream) -> None:
     """Recover once from a stale per-chat voice connection.
 
     Do not create missing group calls; a group admin must start the VC.
@@ -250,6 +270,7 @@ async def ensure_voice_audio(calls: PyTgCalls, chat_id: int, assistant_id: int) 
 
 def cancel_active_loading(player: Player) -> bool:
     """Let /stop interrupt the loader before waiting on its chat lock."""
+    player.radio_revision += 1
     if player.cancel_download is not None:
         player.cancel_download.set()
     task = player.loading_task
@@ -838,6 +859,9 @@ async def main() -> None:
         in_memory=True,
     )
     calls = PyTgCalls(assistant, workers=min(max_groups, 4))
+    radio_catalog = RadioCatalog()
+    welcome = WelcomeAudio()
+    calls.welcome_audio = welcome
     source_names = [name.strip() for name in os.getenv("MUSIC_BOT_SOURCES", "LyBot,Song_Vkm_bot,VoiceShazamBot").split(",")
                     if name.strip() in APPROVED_BOTS]
     lybot = (ParallelSources([LyBotSource(assistant, name) for name in dict.fromkeys(source_names)], clean_temp)
@@ -1157,7 +1181,8 @@ async def main() -> None:
             return False
         options: list[tuple[str, str]] = []
         radio = (
-            configured_radio_url() if player.radio_enabled
+            (radio_catalog.stations[player.radio_station].url
+             if player.radio_station in radio_catalog.stations else configured_radio_url()) if player.radio_enabled
             and time.monotonic() >= player.radio_retry_after else None
         )
         if radio:
@@ -1538,7 +1563,8 @@ async def main() -> None:
             "/nightcore /bassboost /slowed · /effect normal\n"
             "/autoplay on|off · /toptracks /stats\n"
             "/shuffle /remove 1 /clear /loop — Admin Controls\n"
-            "/radio on|off — Authorized radio fallback\n"
+            "/radio — Local / International radio\n"
+            "/welcome — မြန်မာ VC/Group ကြိုဆိုအသံ\n"
             "/idle on|off — Queue ကုန်ရင် VC ထဲဆက်နေမလား\n"
             "/stream on|off — Direct HTTPS audio\n"
             "/ping — bot online ဖြစ်မဖြစ် စစ်မယ်။\n\n"
@@ -1982,36 +2008,181 @@ async def main() -> None:
 
     @bot.on_message(filters.command("radio") & filters.group)
     async def radio_command(_: Client, msg: Message) -> None:
-        """Manage the optional authorized radio fallback per group."""
         player = players[msg.chat.id]
-        action = msg.command[1].lower() if len(msg.command) > 1 else "status"
+        action = msg.command[1].lower() if len(msg.command) > 1 else "menu"
+        if action in {"on", "off"}:
+            if not await require_admin(msg):
+                return
+            async with player.lock:
+                player.radio_enabled = action == "on"
+                if player.current is None and player.idle_mode is not None:
+                    await start_idle(msg.chat.id, player)
         if action == "status":
-            configured = configured_radio_url() is not None
-            await msg.reply_text(
-                "📻 Radio URL: " + ("configured" if configured else "မချိတ်ရသေးဘူး") +
-                "\nRadio fallback: " + ("ON" if player.radio_enabled else "OFF") +
-                "\nIdle stream: " + (player.idle_mode or "none") +
-                "\nGroup Admin: /radio on, /radio off"
-            )
+            station = radio_catalog.stations.get(player.radio_station)
+            await msg.reply_text("📻 " + (station.name if station else "လိုင်းမရွေးရသေးဘူး") +
+                "\nRadio: " + ("ON" if player.radio_enabled else "OFF") +
+                "\n/radio နဲ့ လိုင်းရွေးနိုင်တယ်။")
             return
-        if action not in {"on", "off"}:
-            await msg.reply_text("📻 /radio on, /radio off, /radio status")
+        text, keyboard = radio_catalog.menu(msg.chat.id, selected=player.radio_station)
+        panel = await msg.reply_text(text, reply_markup=keyboard)
+        player.radio_panel_id = panel.id
+
+    @bot.on_callback_query(filters.regex(r"^rad:"))
+    async def radio_callback(_: Client, cb: CallbackQuery) -> None:
+        try:
+            _, raw_chat, action, value = cb.data.split(":")
+            chat_id = int(raw_chat)
+        except (ValueError, TypeError):
+            await cb.answer("Invalid radio control", show_alert=True)
             return
+        player = players[chat_id]
+        if not cb.message or cb.message.chat.id != chat_id or cb.message.id != player.radio_panel_id:
+            await cb.answer("ဒီ menu သက်တမ်းကုန်ပြီ။ /radio ပြန်သုံးပါ။", show_alert=True)
+            return
+        if action in {"home", "local", "inter"}:
+            await cb.answer()
+            if action == "local":
+                await radio_catalog.load_local()
+            text, keyboard = radio_catalog.menu(chat_id, action, int(value), player.radio_station)
+            try:
+                await cb.message.edit_text(text, reply_markup=keyboard)
+            except Exception:
+                pass
+            return
+        if not await is_chat_admin(chat_id, cb.from_user.id if cb.from_user else None):
+            await cb.answer("Group Admin ကပဲ လိုင်းပြောင်းနိုင်တယ်။", show_alert=True)
+            return
+        player.radio_revision += 1
+        revision = player.radio_revision
+        await cb.answer("📻 ချိတ်ဆက်နေတယ်…")
+        if action == "off":
+            async with player.lock:
+                player.radio_enabled = False
+                if player.current is None and player.idle_mode is not None:
+                    await start_idle(chat_id, player)
+            text, keyboard = radio_catalog.menu(chat_id, selected=player.radio_station)
+            await cb.message.edit_text("📻 Radio OFF\n" + text, reply_markup=keyboard)
+            return
+        if action != "pick":
+            return
+        try:
+            station = await radio_catalog.verify(value)
+            async with player.lock:
+                if player.radio_revision != revision or player.radio_panel_id != cb.message.id:
+                    return
+                player.radio_station = station.key
+                player.radio_enabled = True
+                player.radio_retry_after = 0
+                if player.current is not None or (player.loading_task and not player.loading_task.done()):
+                    result = "လက်ရှိသီချင်း/Queue ပြီးရင် ဒီလိုင်းကို ဆက်ဖွင့်မယ်။"
+                else:
+                    if voice_slot_count(players) >= max_groups and player.idle_mode is None:
+                        if not await evict_oldest_idle_for_song(chat_id):
+                            raise RuntimeError("VC capacity reached")
+                    await ensure_assistant_in_group(cb.message.chat)
+                    player.keep_idle = True
+                    if chat_id not in fresh_voice_chats:
+                        await asyncio.wait_for(clear_stale_voice(assistant, chat_id, identity.id),8)
+                        fresh_voice_chats.add(chat_id)
+                    if not await start_idle(chat_id, player) or player.idle_mode != "radio":
+                        raise RuntimeError("Radio connection failed")
+                    result = "VC ထဲမှာ တိုက်ရိုက်ဖွင့်နေတယ်။ /play နဲ့ သီချင်းတောင်းနိုင်တယ်။"
+            text, keyboard = radio_catalog.menu(chat_id, station.region, selected=station.key)
+            await cb.message.edit_text("📻 " + station.name + "\n" + result + "\n\n" + text,
+                                       reply_markup=keyboard)
+        except Exception as exc:
+            log.info("Radio selection failed (%s)", type(exc).__name__)
+            text, keyboard = radio_catalog.menu(chat_id, selected=player.radio_station)
+            await cb.message.edit_text("⚠️ ဒီလိုင်းကို လက်ရှိချိတ်မရသေးဘူး။ တခြားလိုင်း ရွေးပါ။\n" + text,
+                                       reply_markup=keyboard)
+
+    def welcome_menu(chat_id):
+        text = ("🎙 မြန်မာ ကြိုဆိုအသံ\nMode: " + welcome.mode(chat_id) +
+                " · Voice: " + welcome.voices.get(chat_id, "male") +
+                "\n" + ("အသံဝန်ဆောင်မှု အသင့်ဖြစ်ပြီ။" if welcome.ready else "အသံဝန်ဆောင်မှု ယာယီမရသေးဘူး။") +
+                "\nON/OFF ပြောင်းခြင်းက နောက်သီချင်း/ရေဒီယိုကစ သက်ရောက်မယ်။")
+        def b(label, action):
+            return InlineKeyboardButton(label, callback_data=f"wel:{chat_id}:{action}")
+        return text, InlineKeyboardMarkup([
+            [b("VC ဝင်သူ", "vc"), b("Group လူသစ်", "group")],
+            [b("နှစ်မျိုးလုံး", "both"), b("OFF", "off")],
+            [b("👨 Thiha", "male"), b("👩 Nilar", "female")],
+            [b("🔊 အသံစမ်းမယ်", "test")]])
+
+    @bot.on_message(filters.command("welcome") & filters.group)
+    async def welcome_command(_: Client, msg: Message) -> None:
         if not await require_admin(msg):
             return
-        async with player.lock:
-            player.radio_enabled = action == "on"
-            if player.current is None and player.idle_mode is not None:
-                await start_idle(msg.chat.id, player)
-        if action == "on" and configured_radio_url() is None:
-            await msg.reply_text(
-                "📻 Radio ON သတ်မှတ်ထားတယ်။ ဒါပေမဲ့ ခွင့်ပြုထားတဲ့ "
-                "Radio Stream URL မရှိသေးလို့ Queue အလွတ်မှာ Silent Idle နဲ့ စောင့်မယ်။"
-            )
-        else:
-            await msg.reply_text(
-                "📻 Radio auto-fallback: " + ("ON" if action == "on" else "OFF")
-            )
+        text, keyboard = welcome_menu(msg.chat.id)
+        panel = await msg.reply_text(text, reply_markup=keyboard)
+        players[msg.chat.id].welcome_panel_id = panel.id
+
+    @bot.on_callback_query(filters.regex(r"^wel:"))
+    async def welcome_callback(_: Client, cb: CallbackQuery) -> None:
+        try:
+            _, raw_chat, action = cb.data.split(":")
+            chat_id = int(raw_chat)
+        except (ValueError, TypeError):
+            return
+        if (not cb.message or cb.message.chat.id != chat_id
+                or cb.message.id != players[chat_id].welcome_panel_id):
+            await cb.answer("/welcome ပြန်သုံးပါ။", show_alert=True)
+            return
+        if not await is_chat_admin(chat_id, cb.from_user.id if cb.from_user else None):
+            await cb.answer("Group Admin ကပဲ ပြောင်းနိုင်တယ်။", show_alert=True)
+            return
+        if action in {"off", "vc", "group", "both"}:
+            welcome.modes[chat_id] = action
+            if action == "off":
+                # Keep feeding silence until next stream to avoid blocking FFmpeg.
+                pipe = welcome.pipes.get(chat_id)
+                if pipe:
+                    while not pipe.pending.empty():
+                        try:
+                            pipe.pending.get_nowait()
+                        except Exception:
+                            break
+        elif action in {"male", "female"}:
+            welcome.voices[chat_id] = action
+        elif action == "test":
+            player = players[chat_id]
+            if player.paused or (player.current is None and player.idle_mode is None):
+                await cb.answer("သီချင်း/ရေဒီယို အရင်ဖွင့်ထားပါ။", show_alert=True)
+                return
+            if not welcome.request(chat_id, cb.from_user.id, cb.from_user.first_name, force=True):
+                await cb.answer("နောက်သီချင်း/Radio ကစ စမ်းနိုင်မယ်။ အသံဝန်ဆောင်မှုလည်း အသင့်ဖြစ်ဖို့လိုတယ်။", show_alert=True)
+                return
+        await cb.answer("သတ်မှတ်ပြီးပြီ။" if action != "test" else "အသံပြင်ဆင်နေတယ်…")
+        text, keyboard = welcome_menu(chat_id)
+        try:
+            await cb.message.edit_text(text, reply_markup=keyboard)
+        except Exception:
+            pass
+
+    @calls.on_update(call_filters.call_participant(GroupCallParticipant.Action.JOINED))
+    async def welcome_vc_join(_: PyTgCalls, update: UpdatedGroupCallParticipant) -> None:
+        player = players.get(update.chat_id)
+        if (not player or player.paused or welcome.mode(update.chat_id) not in {"vc", "both"}
+                or update.chat_id not in welcome.pipes or update.participant.user_id == identity.id):
+            return
+        pipe = welcome.pipes[update.chat_id]
+        if time.monotonic() - pipe.created < 8:
+            return  # Initial participant snapshot is not a new arrival.
+        try:
+            user = await asyncio.wait_for(assistant.get_users(update.participant.user_id),4)
+            if not user.is_bot and not user.is_deleted:
+                welcome.request(update.chat_id,user.id,user.first_name)
+        except Exception:
+            pass
+
+    @bot.on_message(filters.new_chat_members & filters.group)
+    async def welcome_group_join(_: Client, msg: Message) -> None:
+        player = players.get(msg.chat.id)
+        if not player or player.paused:
+            return
+        for user in (msg.new_chat_members or [])[:3]:
+            if not user.is_bot and not user.is_deleted:
+                welcome.request(msg.chat.id,user.id,user.first_name,'group')
 
     @bot.on_message(filters.command("idle") & filters.group)
     async def idle_command(_: Client, msg: Message) -> None:
@@ -2194,6 +2365,7 @@ async def main() -> None:
                 await asyncio.wait_for(calls.leave_call(msg.chat.id), timeout=12)
             except Exception as exc:
                 log.info("VC leave status chat %s: %s", msg.chat.id, type(exc).__name__)
+        welcome.close_chat(msg.chat.id)
         log.info("Stop completed; queue cleared chat %s", msg.chat.id)
         await msg.reply_text("⏹ Stopped and left VC. /play နဲ့ ပြန်ဖွင့်နိုင်တယ်။")
 
@@ -2307,6 +2479,7 @@ async def main() -> None:
                     await asyncio.wait_for(calls.leave_call(chat_id), timeout=12)
                 except Exception as exc:
                     log.info("Button stop leave status %s: %s", chat_id, type(exc).__name__)
+            welcome.close_chat(chat_id)
             log.info("Button stop completed; queue cleared chat %s", chat_id)
             return
         if action == "skip":
@@ -2344,6 +2517,7 @@ async def main() -> None:
     @calls.on_update(call_filters.chat_update(ChatUpdate.Status.LEFT_CALL))
     async def call_left(_: PyTgCalls, update: ChatUpdate) -> None:
         log.warning("Telegram VC state changed in chat %s (status=%s)", update.chat_id, update.status)
+        welcome.close_chat(update.chat_id)
         player = players.get(update.chat_id)
         if player is None:
             return
@@ -2379,6 +2553,11 @@ async def main() -> None:
         """
         while True:
             await asyncio.sleep(35)
+            for cid in list(welcome.pipes):
+                p = players.get(cid)
+                if p is None or (p.current is None and p.idle_mode is None
+                                 and (p.loading_task is None or p.loading_task.done())):
+                    welcome.close_chat(cid)
             active = [
                 cid for cid, player in players.items()
                 if player.current is not None or player.idle_mode is not None
@@ -2566,6 +2745,9 @@ async def main() -> None:
     probe_task: asyncio.Task | None = None
     bot_probe_task: asyncio.Task | None = None
     candidate_probe_task: asyncio.Task | None = None
+    welcome_warmup_task: asyncio.Task | None = None
+    radio_warmup_task: asyncio.Task | None = None
+    radio_probe_task: asyncio.Task | None = None
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, shutdown.set)
@@ -2577,6 +2759,15 @@ async def main() -> None:
         log.info("Assistant session verified: user account")
         await bot.start()
         ready = True
+        welcome_warmup_task = asyncio.create_task(welcome.warmup())
+        radio_warmup_task = asyncio.create_task(radio_catalog.load_local())
+        try:
+            radio_probe_until = float(os.getenv("RADIO_WELCOME_PROBE_UNTIL", "0"))
+        except ValueError:
+            radio_probe_until = 0
+        if 0 < radio_probe_until - time.time() <= 900:
+            from radio_welcome_probe import run_radio_welcome_probe
+            radio_probe_task = asyncio.create_task(run_radio_welcome_probe(radio_catalog, welcome, resolve_stream_only))
         log.info("Music Bot started; maximum active voice chats: %s", max_groups)
         log.info("Named audio stream-only mode: %s", stream_only_enabled())
         log.info("Parallel music sources enabled: %s", source_names if lybot else [])
@@ -2607,6 +2798,11 @@ async def main() -> None:
         await shutdown.wait()
     finally:
         ready = False
+        for task in (welcome_warmup_task, radio_warmup_task, radio_probe_task):
+            if task:
+                task.cancel()
+        await asyncio.gather(*(t for t in (welcome_warmup_task, radio_warmup_task, radio_probe_task) if t), return_exceptions=True)
+        await welcome.close()
         if feature_probe_task is not None:
             feature_probe_task.cancel()
             await asyncio.gather(feature_probe_task, return_exceptions=True)

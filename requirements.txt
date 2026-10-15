@@ -3,3 +3,4 @@ pyrogrammod==2.4.1
 aiohttp>=3.10,<4
 yt-dlp>=2025.1.15,<2027
 TgCrypto==1.2.5
+edge-tts>=7.2,<8

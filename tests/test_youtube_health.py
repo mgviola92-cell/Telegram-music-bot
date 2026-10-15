@@ -6,6 +6,17 @@ from youtube_health import YouTubeGuard, is_verification_challenge
 from main import download_song, source_candidates
 
 
+# Legacy download behavior remains regression-tested for an explicit rollback.
+def setUpModule():
+    global legacy_mode
+    legacy_mode = patch.dict("os.environ", {"MUSIC_STREAM_ONLY": "0"})
+    legacy_mode.start()
+
+
+def tearDownModule():
+    legacy_mode.stop()
+
+
 class YouTubeSafetyTest(unittest.TestCase):
     def test_exact_challenge_triggers_only_expected_errors(self):
         self.assertTrue(is_verification_challenge(

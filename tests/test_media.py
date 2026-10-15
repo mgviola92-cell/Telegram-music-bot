@@ -11,6 +11,17 @@ from aiohttp import web
 from main import Player, cancel_active_loading, download_bot_api_file, download_song, ended_early, is_youtube_url, play_with_reconnect, soundcloud_results, source_candidates, suitable_recording
 
 
+# Legacy download behavior remains regression-tested for an explicit rollback.
+def setUpModule():
+    global legacy_mode
+    legacy_mode = patch.dict("os.environ", {"MUSIC_STREAM_ONLY": "0"})
+    legacy_mode.start()
+
+
+def tearDownModule():
+    legacy_mode.stop()
+
+
 class TelegramHttpsTest(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.fake_size = 6

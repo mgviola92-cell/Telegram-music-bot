@@ -1,3 +1,5 @@
+> Current experiment: named audio `/play` uses stream-only mode by default (`MUSIC_STREAM_ONLY=1`). It bypasses local song cache, disk download providers and download fallback. Failure is reported explicitly. `/stream off` cannot enable downloading in this mode. Telegram file replies and video file handling are separate existing features. To explicitly restore the previous audio-download paths, set `MUSIC_STREAM_ONLY=0` and redeploy. The historical fallback descriptions below apply to that rollback mode.
+
 # Telegram VC Music Bot
 
 Standalone Telegram voice-chat music bot. It is NOT part of the existing Game Bot project.

@@ -490,11 +490,41 @@ def source_candidates(
         yield youtube
 
 
+class StreamOnlyPlaybackError(RuntimeError):
+    pass
+
+
+def stream_only_enabled() -> bool:
+    return os.getenv("MUSIC_STREAM_ONLY", "1") != "0"
+
+
+def resolve_stream_only(query: str, cancel_signal: threading.Event | None = None):
+    """Return approved HTTPS audio only; never create or fetch a local media file."""
+    for target in soundcloud_results(query, max_tracks=3, cancel_signal=cancel_signal):
+        if cancel_signal is not None and cancel_signal.is_set():
+            raise InterruptedError("Stream lookup cancelled")
+        try:
+            direct = resolve_soundcloud_https(target, query, cancel_signal=cancel_signal,
+                                             check=suitable_recording)
+            if direct is not None and allowed_audio_cdn(direct[0]):
+                log.info("Stream-only audio resolved; disk download and file cache bypassed")
+                return direct
+        except InterruptedError:
+            raise
+        except Exception as exc:
+            log.info("Stream-only candidate unavailable (%s)", type(exc).__name__)
+    if cancel_signal is not None and cancel_signal.is_set():
+        raise InterruptedError("Stream lookup cancelled")
+    raise StreamOnlyPlaybackError("No playable direct HTTPS audio URL; downloading is disabled")
+
+
 def download_song(
     query: str, video: bool, cancel_signal: threading.Event | None = None,
     prefer_stream: bool = False,
 ) -> tuple[str, str, float | None]:
     """Download one playable source, trying SoundCloud if YouTube is blocked."""
+    if not video and stream_only_enabled():
+        return resolve_stream_only(query, cancel_signal)
     from yt_dlp import YoutubeDL
 
     if os.getenv("MUSIC_CACHE_ENABLED", "1") != "0":
@@ -1092,6 +1122,12 @@ async def main() -> None:
                         if not song.video:
                             await wait_for_audio_frames(calls, chat_id)
                     except Exception as live_exc:
+                        if song.youtube and not song.video and stream_only_enabled():
+                            log.warning("Stream-only playback failed (%s); download fallback disabled",
+                                        type(live_exc).__name__)
+                            raise StreamOnlyPlaybackError(
+                                "Direct stream produced no usable audio; download fallback disabled"
+                            ) from live_exc
                         if not (allowed_audio_cdn(source) and song.youtube):
                             raise
                         log.warning(
@@ -1142,7 +1178,9 @@ async def main() -> None:
                         cancel_signal.set()
                     clean_temp(local_file)
                     log.exception("Could not play track in chat %s", chat_id)
-                    if type(exc).__name__ == "NoActiveGroupCall":
+                    if isinstance(exc, StreamOnlyPlaybackError):
+                        error_message = "📡 Direct streaming မအောင်မြင်ဘူး။ ဒီစမ်းသပ်မှုမှာ Download နဲ့ file cache ကို ပိတ်ထားတယ်။"
+                    elif type(exc).__name__ == "NoActiveGroupCall":
                         error_message = ("🎙 Group Voice Chat ကို Admin က ဖွင့်ပေးပါ။ "
                                          "Assistant က /play နဲ့ အလိုအလျောက် ဝင်ပေးမယ်။")
                     elif isinstance(exc, (TimeoutError, asyncio.TimeoutError)) or (
@@ -1470,6 +1508,9 @@ async def main() -> None:
     @bot.on_message(filters.command("stream") & filters.group)
     async def stream_command(_: Client, msg: Message) -> None:
         """Direct CDN audio is enabled by default; local media remains the fallback."""
+        if stream_only_enabled():
+            await msg.reply_text("📡 Stream-only mode: ON\n/play က Direct HTTPS ပဲ သုံးမယ်။ Download fallback ပိတ်ထားတယ်။")
+            return
         player = players[msg.chat.id]
         action = msg.command[1].lower() if len(msg.command) > 1 else "status"
         if action == "status":
@@ -1946,6 +1987,7 @@ async def main() -> None:
         await bot.start()
         ready = True
         log.info("Music Bot started; maximum active voice chats: %s", max_groups)
+        log.info("Named audio stream-only mode: %s", stream_only_enabled())
         watchdog_task = asyncio.create_task(watch_voice_connections())
         await asyncio.Event().wait()
     finally:

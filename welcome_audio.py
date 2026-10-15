@@ -22,10 +22,14 @@ PARTY_BATCH_COOLDOWN = 20.0
 VOICES = {'male':'my-MM-ThihaNeural','female':'my-MM-NilarNeural'}
 
 
-def greeting_text(name, kind='vc', style='normal'):
+def safe_name(name):
     name = ''.join(c for c in unicodedata.normalize('NFKC',name or '')
                    if c.isalnum() or unicodedata.category(c).startswith('M') or c == ' ')
-    name = re.sub(r'\s+',' ',name).strip()[:32]
+    return re.sub(r'\s+',' ',name).strip()[:32]
+
+
+def greeting_text(name, kind='vc', style='normal'):
+    name = safe_name(name)
     if style == 'party_batch':
         return 'အခုဝင်လာကြတဲ့ သူငယ်ချင်းအားလုံး မင်္ဂလာပါ။ လူတောင်းပွဲလေးကနေ ကြိုဆိုပါတယ်။'
     if style == 'party':
@@ -134,7 +138,8 @@ class WelcomeStream(MediaStream):
 
 
 class WelcomeAudio:
-    def __init__(self):
+    def __init__(self,settings=None):
+        self.settings = settings
         self.modes = {}
         self.voices = {}
         self.styles = {}
@@ -153,6 +158,16 @@ class WelcomeAudio:
         self.default = os.getenv('MUSIC_WELCOME_DEFAULT','vc')
         if self.default not in {'off','vc','group','both'}:
             self.default = 'off'
+
+    def voice(self,chat):
+        default=self.settings.data['voice'] if self.settings and self.settings.ready else 'male'
+        return self.voices.get(chat,default)
+
+    def render(self,name,kind='vc',style='normal'):
+        if self.settings and self.settings.ready:
+            key=style if style in {'party','party_batch'} else kind
+            return self.settings.text(key,safe_name(name) or 'သူငယ်ချင်း')
+        return greeting_text(name,kind,style)
 
     def mode(self, chat):
         return self.modes.get(chat,self.default)
@@ -206,7 +221,7 @@ class WelcomeAudio:
 
     async def warmup(self):
         try:
-            pcm = await self.pcm(greeting_text(''),VOICES['male'])
+            pcm = await self.pcm(self.render(''),VOICES['male'])
             self.ready = True
             log.info('Burmese welcome TTS ready pcm_bytes=%s voice=%s',len(pcm),VOICES['male'])
         except Exception as exc:
@@ -215,7 +230,7 @@ class WelcomeAudio:
         if self.ready:
             for voice in VOICES.values():
                 try:
-                    await self.pcm(greeting_text('',style='party_batch'),voice)
+                    await self.pcm(self.render('',style='party_batch'),voice)
                 except Exception as exc:
                     log.info('Party batch prewarm unavailable (%s)',type(exc).__name__)
 
@@ -247,17 +262,17 @@ class WelcomeAudio:
         self.busy.add(chat)
         expected = self.pipes[chat]
         expected_style = self.styles.get(chat,'normal')
-        expected_voice = self.voices.get(chat,'male')
+        expected_voice = self.voice(chat)
         not_before = now + (max(0,delay) if delay is not None else
                             (JOIN_DELAY_SECONDS if kind == 'vc' and not force else 0))
         async def deliver():
             try:
                 voice = VOICES[expected_voice]
-                pcm = await asyncio.wait_for(self.pcm(greeting_text(name,kind,style or expected_style),voice),18)
+                pcm = await asyncio.wait_for(self.pcm(self.render(name,kind,style or expected_style),voice),18)
                 await asyncio.sleep(max(0,not_before-time.monotonic()))
                 if (self.pipes.get(chat) is not expected or self.mode(chat) == 'off'
                         or self.styles.get(chat,'normal') != expected_style
-                        or self.voices.get(chat,'male') != expected_voice):
+                        or self.voice(chat) != expected_voice):
                     return
                 if present is not None and not await asyncio.wait_for(present(),4):
                     return  # The newcomer already left or playback was paused.

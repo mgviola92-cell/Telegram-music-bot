@@ -27,6 +27,8 @@ from song_cache import get_cached_song, save_cached_song, maintain_cache
 from idle_media import configured_radio_url, ensure_idle_audio
 from radio_catalog import RadioCatalog
 from welcome_audio import WelcomeAudio
+from music_owner_store import MusicOwnerStore
+from music_owner_ui import MusicOwnerUI
 from youtube_health import youtube_guard
 from archive_source import get_archive_audio
 from prefetch import PreparedAudio, AsyncPreparedAudio
@@ -860,7 +862,10 @@ async def main() -> None:
     )
     calls = PyTgCalls(assistant, workers=min(max_groups, 4))
     radio_catalog = RadioCatalog()
-    welcome = WelcomeAudio()
+    owner_settings = MusicOwnerStore(assistant)
+    welcome = WelcomeAudio(owner_settings)
+    owner_ui = MusicOwnerUI(bot,owner_settings,welcome,players)
+    owner_ui.register()
     calls.welcome_audio = welcome
     source_names = [name.strip() for name in os.getenv("MUSIC_BOT_SOURCES", "LyBot,Song_Vkm_bot,VoiceShazamBot").split(",")
                     if name.strip() in APPROVED_BOTS]
@@ -1539,6 +1544,10 @@ async def main() -> None:
                 player.loading_task = None
                 player.cancel_download = None
 
+    @bot.on_message(filters.group,group=-20)
+    async def observe_music_group(_: Client,msg: Message) -> None:
+        owner_settings.observe_group(msg.chat)
+
     @bot.on_message(filters.command(["start", "help", "cmd"]))
     async def help_command(_: Client, msg: Message) -> None:
         identity = await bot.get_me()
@@ -2099,7 +2108,7 @@ async def main() -> None:
 
     def welcome_menu(chat_id):
         text = ("🎙 မြန်မာ ကြိုဆိုအသံ\nMode: " + welcome.mode(chat_id) +
-                " · Voice: " + welcome.voices.get(chat_id, "male") +
+                " · Voice: " + welcome.voice(chat_id) +
                 "\nပုံစံ: " + ("လူတောင်းပွဲ" if welcome.styles.get(chat_id) == "party" else "ပုံမှန်ကြိုဆို") +
                 "\n" + ("အသံဝန်ဆောင်မှု အသင့်ဖြစ်ပြီ။" if welcome.ready else "အသံဝန်ဆောင်မှု ယာယီမရသေးဘူး။") +
                 "\nON/OFF ပြောင်းခြင်းက နောက်သီချင်း/ရေဒီယိုကစ သက်ရောက်မယ်။")
@@ -2831,6 +2840,7 @@ async def main() -> None:
     welcome_warmup_task: asyncio.Task | None = None
     radio_warmup_task: asyncio.Task | None = None
     radio_probe_task: asyncio.Task | None = None
+    owner_probe_task: asyncio.Task | None = None
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, shutdown.set)
@@ -2840,6 +2850,7 @@ async def main() -> None:
         if identity.is_bot:
             raise RuntimeError("SESSION_STRING is a bot session, not a user session.")
         log.info("Assistant session verified: user account")
+        await owner_settings.load()
         await bot.start()
         ready = True
         welcome_warmup_task = asyncio.create_task(welcome.warmup())
@@ -2859,6 +2870,12 @@ async def main() -> None:
             from radio_welcome_probe import run_radio_welcome_probe
             radio_probe_task = asyncio.create_task(run_radio_welcome_probe(
                 radio_catalog,welcome,resolve_stream_only,party_only=True))
+        try:
+            owner_probe_until=float(os.getenv("MUSIC_OWNER_PROBE_UNTIL","0"))
+        except ValueError:
+            owner_probe_until=0
+        if 0 < owner_probe_until-time.time() <= 900:
+            owner_probe_task=asyncio.create_task(owner_settings.probe_roundtrip())
         log.info("Music Bot started; maximum active voice chats: %s", max_groups)
         log.info("Named audio stream-only mode: %s", stream_only_enabled())
         log.info("Parallel music sources enabled: %s", source_names if lybot else [])
@@ -2889,10 +2906,10 @@ async def main() -> None:
         await shutdown.wait()
     finally:
         ready = False
-        for task in (welcome_warmup_task, radio_warmup_task, radio_probe_task):
+        for task in (welcome_warmup_task, radio_warmup_task, radio_probe_task, owner_probe_task):
             if task:
                 task.cancel()
-        await asyncio.gather(*(t for t in (welcome_warmup_task, radio_warmup_task, radio_probe_task) if t), return_exceptions=True)
+        await asyncio.gather(*(t for t in (welcome_warmup_task, radio_warmup_task, radio_probe_task, owner_probe_task) if t), return_exceptions=True)
         await welcome.close()
         if feature_probe_task is not None:
             feature_probe_task.cancel()
@@ -2936,6 +2953,7 @@ async def main() -> None:
                 player.cancel_download.set()
             discard_prepared(player)
             clean_temp(player.temp_file)
+        await owner_settings.close()
         await bot.stop()
         if assistant.is_connected:
             await assistant.stop()

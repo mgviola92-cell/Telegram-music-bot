@@ -29,6 +29,7 @@ from archive_source import get_archive_audio
 from prefetch import PreparedAudio
 from stream_probe import probe_audio_url
 from network_audio import DirectAudioStream
+from bot_source_probe import run_bot_source_probe
 from direct_stream import (resolve_soundcloud_https,
                            cached_search, remember_search, forget_search)
 from player_visuals import (player_caption, artwork_for, artwork_is_safe, stream_headers_for, allowed_audio_cdn, save_artwork)
@@ -1991,6 +1992,7 @@ async def main() -> None:
 
     watchdog_task: asyncio.Task | None = None
     probe_task: asyncio.Task | None = None
+    bot_probe_task: asyncio.Task | None = None
     try:
         await calls.start()  # Starts the assistant MTProto client.
         identity = await assistant.get_me()
@@ -2004,6 +2006,13 @@ async def main() -> None:
         probe_query = os.getenv("MUSIC_STREAM_PROBE_QUERY", "").strip()[:160]
         if probe_query:
             probe_task = asyncio.create_task(run_stream_probe(probe_query))
+        try:
+            bot_probe_until = float(os.getenv("MUSIC_BOT_PROBE_UNTIL", "0"))
+        except ValueError:
+            bot_probe_until = 0
+        if bot_probe_until:
+            bot_probe_task = asyncio.create_task(run_bot_source_probe(
+                assistant, enabled_until=bot_probe_until))
         watchdog_task = asyncio.create_task(watch_voice_connections())
         await asyncio.Event().wait()
     finally:
@@ -2011,6 +2020,9 @@ async def main() -> None:
         if probe_task is not None:
             probe_task.cancel()
             await asyncio.gather(probe_task, return_exceptions=True)
+        if bot_probe_task is not None:
+            bot_probe_task.cancel()
+            await asyncio.gather(bot_probe_task, return_exceptions=True)
         if watchdog_task is not None:
             watchdog_task.cancel()
             await asyncio.gather(watchdog_task, return_exceptions=True)

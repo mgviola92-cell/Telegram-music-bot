@@ -8,7 +8,7 @@ Standalone Telegram voice-chat music bot. It is NOT part of the existing Game Bo
 
 - Assistant user account automatically joins the group on the first /play request when allowed by chat permissions.
 - `/play Alan Walker Faded` tries SoundCloud immediately, then a rights-filtered Internet Archive fallback if necessary.
-- During playback the Now Playing card has a progress bar, optional trusted SoundCloud cover art and a lyrics lookup link. Direct HTTPS audio is optional via `/stream on`; normal playback uses downloaded media.
+- During playback the Now Playing card has a progress bar, optional trusted SoundCloud cover art and a lyrics lookup link. Direct HTTPS audio is enabled by default; the existing bounded local fallback remains available. `/stream off` selects local resolution.
 - `/vplay` on a replied-to Telegram MP4 is supported; YouTube title/link video extraction is off by default.
 - Reply to a Telegram audio message with `/play`, or a Telegram MP4/video message with `/vplay`.
 - `/play https://...` and `/vplay https://...` for direct HTTPS media on explicitly allowed hosts only.
@@ -16,7 +16,7 @@ Standalone Telegram voice-chat music bot. It is NOT part of the existing Game Bo
 - `/start`, `/help`, `/ping` and HTTP `/health` for Render/UptimeRobot.
 - Automatic next track on stream end (best effort); when the queue runs out stay silently connected, without a new idle announcement.
 
-**Default audio order:** SoundCloud (up to three well-matched results), then Internet Archive (only eligible CC BY / CC0 MP3 uploads with attribution), then Audius if separately configured with authorized API access. `YOUTUBE_ENABLED=0` by default: YouTube keeps returning a sign-in verification challenge from Render, which unnecessarily delayed songs. Set `YOUTUBE_ENABLED=1` only if you have a properly authorized workflow that can actually obtain source access. A YouTube link without permission now gives a quick explanation and is not replaced with a different recording. Spotify and Apple Music metadata do not grant full-audio streaming rights. A 15-minute cache (up to two local tracks) can speed up repeated songs; a non-matching SoundCloud upload is not guaranteed to be the original recording. Internet Archive includes independent and open-license music, not a guaranteed catalog of current Myanmar or international chart hits. GitHub unit tests and an Archive MP3 HTTP 206 check do not prove real-VC playback until a group test.
+**Default audio order:** SoundCloud (up to three well-matched results), then Internet Archive (only eligible CC BY / CC0 MP3 uploads with attribution), then Audius if separately configured with authorized API access. `YOUTUBE_ENABLED=0` by default: YouTube keeps returning a sign-in verification challenge from Render, which unnecessarily delayed songs. Set `YOUTUBE_ENABLED=1` only if you have a properly authorized workflow that can actually obtain source access. For audio requests, YouTube links resolve public title metadata through oEmbed, then search other sources. These are matched recordings and may be a different version; the bot does not claim to stream that YouTube video. Spotify and Apple Music metadata do not grant full-audio streaming rights. A 15-minute cache (up to two local tracks) can speed up repeated songs; a non-matching SoundCloud upload is not guaranteed to be the original recording. Internet Archive includes independent and open-license music, not a guaranteed catalog of current Myanmar or international chart hits. GitHub unit tests and an Archive MP3 HTTP 206 check do not prove real-VC playback until a group test.
 
 ## Render deployment
 
@@ -238,3 +238,18 @@ arrives; they do not remain on the initial searching text. The explicit `/queue`
 command still replies with the full queue on request.
 The opt-in `MUSIC_BOT_PROBE_UNTIL` diagnostic is normally `0`; when enabled for at
 most 15 minutes it tests all configured bot providers without joining a VC.
+
+
+## Optional music tools
+
+- `/p` aliases `/play`, `/s` aliases `/skip`, `/c` aliases `/clear`. Existing admin checks remain.
+- `/search <name>` searches metadata from SoundCloud and configured bot sources in parallel, showing up to five deduplicated choices. Only the requesting member can select, within three minutes. Only the selected track is transferred. `/play` still starts the normal first playable match.
+- `/play <YouTube video link>` reads public title metadata only, then searches the existing audio sources. Deleted/private/unavailable metadata returns an error; playlists are unsupported. It does not download or stream YouTube media when YouTube extraction is disabled.
+- `/quality` displays inline controls: high = 48 kHz stereo (the unchanged default), medium = 36 kHz mono, low = 24 kHz mono. These are PCM capture settings, not advertised source bitrates. They do not improve low-quality source files or eliminate source-download time.
+- `/normalize on|off` applies optional live loudness normalization. Default OFF. It uses more CPU; no offline whole-file preprocessing is added.
+- `/effects` or `/effect normal|nightcore|bassboost|slowed` shows inline controls. `/nightcore`, `/bassboost`, `/slowed` also accept `off`. Effects default OFF. All audio setting changes apply from the next track, leaving the currently playing song connected. Defaults retain the existing direct HTTPS header/EOF fixes and PCM capture behavior.
+- `/autoplay on|off`: optional artist/title-based recommendations, excluding the last 30 resolved titles. It prepares at most one automatic next track, yields to manually queued songs, and stops on `/stop`. It is not a guaranteed catalog recommendation API or uninterrupted 24/7 radio. Existing `/radio` remains a separate configured radio stream.
+- `/toptracks` and `/stats` show group-scoped accepted playback-start counts, not measured listeners or completed listens. Only normalized titles and counters are stored, never listener identity. SQLite is separate from the Game Bot. Default `/tmp/mudyar_music_stats.sqlite3` is ephemeral and can reset on redeploy. Set `MUSIC_STATS_PATH` to a path on an independently configured persistent disk for durable history. No disk/database is provisioned automatically.
+- Existing one-track prefetch and two-file/36 MiB cache remain bounded. A five-minute housekeeping task prunes expired cache entries and, at 80% disk use, evicts cache copies only. It removes bot-owned temporary paths older than six hours while protecting both current playback and completed next-track prefetch. It never sweeps unrelated temporary files.
+
+Validation uses real FFmpeg PCM decoding for every quality/effect/normalization combination plus HLS header/EOF regression coverage. Telegram UI/VC integration tests use controlled collaborators; successful CI is not proof of listener-side audibility.

@@ -2,6 +2,7 @@
 import shlex
 from pytgcalls.types import AudioQuality, MediaStream
 from player_visuals import allowed_audio_cdn, stream_headers_for
+from audio_options import AudioSettings, apply_filters
 
 
 def hls_command(command: list[str], headers: dict, *, disable_eof: bool = True) -> list[str]:
@@ -26,11 +27,12 @@ def hls_command(command: list[str], headers: dict, *, disable_eof: bool = True) 
 
 
 class DirectAudioStream(MediaStream):
-    def __init__(self, url: str):
+    def __init__(self, url: str, settings=None):
         if not allowed_audio_cdn(url):
             raise ValueError('Unapproved audio host')
+        self.settings = settings or AudioSettings()
         self._direct_headers = stream_headers_for(url)
-        super().__init__(url, AudioQuality.HIGH, video_flags=MediaStream.Flags.IGNORE,
+        super().__init__(url, self.settings.parameters, video_flags=MediaStream.Flags.IGNORE,
                          audio_flags=MediaStream.Flags.REQUIRED, headers=self._direct_headers)
 
     async def check_stream(self):
@@ -39,4 +41,4 @@ class DirectAudioStream(MediaStream):
         if self.microphone is None:
             raise RuntimeError('Direct audio stream has no microphone source')
         command = hls_command(shlex.split(self.microphone.path), self._direct_headers)
-        self.microphone.path = shlex.join(command)
+        self.microphone.path = shlex.join(apply_filters(command, self.settings))

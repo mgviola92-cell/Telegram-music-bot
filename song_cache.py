@@ -81,3 +81,14 @@ def save_cached_song(query: str, video: bool, source: str, title: str, duration:
         except OSError:
             cached.unlink(missing_ok=True)
             return False
+
+
+def maintain_cache():
+    """Cache files are copies; playing/prefetched originals are never removed."""
+    with _LOCK:
+        _prune()
+        usage = shutil.disk_usage(_CACHE_DIR)
+        if usage.total and usage.used / usage.total >= .8:
+            for key, (path, *_rest) in list(_ITEMS.items()):
+                path.unlink(missing_ok=True)
+                _ITEMS.pop(key, None)

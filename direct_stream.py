@@ -63,7 +63,7 @@ def resolve_soundcloud_https(
     if cancel_signal is not None and cancel_signal.is_set():
         raise InterruptedError("Stream lookup cancelled")
     parsed = urlsplit(webpage)
-    if parsed.scheme != "https" or parsed.hostname not in {"soundcloud.com", "www.soundcloud.com"}:
+    if parsed.scheme != "https" or parsed.hostname not in {"soundcloud.com", "www.soundcloud.com", "m.soundcloud.com"}:
         return None
     started = time.monotonic()
     with YoutubeDL({

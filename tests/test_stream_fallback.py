@@ -94,3 +94,25 @@ class DirectPlaybackFallbackTest(unittest.IsolatedAsyncioTestCase):
         lybot.resolve.assert_awaited_once_with('Example')
         frames.assert_awaited_once()
         playback.assert_awaited_once()
+
+    async def test_production_queue_loader_uses_parallel_resolver_result(self):
+        tree=ast.parse(Path(main.__file__).read_text())
+        outer=next(n for n in tree.body if isinstance(n,ast.AsyncFunctionDef) and n.name=='main')
+        advance=next(n for n in outer.body if isinstance(n,ast.AsyncFunctionDef) and n.name=='advance')
+        song=main.Track('purple pgb wink','purple pgb wink',youtube=True)
+        resolver=AsyncMock(return_value=('parallel.mp3','Purple – Wink & pGb · Song_Vkm_bot',163))
+        player=main.Player(queue=deque([song]),resolver=resolver)
+        namespace=dict(vars(main));playback=AsyncMock();frames=AsyncMock();loader=MagicMock()
+        namespace.update(players={123:player},lybot=object(),fresh_voice_chats={123},download_song=loader,
+                         calls=MagicMock(),audio_stream=MagicMock(return_value=object()),
+                         play_with_reconnect=playback,wait_for_audio_frames=frames,
+                         prepare_next_song=MagicMock(),clean_temp=MagicMock(),
+                         announce_now_playing=AsyncMock(),stream_only_enabled=lambda:False)
+        exec(compile(ast.Module(body=[advance],type_ignores=[]),main.__file__,'exec'),namespace)
+        await namespace['advance'](123)
+        await player.announce_task
+        resolver.assert_awaited_once_with(song,True)
+        loader.assert_not_called()
+        self.assertEqual(player.temp_file,'parallel.mp3')
+        self.assertEqual(main.queue_track_title(song),'Purple – Wink & pGb')
+        frames.assert_awaited_once()

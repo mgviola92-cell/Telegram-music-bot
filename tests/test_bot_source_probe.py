@@ -2,7 +2,7 @@ import time
 import unittest
 from types import SimpleNamespace as Obj
 from unittest.mock import AsyncMock
-from bot_source_probe import audio_media, decode_sample, run_bot_source_probe, matching_song_button
+from bot_source_probe import audio_media, decode_sample, run_bot_source_probe, matching_song_button, select_song
 
 class ProbeTest(unittest.IsolatedAsyncioTestCase):
     async def test_disabled_and_expired_do_not_send(self):
@@ -40,3 +40,13 @@ class ProbeTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(matching_song_button(msg(Obj(text='Subscribe',callback_data='join'))))
         self.assertIsNone(matching_song_button(msg(Obj(text='Buddha Puzaniya – Chan Chan',url='https://example.com'))))
         self.assertEqual(matching_song_button(msg(Obj(text='Buddha Puzaniya – Chan Chan',callback_data='song'))),'Buddha Puzaniya – Chan Chan')
+
+    async def test_callback_rpc_is_actually_sent_once(self):
+        from pyrogram.raw.types import InputPeerUser
+        client=Obj(resolve_peer=AsyncMock(return_value=InputPeerUser(user_id=123,access_hash=456)),invoke=AsyncMock())
+        message=Obj(id=9,chat=Obj(id=123),reply_markup=Obj(inline_keyboard=[[Obj(text='Buddha Puzaniya – Chan Chan',callback_data='selected')]]))
+        await select_song(client,message,'Buddha Puzaniya – Chan Chan')
+        args,kwargs=client.invoke.call_args
+        self.assertEqual(kwargs['retries'],1)
+        self.assertEqual(args[0].msg_id,9)
+        self.assertEqual(args[0].data,b'selected')

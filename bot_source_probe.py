@@ -5,6 +5,7 @@ import logging
 import time
 from array import array
 from stream_probe import safe_error
+from pyrogram import raw
 
 log = logging.getLogger('telegram_music')
 MAX_BYTES = 8 * 1024 * 1024
@@ -30,6 +31,19 @@ def matching_song_button(message):
                     and getattr(button, "callback_data", None)):
                 return label
     return None
+
+
+async def select_song(client, message, label):
+    # PyrogramMod 2.4.1 request_callback_answer uses retries=0, but its
+    # Session.invoke only sends while retries > 0. Send exactly one RPC here.
+    button = next(b for row in message.reply_markup.inline_keyboard for b in row
+                  if b.text == label and getattr(b, "callback_data", None))
+    data = button.callback_data
+    if isinstance(data, str):
+        data = data.encode("utf-8")
+    return await client.invoke(raw.functions.messages.GetBotCallbackAnswer(
+        peer=await client.resolve_peer(message.chat.id), msg_id=message.id, data=data),
+        retries=1, timeout=10)
 
 
 async def decode_sample(data):
@@ -90,7 +104,7 @@ async def run_bot_source_probe(client, *, enabled_until, query='Chan Chan Buddha
                         selected = True
                         log.info("Bot source probe selecting exact song result: %s", label)
                         try:
-                            await asyncio.wait_for(message.click(label, timeout=10), timeout=12)
+                            await asyncio.wait_for(select_song(client, message, label), timeout=12)
                         except (asyncio.TimeoutError, TimeoutError):
                             log.info("Bot source probe selection callback timed out; still waiting for audio")
                     continue

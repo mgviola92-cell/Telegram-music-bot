@@ -17,7 +17,8 @@ log = logging.getLogger('telegram_music')
 RATE, CHANNELS = 48000, 2
 BYTES_PER_SECOND = RATE * CHANNELS * 2
 MAX_SECONDS = 40
-JOIN_DELAY_SECONDS = 6.0
+JOIN_DELAY_SECONDS = 5.0
+PARTY_BATCH_COOLDOWN = 20.0
 VOICES = {'male':'my-MM-ThihaNeural','female':'my-MM-NilarNeural'}
 
 
@@ -25,6 +26,8 @@ def greeting_text(name, kind='vc', style='normal'):
     name = ''.join(c for c in unicodedata.normalize('NFKC',name or '')
                    if c.isalnum() or unicodedata.category(c).startswith('M') or c == ' ')
     name = re.sub(r'\s+',' ',name).strip()[:32]
+    if style == 'party_batch':
+        return 'အခုဝင်လာကြတဲ့ သူငယ်ချင်းအားလုံး မင်္ဂလာပါ။ လူတောင်းပွဲလေးကနေ ကြိုဆိုပါတယ်။'
     if style == 'party':
         return (f'မင်္ဂလာပါ{("၊ " + name) if name else ""}။ လူတောင်းပွဲလေးကနေ ကြိုဆိုပါတယ်။ '
                 'ဒီအသံခန်းလေးထဲမှာ လူဝင်တောင်းလို့ ရပါတယ်။ '
@@ -136,6 +139,9 @@ class WelcomeAudio:
         self.voices = {}
         self.styles = {}
         self.chat_tasks = {}
+        self.arrivals = {}
+        self.batch_tasks = {}
+        self.batch_events = {}
         self.pipes = {}
         self.cache = collections.OrderedDict()
         self.recent = collections.OrderedDict()
@@ -152,6 +158,11 @@ class WelcomeAudio:
         return self.modes.get(chat,self.default)
 
     def close_chat(self, chat):
+        batch = self.batch_tasks.pop(chat,None)
+        if batch:
+            batch.cancel()
+        self.arrivals.pop(chat,None)
+        self.batch_events.pop(chat,None)
         task = self.chat_tasks.pop(chat,None)
         if task:
             task.cancel()
@@ -201,6 +212,12 @@ class WelcomeAudio:
         except Exception as exc:
             # Normal music must never wait on or fail because of TTS availability.
             log.warning('Welcome TTS unavailable; normal audio unchanged (%s)',type(exc).__name__)
+        if self.ready:
+            for voice in VOICES.values():
+                try:
+                    await self.pcm(greeting_text('',style='party_batch'),voice)
+                except Exception as exc:
+                    log.info('Party batch prewarm unavailable (%s)',type(exc).__name__)
 
     def prepare(self, chat, stream):
         # No greeting overlay on video (A/V sync) or while TTS service is unavailable.
@@ -214,7 +231,7 @@ class WelcomeAudio:
         if pipe:
             self.pipes[chat] = pipe
 
-    def request(self,chat,user,name,kind='vc',force=False,*,delay=None,present=None):
+    def request(self,chat,user,name,kind='vc',force=False,*,delay=None,present=None,style=None):
         if not self.ready or chat not in self.pipes:
             return False
         if not force and self.mode(chat) not in {kind,'both'}:
@@ -236,7 +253,7 @@ class WelcomeAudio:
         async def deliver():
             try:
                 voice = VOICES[expected_voice]
-                pcm = await asyncio.wait_for(self.pcm(greeting_text(name,kind,expected_style),voice),18)
+                pcm = await asyncio.wait_for(self.pcm(greeting_text(name,kind,style or expected_style),voice),18)
                 await asyncio.sleep(max(0,not_before-time.monotonic()))
                 if (self.pipes.get(chat) is not expected or self.mode(chat) == 'off'
                         or self.styles.get(chat,'normal') != expected_style
@@ -256,6 +273,70 @@ class WelcomeAudio:
                     self.busy.discard(chat)
         task = asyncio.create_task(deliver())
         self.chat_tasks[chat] = task
+        self.tasks.add(task)
+        task.add_done_callback(self.tasks.discard)
+        return True
+
+    def arrive_party(self,chat,user,participants):
+        """Debounce a wave of arrivals; one generic greeting, no per-user RPCs."""
+        if (not self.ready or chat not in self.pipes or self.styles.get(chat) != 'party'
+                or self.mode(chat) not in {'vc','both'}):
+            return False
+        now = time.monotonic()
+        if now-self.recent.get((chat,user),-1000) < 600:
+            return False
+        pending = self.arrivals.setdefault(chat,collections.OrderedDict())
+        if len(pending) >= 128:
+            return False
+        pending[user] = now
+        self.recent[(chat,user)] = now
+        while len(self.recent)>512:
+            self.recent.popitem(last=False)
+        event = self.batch_events.setdefault(chat,asyncio.Event())
+        event.set()
+        if chat in self.batch_tasks:
+            return True
+        expected = self.pipes[chat]
+        async def batch():
+            try:
+                while pending:
+                    if (self.pipes.get(chat) is not expected or self.styles.get(chat) != 'party'
+                            or self.mode(chat) not in {'vc','both'}):
+                        return
+                    # Five seconds after the most recent arrival in this wave.
+                    deadline = max(max(pending.values())+JOIN_DELAY_SECONDS,
+                                   self.last_group.get(chat,-1000)+PARTY_BATCH_COOLDOWN)
+                    if chat in self.busy or time.monotonic()<deadline:
+                        event.clear()
+                        try:
+                            await asyncio.wait_for(event.wait(),.1 if chat in self.busy else
+                                                   max(.01,min(.25,deadline-time.monotonic())))
+                        except asyncio.TimeoutError:
+                            pass
+                        continue
+                    eligible = {u for u,t in pending.items()
+                                if time.monotonic()-t >= JOIN_DELAY_SECONDS}
+                    if not eligible:
+                        continue
+                    # One participant snapshot checks the entire batch at once.
+                    present = set(await asyncio.wait_for(participants(),4))
+                    for u in eligible:
+                        pending.pop(u,None)
+                    if not eligible & present:
+                        continue
+                    async def still_here(members=frozenset(eligible)):
+                        return bool(members & set(await participants()))
+                    if self.request(chat,0,'',force=True,delay=0,present=still_here,style='party_batch'):
+                        log.info('Party welcome batch queued chat=%s arrivals=%s',chat,len(eligible & present))
+            except Exception as exc:
+                log.info('Party arrival batch skipped chat=%s (%s)',chat,type(exc).__name__)
+            finally:
+                if self.batch_tasks.get(chat) is asyncio.current_task():
+                    self.batch_tasks.pop(chat,None)
+                    self.batch_events.pop(chat,None)
+                    self.arrivals.pop(chat,None)
+        task = asyncio.create_task(batch())
+        self.batch_tasks[chat] = task
         self.tasks.add(task)
         task.add_done_callback(self.tasks.discard)
         return True

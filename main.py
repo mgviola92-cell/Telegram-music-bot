@@ -2156,7 +2156,7 @@ async def main() -> None:
                     if not await start_idle(chat_id,player,quiet=True):
                         raise RuntimeError("VC not available")
                 if not welcome.request(chat_id, msg.from_user.id if msg.from_user else 0,
-                                       "",force=True,delay=6):
+                                       "",force=True,delay=5):
                     await progress.edit_text("🎙 လူတောင်းပွဲ ပုံစံ ဖွင့်ထားပြီ။ ကြိုဆိုအသံ ပြောနေဆဲဆို ခဏစောင့်ပါ။ "
                                              "Mixer ပိတ်ထားခဲ့ရင် နောက်သီချင်း/Radio ကစ အသုံးဝင်မယ်။")
                     return
@@ -2235,6 +2235,13 @@ async def main() -> None:
         pipe = welcome.pipes[update.chat_id]
         if time.monotonic() - pipe.created < 8:
             return  # Initial participant snapshot is not a new arrival.
+        if welcome.styles.get(update.chat_id) == "party":
+            async def party_participants():
+                if player.paused or update.chat_id not in welcome.pipes:
+                    return set()
+                return {p.user_id for p in await calls.get_participants(update.chat_id)}
+            welcome.arrive_party(update.chat_id,update.participant.user_id,party_participants)
+            return
         try:
             user = await asyncio.wait_for(assistant.get_users(update.participant.user_id),4)
             if not user.is_bot and not user.is_deleted:

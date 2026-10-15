@@ -130,3 +130,70 @@ class PartyCommand(unittest.IsolatedAsyncioTestCase):
         await ctx['welcome_party_command'](None,msg)
         ctx['start_idle'].assert_not_awaited()
         self.assertEqual(ctx['welcome'].styles,{})
+
+class PartyBatch(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        from unittest.mock import patch
+        self.delay=patch('welcome_audio.JOIN_DELAY_SECONDS',.04);self.delay.start()
+        self.cooldown=patch('welcome_audio.PARTY_BATCH_COOLDOWN',.08);self.cooldown.start()
+        self.w=WelcomeAudio();self.w.ready=True;self.w.styles[1]='party'
+        self.pipe=FakePipe();self.w.pipes[1]=self.pipe
+        self.w.pcm=AsyncMock(return_value=b'\x01\x00'*100)
+        self.members=set(range(1,201))
+        self.participants=AsyncMock(side_effect=lambda:set(self.members))
+    async def asyncTearDown(self):
+        await self.w.close();self.delay.stop();self.cooldown.stop()
+
+    async def test_fifty_arrivals_share_one_short_greeting(self):
+        for uid in range(1,51):
+            self.assertTrue(self.w.arrive_party(1,uid,self.participants))
+        await asyncio.sleep(.01)
+        self.assertEqual(self.pipe.audio,[])
+        await asyncio.wait_for(self.pipe.arrived.wait(),.5)
+        self.assertEqual(len(self.pipe.audio),1)
+        text=self.w.pcm.call_args.args[0]
+        self.assertIn('သူငယ်ချင်းအားလုံး',text)
+        self.assertNotIn('စကားပြောခွင့်',text)
+        self.assertLessEqual(self.participants.await_count,2)
+        self.assertFalse(self.w.arrive_party(1,1,self.participants))
+
+    async def test_later_arrival_restarts_five_second_collection(self):
+        self.w.arrive_party(1,1,self.participants)
+        await asyncio.sleep(.025)
+        self.w.arrive_party(1,2,self.participants)
+        await asyncio.sleep(.025)
+        self.assertEqual(self.pipe.audio,[])
+        await asyncio.wait_for(self.pipe.arrived.wait(),.3)
+        self.assertEqual(len(self.pipe.audio),1)
+
+    async def test_arrivals_during_speech_get_next_batch(self):
+        self.w.arrive_party(1,1,self.participants)
+        await asyncio.wait_for(self.pipe.arrived.wait(),.3)
+        self.pipe.arrived.clear()
+        self.assertTrue(self.w.arrive_party(1,2,self.participants))
+        await asyncio.wait_for(self.pipe.arrived.wait(),.8)
+        self.assertEqual(len(self.pipe.audio),2)
+
+    async def test_all_departed_members_are_not_announced(self):
+        self.w.arrive_party(1,1,self.participants)
+        self.members.clear()
+        await asyncio.gather(*self.w.tasks)
+        self.assertEqual(self.pipe.audio,[])
+        self.w.pcm.assert_not_awaited()
+
+    async def test_stop_clears_pending_wave(self):
+        self.w.arrive_party(1,1,self.participants)
+        await asyncio.sleep(.01)
+        self.w.close_chat(1)
+        await asyncio.gather(*self.w.tasks,return_exceptions=True)
+        self.assertEqual(self.pipe.audio,[])
+        self.assertNotIn(1,self.w.arrivals)
+
+    async def test_pending_members_are_bounded(self):
+        for uid in range(1,201):self.w.arrive_party(1,uid,self.participants)
+        self.assertEqual(len(self.w.arrivals[1]),128)
+
+    def test_normal_and_party_wait_default_is_five_seconds(self):
+        self.delay.stop()
+        from welcome_audio import JOIN_DELAY_SECONDS
+        self.assertEqual(JOIN_DELAY_SECONDS,5.0)

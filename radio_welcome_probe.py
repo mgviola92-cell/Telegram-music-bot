@@ -45,6 +45,15 @@ async def run_radio_welcome_probe(catalog,welcome,resolve_direct=None,*,party_on
         except Exception as exc:
             log.info('Welcome live probe unavailable voice=%s reason=%s',label,type(exc).__name__)
 
+    if party_only:
+        for label,voice in VOICES.items():
+            try:
+                pcm=await welcome.pcm(greeting_text('',style='party_batch'),voice)
+                log.info('Party batch speech probe PASS voice=%s speech_seconds=%.2f',
+                         label,len(pcm)/BYTES_PER_SECOND)
+            except Exception as exc:
+                log.info('Party batch speech probe unavailable voice=%s (%s)',label,type(exc).__name__)
+
     if resolve_direct is not None:
         pipe=GreetingPipe()
         try:

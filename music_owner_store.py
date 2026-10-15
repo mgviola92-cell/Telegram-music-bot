@@ -8,6 +8,8 @@ import logging
 import os
 import string
 import time
+import tempfile
+from pathlib import Path
 from pyrogram.types import InputMediaDocument
 from pyrogram.enums import ParseMode
 
@@ -125,8 +127,14 @@ class MusicOwnerStore:
             new_id=msg.id
         else:
             try:
-                await asyncio.wait_for(self.client.edit_message_media('me',self.message_id,
-                    InputMediaDocument(f,caption=TAG,parse_mode=ParseMode.DISABLED)),15)
+                # pyrogrammod 2.4.1's document edit guesses MIME from a path,
+                # even when InputMediaDocument accepts BytesIO. Stage privately.
+                with tempfile.TemporaryDirectory(prefix='mudyar_owner_') as folder:
+                    path=Path(folder)/FILE
+                    path.write_bytes(raw)
+                    path.chmod(0o600)
+                    await asyncio.wait_for(self.client.edit_message_media('me',self.message_id,
+                        InputMediaDocument(str(path),caption=TAG,parse_mode=ParseMode.DISABLED),file_name=FILE),15)
             except Exception as exc:
                 if type(exc).__name__!='MessageNotModified':raise
             new_id=self.message_id

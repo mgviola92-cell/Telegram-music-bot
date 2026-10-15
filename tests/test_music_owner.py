@@ -1,6 +1,7 @@
 import asyncio
 import io
 import json
+from pathlib import Path
 import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -19,10 +20,14 @@ class SavedClient:
         if self.fail:raise RuntimeError('offline')
         assert chat=='me'
         self.raw=file.read();self.writes+=1;return SimpleNamespace(id=42)
-    async def edit_message_media(self,chat,message,media):
+    async def edit_message_media(self,chat,message,media,**kwargs):
         if self.fail:raise RuntimeError('offline')
         assert chat=='me' and message==42
-        self.raw=media.media.read();self.writes+=1
+        assert isinstance(media.media,str), 'Pyrogram document replacement requires a path'
+        path=Path(media.media)
+        assert path.is_file() and path.stat().st_mode & 0o777 == 0o600
+        self.edited_path=path
+        self.raw=path.read_bytes();self.writes+=1
 
 class OwnerStoreChecks(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
@@ -51,6 +56,7 @@ class OwnerStoreChecks(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(restart.data['voice'],'female')
         self.assertEqual(restart.data['groups']['-1001'],'မြန်မာ Group')
         self.assertEqual(restart.message_id,42)
+        self.assertFalse(self.client.edited_path.exists())
         welcome=WelcomeAudio(restart)
         self.assertEqual(welcome.voice(-1001),'female')
         self.assertIn('ခန့်',welcome.render('ခန့်'))

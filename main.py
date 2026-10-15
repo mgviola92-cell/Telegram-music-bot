@@ -2516,6 +2516,8 @@ async def main() -> None:
 
     @calls.on_update(call_filters.chat_update(ChatUpdate.Status.LEFT_CALL))
     async def call_left(_: PyTgCalls, update: ChatUpdate) -> None:
+        if shutdown.is_set():
+            return
         log.warning("Telegram VC state changed in chat %s (status=%s)", update.chat_id, update.status)
         welcome.close_chat(update.chat_id)
         player = players.get(update.chat_id)
@@ -2636,6 +2638,8 @@ async def main() -> None:
 
     @calls.on_update(call_filters.stream_end())
     async def stream_end(_: PyTgCalls, update: StreamEnded) -> None:
+        if shutdown.is_set():
+            return
         player = players.get(update.chat_id)
         if player is None or update.stream_type != StreamEnded.Type.AUDIO:
             return

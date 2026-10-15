@@ -86,7 +86,7 @@ class Player:
     panel_is_photo: bool = False
     progress_task: asyncio.Task | None = None
     announce_task: asyncio.Task | None = None
-    stream_enabled: bool = True
+    stream_enabled: bool = False
 
 
 def voice_slot_count(players: dict[int, Player]) -> int:
@@ -495,7 +495,7 @@ class StreamOnlyPlaybackError(RuntimeError):
 
 
 def stream_only_enabled() -> bool:
-    return os.getenv("MUSIC_STREAM_ONLY", "1") != "0"
+    return os.getenv("MUSIC_STREAM_ONLY", "0") != "0"
 
 
 def resolve_stream_only(query: str, cancel_signal: threading.Event | None = None):
@@ -1507,7 +1507,7 @@ async def main() -> None:
 
     @bot.on_message(filters.command("stream") & filters.group)
     async def stream_command(_: Client, msg: Message) -> None:
-        """Direct CDN audio is enabled by default; local media remains the fallback."""
+        """Direct CDN audio is optional; normal playback uses the verified download path."""
         if stream_only_enabled():
             await msg.reply_text("📡 Stream-only mode: ON\n/play က Direct HTTPS ပဲ သုံးမယ်။ Download fallback ပိတ်ထားတယ်။")
             return

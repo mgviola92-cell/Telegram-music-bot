@@ -96,7 +96,7 @@ class QueuePrefetchTest(unittest.IsolatedAsyncioTestCase):
         def loader(src, video, cancel_signal, prefer_stream=False):
             self.assertTrue(prefer_stream)
             return url, "Example", 120.
-        player = Player(current=Track("Playing", "current", youtube=True),
+        player = Player(stream_enabled=True, current=Track("Playing", "current", youtube=True),
                         queue=deque([Track("Next", "next", youtube=True)]))
         with patch("main.download_song", side_effect=loader):
             prepare_next_song(player)
@@ -105,7 +105,7 @@ class QueuePrefetchTest(unittest.IsolatedAsyncioTestCase):
     async def test_changing_stream_mode_replaces_preparation(self):
         def loader(src, video, cancel_signal, prefer_stream=False):
             return "example.mp3", "Example", 120.
-        player = Player(current=Track("Playing", "current", youtube=True),
+        player = Player(stream_enabled=True, current=Track("Playing", "current", youtube=True),
                         queue=deque([Track("Next", "next", youtube=True)]))
         with patch("main.download_song", side_effect=loader), patch("main.clean_temp"):
             prepare_next_song(player)

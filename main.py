@@ -7,6 +7,7 @@ import asyncio
 import logging
 import os
 import shutil
+import signal
 import tempfile
 import threading
 import time
@@ -31,6 +32,7 @@ from stream_probe import probe_audio_url
 from network_audio import DirectAudioStream
 from bot_source_probe import run_bot_source_probe
 from lybot_source import LyBotSource, BotSourceUnavailable, resolve_with_fallback, run_live_probe
+from voice_transport import clear_stale_voice, ensure_native_sender, AudioTransportUnavailable
 from direct_stream import (resolve_soundcloud_https,
                            cached_search, remember_search, forget_search)
 from player_visuals import (player_caption, artwork_for, artwork_is_safe, stream_headers_for, allowed_audio_cdn, save_artwork)
@@ -142,6 +144,7 @@ async def play_with_reconnect(calls: PyTgCalls, chat_id: int, stream: MediaStrea
             calls.play(chat_id, stream, GroupCallConfig(auto_start=False)),
             timeout=40,
         )
+        await ensure_native_sender(calls, chat_id)
     except asyncio.CancelledError:
         raise
     except Exception as exc:
@@ -159,6 +162,7 @@ async def play_with_reconnect(calls: PyTgCalls, chat_id: int, stream: MediaStrea
             timeout=40,
         )
 
+        await ensure_native_sender(calls, chat_id)
 
 class AudioFramesStalled(RuntimeError):
     """The decoder was accepted but its outgoing media clock never advanced."""
@@ -732,6 +736,8 @@ async def main() -> None:
     max_groups = max(1, min(8, int(os.getenv("MAX_ACTIVE_GROUPS", "4"))))
     players: dict[int, Player] = defaultdict(Player)
     ready = False
+    fresh_voice_chats: set[int] = set()
+    shutdown = asyncio.Event()
 
     assistant = Client(
         "music_assistant",
@@ -1147,6 +1153,12 @@ async def main() -> None:
 
                     if cancel_signal.is_set():
                         raise asyncio.CancelledError()
+                    if chat_id not in fresh_voice_chats:
+                        try:
+                            await asyncio.wait_for(clear_stale_voice(assistant, chat_id, identity.id), timeout=8)
+                        except Exception as stale_exc:
+                            log.info("Previous VC participation check unavailable (%s)", type(stale_exc).__name__)
+                        fresh_voice_chats.add(chat_id)
                     log.info("VC play requested chat %s (direct=%s)",
                              chat_id, allowed_audio_cdn(source))
                     try:
@@ -1162,6 +1174,8 @@ async def main() -> None:
                         if not song.video:
                             await wait_for_audio_frames(calls, chat_id)
                     except Exception as live_exc:
+                        if isinstance(live_exc, AudioTransportUnavailable):
+                            raise
                         if song.youtube and not song.video and stream_only_enabled():
                             log.warning("Stream-only playback failed (%s); download fallback disabled",
                                         type(live_exc).__name__)
@@ -1227,6 +1241,8 @@ async def main() -> None:
                         error_message = ("⚠️ Telegram Media Download မအောင်မြင်ဘူး။ "
                                          "HTTPS Bot API နဲ့ MTProto နှစ်ခုစလုံးမရနိုင်တာပါ။ "
                                          "နောက်မှ ပြန်စမ်းပေးပါ။")
+                    elif isinstance(exc, AudioTransportUnavailable):
+                        error_message = "🔇 VC အသံပို့တဲ့ connection မရသေးဘူး။ Assistant ကို Allow to Speak ပေးထားလား စစ်ပါ။"
                     elif isinstance(exc, AudioFramesStalled):
                         error_message = "🔇 VC ချိတ်ထားပေမဲ့ အသံ data မထွက်လာဘူး။ ပြန်ချိတ်ဖို့ /stop ပြီး /play စမ်းပါ။"
                     elif type(exc).__name__ == "NoAudioSourceFound":
@@ -2011,6 +2027,9 @@ async def main() -> None:
     watchdog_task: asyncio.Task | None = None
     probe_task: asyncio.Task | None = None
     bot_probe_task: asyncio.Task | None = None
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        loop.add_signal_handler(sig, shutdown.set)
     try:
         await calls.start()  # Starts the assistant MTProto client.
         identity = await assistant.get_me()
@@ -2032,7 +2051,7 @@ async def main() -> None:
         if bot_probe_until and lybot is not None:
             bot_probe_task = asyncio.create_task(run_live_probe(lybot, bot_probe_until))
         watchdog_task = asyncio.create_task(watch_voice_connections())
-        await asyncio.Event().wait()
+        await shutdown.wait()
     finally:
         ready = False
         if probe_task is not None:
@@ -2044,9 +2063,30 @@ async def main() -> None:
         if watchdog_task is not None:
             watchdog_task.cancel()
             await asyncio.gather(watchdog_task, return_exceptions=True)
+        loading_tasks = []
         for player in players.values():
+            if player.loading_task is not None and not player.loading_task.done():
+                loading_tasks.append(player.loading_task)
+            cancel_active_loading(player)
+            discard_prepared(player)
+            for ui_task in (player.announce_task, player.progress_task):
+                if ui_task is not None:
+                    ui_task.cancel()
+        await asyncio.gather(*loading_tasks, return_exceptions=True)
+        async def leave_own_voice(chat_id):
+            try:
+                await asyncio.wait_for(calls.leave_call(chat_id), timeout=8)
+            except Exception:
+                pass
+        await asyncio.gather(*(leave_own_voice(chat_id) for chat_id in players))
+        for player in players.values():
+            if player.cancel_download is not None:
+                player.cancel_download.set()
+            discard_prepared(player)
             clean_temp(player.temp_file)
         await bot.stop()
+        if assistant.is_connected:
+            await assistant.stop()
         await runner.cleanup()
 
 

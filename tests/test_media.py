@@ -212,6 +212,7 @@ class SourceSelectionTest(unittest.TestCase):
 class ReconnectTest(unittest.IsolatedAsyncioTestCase):
     async def test_reconnect_retries_failed_vc_play_once(self):
         calls = MagicMock()
+        calls._binding = None
         calls.play = AsyncMock(side_effect=[RuntimeError("transport stale"), None])
         calls.leave_call = AsyncMock(return_value=None)
         with patch("main.asyncio.sleep", new_callable=AsyncMock):
@@ -221,6 +222,7 @@ class ReconnectTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_no_reconnection_when_first_play_succeeds(self):
         calls = MagicMock()
+        calls._binding = None
         calls.play = AsyncMock(return_value=None)
         calls.leave_call = AsyncMock()
         await play_with_reconnect(calls, -100123, object())
@@ -231,6 +233,7 @@ class ReconnectTest(unittest.IsolatedAsyncioTestCase):
         class NoActiveGroupCall(Exception):
             pass
         calls = MagicMock()
+        calls._binding = None
         calls.play = AsyncMock(side_effect=NoActiveGroupCall("no active group call"))
         calls.leave_call = AsyncMock()
         with self.assertRaises(NoActiveGroupCall):

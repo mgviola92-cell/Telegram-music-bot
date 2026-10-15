@@ -32,6 +32,7 @@ class DirectPlaybackFallbackTest(unittest.IsolatedAsyncioTestCase):
         announce = AsyncMock()
         namespace = dict(vars(main))
         namespace.update(players={123: player}, download_song=loader, lybot=None,
+                         fresh_voice_chats={123},
                          MediaStream=factory, calls=MagicMock(),
                          audio_stream=lambda src: factory(src, audio_flags=main.MediaStream.Flags.REQUIRED),
                          play_with_reconnect=playback, stream_only_enabled=lambda: strict,
@@ -80,7 +81,7 @@ class DirectPlaybackFallbackTest(unittest.IsolatedAsyncioTestCase):
         lybot.resolve=AsyncMock(return_value=('lybot.mp3','Example · LyBot',120))
         namespace=dict(vars(main))
         playback=AsyncMock();frames=AsyncMock()
-        namespace.update(players={123:player},lybot=lybot,download_song=MagicMock(side_effect=RuntimeError('no primary audio')),
+        namespace.update(players={123:player},fresh_voice_chats={123},lybot=lybot,download_song=MagicMock(side_effect=RuntimeError('no primary audio')),
                          calls=MagicMock(),audio_stream=MagicMock(return_value=object()),
                          play_with_reconnect=playback,wait_for_audio_frames=frames,
                          prepare_next_song=MagicMock(),clean_temp=MagicMock(),

@@ -31,7 +31,7 @@ class DirectPlaybackFallbackTest(unittest.IsolatedAsyncioTestCase):
         frame_check = AsyncMock(side_effect=[main.AudioFramesStalled("stalled"), None] if stalled else None)
         announce = AsyncMock()
         namespace = dict(vars(main))
-        namespace.update(players={123: player}, download_song=loader,
+        namespace.update(players={123: player}, download_song=loader, lybot=None,
                          MediaStream=factory, calls=MagicMock(),
                          audio_stream=lambda src: factory(src, audio_flags=main.MediaStream.Flags.REQUIRED),
                          play_with_reconnect=playback, stream_only_enabled=lambda: strict,
@@ -68,3 +68,28 @@ class DirectPlaybackFallbackTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_stream_only_stall_does_not_download_local_fallback(self):
         await self.check_fallback(constructor_failure=False, stalled=True, strict=True)
+
+    async def test_named_source_failure_uses_lybot_file_and_checks_vc_frames(self):
+        source_tree=ast.parse(Path(main.__file__).read_text())
+        outer=next(n for n in source_tree.body if isinstance(n,ast.AsyncFunctionDef) and n.name=='main')
+        advance=next(n for n in outer.body if isinstance(n,ast.AsyncFunctionDef) and n.name=='advance')
+        song=main.Track('Example','Example',youtube=True)
+        player=main.Player(queue=deque([song]),stream_enabled=True)
+        lybot=MagicMock()
+        lybot.cached.return_value=None
+        lybot.resolve=AsyncMock(return_value=('lybot.mp3','Example · LyBot',120))
+        namespace=dict(vars(main))
+        playback=AsyncMock();frames=AsyncMock()
+        namespace.update(players={123:player},lybot=lybot,download_song=MagicMock(side_effect=RuntimeError('no primary audio')),
+                         calls=MagicMock(),audio_stream=MagicMock(return_value=object()),
+                         play_with_reconnect=playback,wait_for_audio_frames=frames,
+                         prepare_next_song=MagicMock(),clean_temp=MagicMock(),
+                         announce_now_playing=AsyncMock(),stream_only_enabled=lambda:False)
+        exec(compile(ast.Module(body=[advance],type_ignores=[]),main.__file__,'exec'),namespace)
+        await namespace['advance'](123)
+        await player.announce_task
+        self.assertIs(player.current,song)
+        self.assertEqual(player.temp_file,'lybot.mp3')
+        lybot.resolve.assert_awaited_once_with('Example')
+        frames.assert_awaited_once()
+        playback.assert_awaited_once()

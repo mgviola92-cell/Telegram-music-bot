@@ -209,3 +209,21 @@ Audio playback and recovery require an actual audio stream (`MediaStream.Flags.R
 After an audio play request, the loader waits up to eight seconds for the native outgoing media clock to advance. A direct stream that is accepted but supplies no frames triggers the local fallback once; the same failure on local audio produces an explicit error. Clock progress proves decoder frame flow, not listener-side audibility. Stop button requests and completions are logged for restart tracing.
 
 Optional diagnostic: `MUSIC_STREAM_PROBE_QUERY` resolves that named track on startup and compares three FFmpeg commands, each reading only a half-second PCM sample into RAM with a 15-second deadline. It does not join a VC. Errors redact URLs/tokens. Keep this variable empty during normal operation.
+
+
+### LyBot fallback for named audio
+
+`/play <song name>` keeps the existing direct SoundCloud path. With `LYBOT_ENABLED=1`
+(the default), named audio resolution waits up to 12 seconds for the primary
+provider, then tries the verified `@LyBot` using the existing assistant account.
+The LyBot request and transfer have a 28-second deadline; a busy bridge waits at
+most 2 seconds for its single request lock. Cancellation cleans partial media.
+No sign-in challenge, subscription, or payment button is handled automatically.
+Explicit YouTube URLs, videos and strict stream-only mode retain their existing behavior.
+
+LyBot audio uses a bounded temporary local file (20 MiB / 10 minutes maximum),
+then the normal FFmpeg/VC player. This fallback is not disk-free direct streaming.
+A 15-minute cache reuses the existing shared 2-file / 36 MiB cache budget.
+A matching cached fallback skips another search. No bot token or session is logged.
+Set `LYBOT_ENABLED=0` to disable this fallback. The opt-in startup diagnostic
+`MUSIC_BOT_PROBE_UNTIL` is off at `0`, and only accepts a timestamp within 15 minutes.

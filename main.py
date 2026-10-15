@@ -30,6 +30,7 @@ from prefetch import PreparedAudio
 from stream_probe import probe_audio_url
 from network_audio import DirectAudioStream
 from bot_source_probe import run_bot_source_probe
+from lybot_source import LyBotSource, BotSourceUnavailable, resolve_with_fallback, run_live_probe
 from direct_stream import (resolve_soundcloud_https,
                            cached_search, remember_search, forget_search)
 from player_visuals import (player_caption, artwork_for, artwork_is_safe, stream_headers_for, allowed_audio_cdn, save_artwork)
@@ -747,6 +748,7 @@ async def main() -> None:
         in_memory=True,
     )
     calls = PyTgCalls(assistant, workers=min(max_groups, 4))
+    lybot = LyBotSource(assistant) if os.getenv("LYBOT_ENABLED", "1") != "0" else None
 
     async def is_chat_admin(chat_id: int, user_id: int | None) -> bool:
         if not user_id:
@@ -1063,16 +1065,39 @@ async def main() -> None:
                 try:
                     source = song.source
                     if song.youtube:
-                        prepared = player.prepared
-                        if prepared is not None and prepared.track is song:
+                        use_lybot = (lybot is not None and not song.video
+                                     and not stream_only_enabled() and not is_youtube_url(source))
+                        if use_lybot:
+                            prepared = player.prepared
                             player.prepared = None
-                            log.info("Next queued track is using background prefetch")
-                            try:
-                                local_file, title, duration_seconds = await asyncio.wait_for(
-                                    prepared.consume(), timeout=100
-                                )
-                            except Exception:
-                                log.info("Prefetch unavailable; trying ordinary track resolution")
+                            if (prepared is None or prepared.track is not song
+                                    or prepared.prefer_stream != player.stream_enabled):
+                                if prepared is not None:
+                                    prepared.discard()
+                                prepared = PreparedAudio(song, download_song, clean_temp,
+                                                         prefer_stream=player.stream_enabled)
+                            local_file, title, duration_seconds = await resolve_with_fallback(
+                                prepared, source, lybot)
+                        else:
+                            prepared = player.prepared
+                            if prepared is not None and prepared.track is song:
+                                player.prepared = None
+                                log.info("Next queued track is using background prefetch")
+                                try:
+                                    local_file, title, duration_seconds = await asyncio.wait_for(
+                                        prepared.consume(), timeout=100
+                                    )
+                                except Exception:
+                                    log.info("Prefetch unavailable; trying ordinary track resolution")
+                                    local_file, title, duration_seconds = await asyncio.wait_for(
+                                        asyncio.to_thread(
+                                            download_song, source, song.video, cancel_signal,
+                                            player.stream_enabled,
+                                        ),
+                                        timeout=100,
+                                    )
+                            else:
+                                discard_prepared(player)
                                 local_file, title, duration_seconds = await asyncio.wait_for(
                                     asyncio.to_thread(
                                         download_song, source, song.video, cancel_signal,
@@ -1080,15 +1105,6 @@ async def main() -> None:
                                     ),
                                     timeout=100,
                                 )
-                        else:
-                            discard_prepared(player)
-                            local_file, title, duration_seconds = await asyncio.wait_for(
-                                asyncio.to_thread(
-                                    download_song, source, song.video, cancel_signal,
-                                    player.stream_enabled,
-                                ),
-                                timeout=100,
-                            )
                         song.duration_seconds = duration_seconds
                         if cancel_signal.is_set():
                             clean_temp(local_file)
@@ -1200,6 +1216,8 @@ async def main() -> None:
                     log.exception("Could not play track in chat %s", chat_id)
                     if isinstance(exc, StreamOnlyPlaybackError):
                         error_message = "📡 Direct streaming မအောင်မြင်ဘူး။ ဒီစမ်းသပ်မှုမှာ Download နဲ့ file cache ကို ပိတ်ထားတယ်။"
+                    elif isinstance(exc, BotSourceUnavailable):
+                        error_message = "⚠️ သီချင်းရင်းမြစ်တွေက အချိန်မီ audio မပေးနိုင်ဘူး။ သီချင်းနာမည်နဲ့ အဆိုတော် ထည့်ပြီး ပြန်စမ်းပါ။"
                     elif type(exc).__name__ == "NoActiveGroupCall":
                         error_message = ("🎙 Group Voice Chat ကို Admin က ဖွင့်ပေးပါ။ "
                                          "Assistant က /play နဲ့ အလိုအလျောက် ဝင်ပေးမယ်။")
@@ -2003,6 +2021,7 @@ async def main() -> None:
         ready = True
         log.info("Music Bot started; maximum active voice chats: %s", max_groups)
         log.info("Named audio stream-only mode: %s", stream_only_enabled())
+        log.info("LyBot audio fallback enabled: %s", lybot is not None)
         probe_query = os.getenv("MUSIC_STREAM_PROBE_QUERY", "").strip()[:160]
         if probe_query:
             probe_task = asyncio.create_task(run_stream_probe(probe_query))
@@ -2010,9 +2029,8 @@ async def main() -> None:
             bot_probe_until = float(os.getenv("MUSIC_BOT_PROBE_UNTIL", "0"))
         except ValueError:
             bot_probe_until = 0
-        if bot_probe_until:
-            bot_probe_task = asyncio.create_task(run_bot_source_probe(
-                assistant, enabled_until=bot_probe_until))
+        if bot_probe_until and lybot is not None:
+            bot_probe_task = asyncio.create_task(run_live_probe(lybot, bot_probe_until))
         watchdog_task = asyncio.create_task(watch_voice_connections())
         await asyncio.Event().wait()
     finally:

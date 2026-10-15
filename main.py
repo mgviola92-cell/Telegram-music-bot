@@ -1286,14 +1286,14 @@ async def main() -> None:
             "Group VC ဖွင့်ပြီး /play Faded လို့ သီချင်းနာမည် ရိုက်နိုင်တယ်။\n"
             "Audio File ကို Reply လုပ်ပြီး /play လည်းရတယ်။\n"
             "Video: ကိုယ်ပိုင် MP4 ကို Reply လုပ်ပြီး /vplay သုံးပါ။\n"
-            "Music: SoundCloud ကို အရင်ရှာပြီး open-license Archive Source နဲ့ ဖြည့်တင်းမယ်။\n"
+            "Music: SoundCloud ကို အဓိကသုံးပြီး မရရင် LyBot အရန် Source ကို စမ်းမယ်။\n"
             "YouTube VC Audio: Server Verification ကြောင့် လောလောဆယ် ပိတ်ထားတယ်။\n"
             "Private Group: Music Bot ကို Admin + Invite Users ပေးထားပါ။\n"
             "/play /vplay /queue /now /skip /pause /resume /stop\n"
             "/shuffle /remove 1 /clear /loop — Admin Controls\n"
             "/radio on|off — Authorized radio fallback\n"
             "/idle on|off — Queue ကုန်ရင် VC ထဲဆက်နေမလား\n"
-            "/stream on|off — Experimental direct HTTPS audio\n"
+            "/stream on|off — Direct HTTPS audio\n"
             "/ping — bot online ဖြစ်မဖြစ် စစ်မယ်။\n\n"
             "Direct HTTPS audio link တွေအတွက် server-side host allowlist လိုတယ်။",
             reply_markup=add_button,

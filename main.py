@@ -19,7 +19,7 @@ from urllib.parse import quote, urlsplit
 
 from aiohttp import ClientSession, ClientTimeout, web
 from pyrogram import Client, filters
-from pyrogram.enums import ChatMemberStatus
+from pyrogram.enums import ChatMemberStatus, ChatType
 from pyrogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from music_ui import player_controls, queue_display, queue_remove, queue_shuffle, queue_track_title, queue_popup
 from audius_source import fetch_audius_audio
@@ -36,7 +36,7 @@ from voice_transport import clear_stale_voice, ensure_native_sender, AudioTransp
 from source_race import ParallelSources
 from track_metadata import remember_metadata, lookup_metadata
 from queue_receipts import acknowledge_queued, schedule_receipts
-from song_recognition import SongRecognizer, recognition_media
+from song_recognition import SongRecognizer, recognition_media, send_recognized_audio
 from pyrogram.enums import ParseMode
 from types import SimpleNamespace
 from direct_stream import (resolve_soundcloud_https,
@@ -1596,8 +1596,14 @@ async def main() -> None:
             await msg.reply_text("⏳ အခြားသီချင်း ခွဲခြားနေတယ်။ ခဏနေ ပြန်စမ်းပါ။")
             return
         progress = await msg.reply_text("🔎 အသံအပိုင်းတိုကို @VoiceShazamBot ဆီပို့ပြီး သီချင်းခွဲခြားနေတယ်…")
+        audio_path = None
+        token = None
         try:
-            title = await recognizer.recognize(msg.reply_to_message)
+            title, candidate = await recognizer.recognize(msg.reply_to_message, with_audio=True)
+            await progress.edit_text("🎵 " + title + "\n⏳ သီချင်းဖိုင် ယူနေတယ်…", parse_mode=ParseMode.DISABLED)
+            if candidate is None:
+                candidate = await recognition_source.find(title)
+            audio_path, _, audio_duration = await recognition_source.download(candidate)
             now = time.monotonic()
             for key, result in list(recognition_results.items()):
                 if result[3] < now:
@@ -1606,15 +1612,22 @@ async def main() -> None:
                 recognition_results.pop(next(iter(recognition_results)))
             token = uuid.uuid4().hex[:16]
             recognition_results[token] = (msg.chat.id, getattr(msg.from_user, "id", None), title, now + 600)
-            markup = InlineKeyboardMarkup([[InlineKeyboardButton("▶ ဖွင့်မယ်", callback_data="findplay:" + token)]]) if msg.chat.type in ("group", "supergroup") else None
-            await progress.edit_text("🎵 " + title + "\n\n/play " + title,
-                                     parse_mode=ParseMode.DISABLED, reply_markup=markup)
+            markup = InlineKeyboardMarkup([[InlineKeyboardButton("▶ ဖွင့်မယ်", callback_data="findplay:" + token)]])
+            await send_recognized_audio(bot, msg, audio_path, title, audio_duration, markup)
+            try:
+                await progress.delete()
+            except Exception:
+                pass
             log.info("Song recognition completed in chat %s", msg.chat.id)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
             log.info("Song recognition unavailable (%s)", type(exc).__name__)
-            await progress.edit_text("⚠️ ဒီအသံကနေ သီချင်းမခွဲခြားနိုင်သေးဘူး။ သီချင်းသံရှင်းတဲ့ အပိုင်းတိုနဲ့ ပြန်စမ်းပါ။")
+            if token:
+                recognition_results.pop(token, None)
+            await progress.edit_text("⚠️ သီချင်းဖိုင် မရသေးဘူး။ ခဏနေ /findsong ပြန်စမ်းပါ။")
+        finally:
+            clean_temp(audio_path)
 
     @bot.on_callback_query(filters.regex(r"^findplay:[a-f0-9]{16}$"))
     async def recognition_play(_: Client, cb: CallbackQuery) -> None:
@@ -1626,12 +1639,15 @@ async def main() -> None:
         if not cb.from_user or cb.from_user.id != result[1]:
             await cb.answer("သီချင်းရှာထားသူပဲ ဒီခလုတ်ကို သုံးနိုင်တယ်။", show_alert=True)
             return
+        if cb.message.chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP):
+            await cb.answer("VC ဖွင့်ဖို့ ဒီ Audio ကို group ထဲပို့ပြီး reply /play သုံးပါ။", show_alert=True)
+            return
         recognition_results.pop(token, None)
         await cb.answer()
         await cb.message.edit_reply_markup(reply_markup=None)
         proxy = SimpleNamespace(chat=cb.message.chat, from_user=cb.from_user,
                                 command=["play", result[2]], text="/play " + result[2],
-                                reply_to_message=None, reply_text=cb.message.edit_text)
+                                reply_to_message=cb.message, reply_text=cb.message.reply_text)
         await play_command(bot, proxy)
 
     def queue_text(player):

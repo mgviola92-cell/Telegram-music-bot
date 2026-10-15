@@ -4,7 +4,7 @@ import re
 import tempfile
 from pathlib import Path
 from bot_source_probe import audio_media
-from lybot_source import BotSourceUnavailable, song_button, subscription_gate
+from lybot_source import AudioCandidate, BotSourceUnavailable, song_button, subscription_gate
 
 MAX_INPUT = 20 * 1024 * 1024
 
@@ -56,7 +56,7 @@ class SongRecognizer:
         self.bot, self.source = bot, source
         self.busy = False
 
-    async def recognize(self, message):
+    async def recognize(self, message, *, with_audio=False):
         media = recognition_media(message)
         if not media or not 0 < int(getattr(media, 'file_size', 0) or 0) <= MAX_INPUT:
             raise ValueError('Reply to audio/video under 20 MB')
@@ -72,11 +72,11 @@ class SongRecognizer:
                     if not downloaded or not input_path.exists() or input_path.stat().st_size > MAX_INPUT:
                         raise BotSourceUnavailable('Media download failed')
                     await make_sample(input_path, sample)
-                    return await self.identify(sample)
+                    return await self.identify(sample, with_audio=with_audio)
         finally:
             self.busy = False
 
-    async def identify(self, sample):
+    async def identify(self, sample, *, with_audio=False):
         source = self.source
         # Share the text-search lock so responses cannot cross between requests.
         try:
@@ -106,10 +106,49 @@ class SongRecognizer:
                             raise BotSourceUnavailable('Assistant subscription required')
                         title = recognized_title(message)
                         if title:
-                            return title
+                            if not with_audio:
+                                return title
+                            media = audio_media(message)
+                            candidate = None
+                            if media:
+                                size = int(getattr(media, 'file_size', 0) or 0)
+                                duration = float(getattr(media, 'duration', 0) or 0)
+                                if not 0 < size <= MAX_INPUT or duration > 600:
+                                    raise BotSourceUnavailable('Recognized audio exceeds limits')
+                                candidate = AudioCandidate(source, title, message,
+                                                           title + ' · VoiceShazamBot', duration or None)
+                            return title, candidate
                         text = str(getattr(message, 'text', '') or '').casefold()
                         if any(s in text for s in ('not recognized', 'could not recognize', 'no matches', 'nothing found')):
                             raise BotSourceUnavailable('Song not recognized')
                     await asyncio.sleep(1)
         finally:
             source.lock.release()
+
+
+async def send_recognized_audio(bot, message, path, title, duration, markup):
+    """Upload our own MP3 with our caption and inline controls."""
+    with tempfile.TemporaryDirectory(prefix='mudyar_recognition_upload_') as folder:
+        upload = str(path)
+        if Path(path).suffix.lower() != '.mp3':
+            upload = str(Path(folder) / 'song.mp3')
+            process = await asyncio.create_subprocess_exec(
+                'ffmpeg', '-nostdin', '-v', 'error', '-y', '-i', str(path),
+                '-vn', '-c:a', 'libmp3lame', '-b:a', '128k', upload,
+                stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+            try:
+                async with asyncio.timeout(35):
+                    code = await process.wait()
+                if code or not Path(upload).exists() or not 0 < Path(upload).stat().st_size <= MAX_INPUT:
+                    raise BotSourceUnavailable('MP3 conversion failed')
+            finally:
+                if process.returncode is None:
+                    process.kill()
+                    await process.wait()
+        async with asyncio.timeout(45):
+            identity = await bot.get_me()
+            username = str(identity.username or '').lstrip('@')
+            caption = '@' + username if username else str(identity.first_name or 'မုဒြာ Music')
+            return await bot.send_audio(message.chat.id, upload, title=title[:120],
+                                        duration=int(duration or 0), caption=caption,
+                                        reply_to_message_id=message.id, reply_markup=markup)

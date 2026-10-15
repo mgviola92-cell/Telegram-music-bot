@@ -46,10 +46,10 @@ async def select_song(client, message, label):
         retries=1, timeout=10)
 
 
-async def decode_sample(data):
+async def decode_sample(data, *, seconds=0.5):
     """Check a half second of PCM from bounded Telegram bytes, only in memory."""
     process = await asyncio.create_subprocess_exec(
-        'ffmpeg', '-v', 'error', '-i', 'pipe:0', '-t', '0.5',
+        'ffmpeg', '-v', 'error', '-i', 'pipe:0', '-t', str(seconds),
         '-vn', '-f', 's16le', '-ar', '48000', '-ac', '2', 'pipe:1',
         stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
@@ -117,7 +117,7 @@ async def run_bot_source_probe(client, *, enabled_until, query='Chan Chan Buddha
                         if len(data) >= MAX_BYTES:
                             break
                 await asyncio.wait_for(collect(), timeout=40)
-                result = await decode_sample(bytes(data))
+                result = await decode_sample(bytes(data), seconds=15)
                 result.update({'telegram_bytes': len(data), 'complete_file': bool(size and len(data) == size), 'seconds': round(time.monotonic()-started, 2)})
                 log.info('Bot source probe decode result %s', json.dumps(result))
                 return

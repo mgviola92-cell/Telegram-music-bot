@@ -36,7 +36,7 @@ from music_stats import record_play, stats_text, stats_popup
 from music_cleanup import housekeeping
 from feature_probe import run_feature_probe
 from bot_source_probe import run_bot_source_probe
-from lybot_source import LyBotSource, BotSourceUnavailable, resolve_with_fallback, run_live_probe
+from lybot_source import LyBotSource, BotSourceUnavailable, resolve_with_fallback, run_live_probe, run_candidate_probes, APPROVED_BOTS
 from voice_transport import clear_stale_voice, ensure_native_sender, AudioTransportUnavailable
 from source_race import ParallelSources
 from track_metadata import remember_metadata, lookup_metadata
@@ -839,7 +839,7 @@ async def main() -> None:
     )
     calls = PyTgCalls(assistant, workers=min(max_groups, 4))
     source_names = [name.strip() for name in os.getenv("MUSIC_BOT_SOURCES", "LyBot,Song_Vkm_bot,VoiceShazamBot").split(",")
-                    if name.strip() in {"LyBot", "Song_Vkm_bot", "VoiceShazamBot"}]
+                    if name.strip() in APPROVED_BOTS]
     lybot = (ParallelSources([LyBotSource(assistant, name) for name in dict.fromkeys(source_names)], clean_temp)
              if os.getenv("LYBOT_ENABLED", "1") != "0" else None)
     recognition_source = next((s for s in lybot.sources if s.username == "VoiceShazamBot"), None) if lybot else None
@@ -2565,6 +2565,7 @@ async def main() -> None:
     watchdog_task: asyncio.Task | None = None
     probe_task: asyncio.Task | None = None
     bot_probe_task: asyncio.Task | None = None
+    candidate_probe_task: asyncio.Task | None = None
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, shutdown.set)
@@ -2589,6 +2590,12 @@ async def main() -> None:
         if bot_probe_until and lybot is not None:
             bot_probe_task = asyncio.create_task(run_live_probe(lybot, bot_probe_until))
         try:
+            candidate_probe_until = float(os.getenv("MUSIC_CANDIDATE_PROBE_UNTIL", "0"))
+        except ValueError:
+            candidate_probe_until = 0
+        if candidate_probe_until and lybot is not None:
+            candidate_probe_task = asyncio.create_task(run_candidate_probes(assistant, lybot, candidate_probe_until))
+        try:
             feature_probe_until = float(os.getenv("MUSIC_FEATURE_PROBE_UNTIL", "0"))
         except ValueError:
             feature_probe_until = 0
@@ -2609,6 +2616,9 @@ async def main() -> None:
         if probe_task is not None:
             probe_task.cancel()
             await asyncio.gather(probe_task, return_exceptions=True)
+        if candidate_probe_task is not None:
+            candidate_probe_task.cancel()
+            await asyncio.gather(candidate_probe_task, return_exceptions=True)
         if bot_probe_task is not None:
             bot_probe_task.cancel()
             await asyncio.gather(bot_probe_task, return_exceptions=True)

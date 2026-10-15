@@ -12,6 +12,7 @@ from song_cache import get_cached_song, save_cached_song
 
 LOG = logging.getLogger('telegram_music')
 MAX_BYTES = 20 * 1024 * 1024
+APPROVED_BOTS = frozenset({"LyBot", "Song_Vkm_bot", "VoiceShazamBot", "vkmusic_bot", "mp3robot"})
 
 
 class BotSourceUnavailable(RuntimeError):
@@ -67,7 +68,7 @@ def matches_query(media, query):
 
 class LyBotSource:
     def __init__(self, client, username='LyBot', *, trace=False):
-        if username not in {'LyBot', 'Song_Vkm_bot', 'VoiceShazamBot'}:
+        if username not in APPROVED_BOTS:
             raise ValueError('Unapproved music bot')
         self.client, self.username, self.trace = client, username, trace
         self.lock = asyncio.Lock()
@@ -251,3 +252,14 @@ async def run_live_probe(source, enabled_until):
             if path:
                 shutil.rmtree(Path(path).parent,ignore_errors=True)
     await asyncio.gather(*(probe(provider) for provider in getattr(source,'sources',[source])))
+
+
+async def run_candidate_probes(client, active, enabled_until):
+    """Compare adjacent queries sequentially; candidates stay out of normal races."""
+    if not 0 < enabled_until - time.time() <= 900:
+        return
+    baseline = next((s for s in getattr(active, 'sources', []) if s.username == 'VoiceShazamBot'), None)
+    if baseline is not None:
+        await run_live_probe(baseline, enabled_until)
+    for name in ('vkmusic_bot', 'mp3robot'):
+        await run_live_probe(LyBotSource(client, name), enabled_until)

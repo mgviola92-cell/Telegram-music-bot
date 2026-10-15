@@ -1170,7 +1170,7 @@ async def main() -> None:
                 log.warning("Could not revoke temporary invite for chat %s", chat_id)
 
     async def start_idle(
-        chat_id: int, player: Player, progress: Message | None = None
+        chat_id: int, player: Player, progress: Message | None = None, *, quiet: bool = False
     ) -> bool:
         """Preserve a live VC after the queue ends without faking radio audio.
 
@@ -1182,7 +1182,7 @@ async def main() -> None:
         options: list[tuple[str, str]] = []
         radio = (
             (radio_catalog.stations[player.radio_station].url
-             if player.radio_station in radio_catalog.stations else configured_radio_url()) if player.radio_enabled
+             if player.radio_station in radio_catalog.stations else configured_radio_url()) if player.radio_enabled and not quiet
             and time.monotonic() >= player.radio_retry_after else None
         )
         if radio:
@@ -1565,6 +1565,7 @@ async def main() -> None:
             "/shuffle /remove 1 /clear /loop — Admin Controls\n"
             "/radio — Local / International radio\n"
             "/welcome — မြန်မာ VC/Group ကြိုဆိုအသံ\n"
+            "/လူတောင်းပွဲ — VC လူတောင်းပွဲ ကြိုဆိုပုံစံ\n"
             "/idle on|off — Queue ကုန်ရင် VC ထဲဆက်နေမလား\n"
             "/stream on|off — Direct HTTPS audio\n"
             "/ping — bot online ဖြစ်မဖြစ် စစ်မယ်။\n\n"
@@ -2099,6 +2100,7 @@ async def main() -> None:
     def welcome_menu(chat_id):
         text = ("🎙 မြန်မာ ကြိုဆိုအသံ\nMode: " + welcome.mode(chat_id) +
                 " · Voice: " + welcome.voices.get(chat_id, "male") +
+                "\nပုံစံ: " + ("လူတောင်းပွဲ" if welcome.styles.get(chat_id) == "party" else "ပုံမှန်ကြိုဆို") +
                 "\n" + ("အသံဝန်ဆောင်မှု အသင့်ဖြစ်ပြီ။" if welcome.ready else "အသံဝန်ဆောင်မှု ယာယီမရသေးဘူး။") +
                 "\nON/OFF ပြောင်းခြင်းက နောက်သီချင်း/ရေဒီယိုကစ သက်ရောက်မယ်။")
         def b(label, action):
@@ -2106,8 +2108,71 @@ async def main() -> None:
         return text, InlineKeyboardMarkup([
             [b("VC ဝင်သူ", "vc"), b("Group လူသစ်", "group")],
             [b("နှစ်မျိုးလုံး", "both"), b("OFF", "off")],
+            [b("ပုံမှန်ကြိုဆို", "normal"), b("လူတောင်းပွဲ", "party")],
             [b("👨 Thiha", "male"), b("👩 Nilar", "female")],
             [b("🔊 အသံစမ်းမယ်", "test")]])
+
+    @bot.on_message(filters.command(["လူတောင်းပွဲ", "partyvc"]) & filters.group)
+    async def welcome_party_command(_: Client, msg: Message) -> None:
+        if not await require_admin(msg):
+            return
+        chat_id = msg.chat.id
+        player = players[chat_id]
+        revision = player.radio_revision
+        if player.paused:
+            await msg.reply_text("▶️ သီချင်းကို Resume လုပ်ပြီးမှ /လူတောင်းပွဲ သုံးပါ။")
+            return
+        if player.loading_task and not player.loading_task.done():
+            await msg.reply_text("⏳ သီချင်းပြင်ဆင်နေတယ်။ ပြီးတာနဲ့ /လူတောင်းပွဲ ပြန်သုံးနိုင်တယ်။")
+            return
+        progress = await msg.reply_text("🎙 လူတောင်းပွဲ ကြိုဆိုအသံ ပြင်ဆင်နေတယ်…")
+        own_task = asyncio.current_task()
+        standalone = player.current is None and player.idle_mode is None
+        if standalone:
+            player.loading_task = own_task  # /stop can cancel preparation or VC join.
+        try:
+            if not welcome.ready:
+                if welcome_warmup_task and not welcome_warmup_task.done():
+                    await asyncio.wait_for(asyncio.shield(welcome_warmup_task),18)
+                else:
+                    await asyncio.wait_for(welcome.warmup(),18)
+            if not welcome.ready:
+                raise RuntimeError("Burmese speech unavailable")
+            welcome.styles[chat_id] = "party"
+            welcome.modes[chat_id] = "vc"
+            if standalone:
+                await ensure_assistant_in_group(msg.chat)
+            async with player.lock:
+                if player.radio_revision != revision:
+                    return
+                if standalone and player.current is None and player.idle_mode is None:
+                    if voice_slot_count(players) > max_groups:
+                        await progress.edit_text("⚠️ လက်ရှိ VC အရေအတွက် ပြည့်နေတယ်။ ခဏနေ ပြန်စမ်းပါ။")
+                        return
+                    if chat_id not in fresh_voice_chats:
+                        await asyncio.wait_for(clear_stale_voice(assistant,chat_id,identity.id),8)
+                        fresh_voice_chats.add(chat_id)
+                    player.keep_idle = True
+                    if not await start_idle(chat_id,player,quiet=True):
+                        raise RuntimeError("VC not available")
+                if not welcome.request(chat_id, msg.from_user.id if msg.from_user else 0,
+                                       "",force=True,delay=6):
+                    await progress.edit_text("🎙 လူတောင်းပွဲ ပုံစံ ဖွင့်ထားပြီ။ ကြိုဆိုအသံ ပြောနေဆဲဆို ခဏစောင့်ပါ။ "
+                                             "Mixer ပိတ်ထားခဲ့ရင် နောက်သီချင်း/Radio ကစ အသုံးဝင်မယ်။")
+                    return
+            text, keyboard = welcome_menu(chat_id)
+            await progress.edit_text("🎙 လူတောင်းပွဲ ဖွင့်ထားပြီ။ VC ဝင်လာသူကို ဒီပုံစံနဲ့ ကြိုဆိုမယ်။\n\n" + text,
+                                     reply_markup=keyboard)
+            player.welcome_panel_id = progress.id
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            log.info("Party welcome start failed (%s)",type(exc).__name__)
+            await progress.edit_text("⚠️ Group VC ကို အရင်ဖွင့်ထားပြီး ပြန်စမ်းပါ။ "
+                                     "Assistant permission နဲ့ အသံဝန်ဆောင်မှုလည်း ရဖို့လိုတယ်။")
+        finally:
+            if standalone and player.loading_task is own_task:
+                player.loading_task = None
 
     @bot.on_message(filters.command("welcome") & filters.group)
     async def welcome_command(_: Client, msg: Message) -> None:
@@ -2142,6 +2207,8 @@ async def main() -> None:
                             pipe.pending.get_nowait()
                         except Exception:
                             break
+        elif action in {"normal", "party"}:
+            welcome.styles[chat_id] = action
         elif action in {"male", "female"}:
             welcome.voices[chat_id] = action
         elif action == "test":
@@ -2171,7 +2238,12 @@ async def main() -> None:
         try:
             user = await asyncio.wait_for(assistant.get_users(update.participant.user_id),4)
             if not user.is_bot and not user.is_deleted:
-                welcome.request(update.chat_id,user.id,user.first_name)
+                async def still_present():
+                    if player.paused or update.chat_id not in welcome.pipes:
+                        return False
+                    participants = await calls.get_participants(update.chat_id)
+                    return any(p.user_id == user.id for p in participants)
+                welcome.request(update.chat_id,user.id,user.first_name,present=still_present)
         except Exception:
             pass
 
@@ -2772,6 +2844,14 @@ async def main() -> None:
         if 0 < radio_probe_until - time.time() <= 900:
             from radio_welcome_probe import run_radio_welcome_probe
             radio_probe_task = asyncio.create_task(run_radio_welcome_probe(radio_catalog, welcome, resolve_stream_only))
+        try:
+            party_probe_until = float(os.getenv("WELCOME_PARTY_PROBE_UNTIL", "0"))
+        except ValueError:
+            party_probe_until = 0
+        if 0 < party_probe_until - time.time() <= 900 and radio_probe_task is None:
+            from radio_welcome_probe import run_radio_welcome_probe
+            radio_probe_task = asyncio.create_task(run_radio_welcome_probe(
+                radio_catalog,welcome,resolve_stream_only,party_only=True))
         log.info("Music Bot started; maximum active voice chats: %s", max_groups)
         log.info("Named audio stream-only mode: %s", stream_only_enabled())
         log.info("Parallel music sources enabled: %s", source_names if lybot else [])

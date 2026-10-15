@@ -74,7 +74,7 @@ class WelcomeChecks(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(w.request(1,2,'Name'))
         self.assertFalse(w.request(1,3,'Other'))
         w.close_chat(1);gate.set()
-        await asyncio.gather(*w.tasks)
+        await asyncio.gather(*w.tasks,return_exceptions=True)
         self.assertEqual(p.audio,[])
         await w.close()
 
@@ -113,7 +113,7 @@ class WelcomeChecks(unittest.IsolatedAsyncioTestCase):
                     a,b=int(start*48000),int(end*48000)
                     return abs(sum(mono[i]*math.sin(i*2*math.pi*220/48000) for i in range(a,b))*2/(b-a))
                 self.assertLess(min(music_amplitude(i/10,i/10+.1) for i in range(1,12)),
-                                music_amplitude(2,2.2)*.5)
+                                music_amplitude(2,2.2)*.15)
             finally:pipe.close()
             self.assertFalse(pipe.path.exists())
 

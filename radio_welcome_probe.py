@@ -1,12 +1,13 @@
 """Expiring deployment-only network test; no Telegram messages or VC joins."""
 import asyncio
 import logging
-from welcome_audio import VOICES, greeting_text, GreetingPipe, mixing_command
+from welcome_audio import VOICES, greeting_text, GreetingPipe, mixing_command, BYTES_PER_SECOND, MAX_SECONDS
 
 log=logging.getLogger('telegram_music')
 
-async def run_radio_welcome_probe(catalog,welcome,resolve_direct=None):
-    await catalog.load_local()
+async def run_radio_welcome_probe(catalog,welcome,resolve_direct=None,*,party_only=False):
+    if not party_only:
+        await catalog.load_local()
     async def check(station):
         try:
             await catalog.verify(station.key)
@@ -14,10 +15,14 @@ async def run_radio_welcome_probe(catalog,welcome,resolve_direct=None):
         except Exception as exc:
             log.info('Radio live probe unavailable region=%s station=%s reason=%s',
                      station.region,station.name,type(exc).__name__)
-    await asyncio.gather(*(check(s) for s in list(catalog.stations.values())))
+    if not party_only:
+        await asyncio.gather(*(check(s) for s in list(catalog.stations.values())))
     for label,voice in VOICES.items():
         try:
-            pcm=await welcome.pcm(greeting_text('မောင်ခန့်'),voice)
+            style='party' if party_only else 'normal'
+            pcm=await welcome.pcm(greeting_text('မောင်ခန့်',style=style),voice)
+            if len(pcm)/BYTES_PER_SECOND >= MAX_SECONDS-.2:
+                raise RuntimeError('Speech duration limit reached')
             pipe=GreetingPipe()
             try:
                 pipe.offer(pcm)
@@ -33,8 +38,8 @@ async def run_radio_welcome_probe(catalog,welcome,resolve_direct=None):
                 finally:
                     if proc.returncode is None:
                         proc.kill();await proc.wait()
-                log.info('Welcome live probe PASS voice=%s tts_pcm_bytes=%s mixed_pcm_bytes=%s',
-                         label,len(pcm),len(output))
+                log.info('Welcome live probe PASS voice=%s style=%s speech_seconds=%.2f tts_pcm_bytes=%s mixed_pcm_bytes=%s',
+                         label,style,len(pcm)/BYTES_PER_SECOND,len(pcm),len(output))
             finally:
                 pipe.close()
         except Exception as exc:

@@ -2,11 +2,43 @@
 import asyncio
 import re
 import tempfile
+import time
+import logging
+from collections import OrderedDict
 from pathlib import Path
 from bot_source_probe import audio_media
 from lybot_source import AudioCandidate, BotSourceUnavailable, song_button, subscription_gate
 
 MAX_INPUT = 20 * 1024 * 1024
+LOG = logging.getLogger("telegram_music")
+
+
+class DeliveredAudioCache:
+    """Only this bot's Telegram file IDs; bounded, expiring, no audio bytes."""
+    def __init__(self):
+        self.items = OrderedDict()
+
+    def get(self, key):
+        if not key:
+            return None
+        row = self.items.get(key)
+        if row and row[0] > time.monotonic():
+            self.items.move_to_end(key)
+            return row[1]
+        self.items.pop(key, None)
+        return None
+
+    def discard(self, key):
+        self.items.pop(key, None)
+
+    def put(self, key, title, audio):
+        if not key or not audio or not getattr(audio, "file_id", None):
+            return
+        self.items[key] = (time.monotonic() + 3600,
+                           (title, audio.file_id, getattr(audio, "duration", 0) or 0))
+        self.items.move_to_end(key)
+        while len(self.items) > 64:
+            self.items.popitem(last=False)
 
 
 def recognition_media(message):
@@ -67,12 +99,19 @@ class SongRecognizer:
             async with asyncio.timeout(65):
                 with tempfile.TemporaryDirectory(prefix='mudyar_recognize_') as folder:
                     input_path, sample = Path(folder)/'input', Path(folder)/'sample.mp3'
+                    stage = time.monotonic()
                     async with asyncio.timeout(25):
                         downloaded = await self.bot.download_media(media.file_id, file_name=str(input_path))
                     if not downloaded or not input_path.exists() or input_path.stat().st_size > MAX_INPUT:
                         raise BotSourceUnavailable('Media download failed')
+                    LOG.info("Recognition input ready after %.2fs", time.monotonic() - stage)
+                    stage = time.monotonic()
                     await make_sample(input_path, sample)
-                    return await self.identify(sample, with_audio=with_audio)
+                    LOG.info("Recognition sample ready after %.2fs", time.monotonic() - stage)
+                    stage = time.monotonic()
+                    result = await self.identify(sample, with_audio=with_audio)
+                    LOG.info("Recognition identified after %.2fs", time.monotonic() - stage)
+                    return result
         finally:
             self.busy = False
 
@@ -121,16 +160,16 @@ class SongRecognizer:
                         text = str(getattr(message, 'text', '') or '').casefold()
                         if any(s in text for s in ('not recognized', 'could not recognize', 'no matches', 'nothing found')):
                             raise BotSourceUnavailable('Song not recognized')
-                    await asyncio.sleep(1)
+                    await asyncio.sleep(.5)
         finally:
             source.lock.release()
 
 
-async def send_recognized_audio(bot, message, path, title, duration, markup):
+async def send_recognized_audio(bot, message, path, title, duration, markup, *, file_id=None):
     """Upload our own MP3 with our caption and inline controls."""
     with tempfile.TemporaryDirectory(prefix='mudyar_recognition_upload_') as folder:
-        upload = str(path)
-        if Path(path).suffix.lower() != '.mp3':
+        upload = file_id or str(path)
+        if not file_id and Path(path).suffix.lower() != '.mp3':
             upload = str(Path(folder) / 'song.mp3')
             process = await asyncio.create_subprocess_exec(
                 'ffmpeg', '-nostdin', '-v', 'error', '-y', '-i', str(path),
@@ -146,9 +185,12 @@ async def send_recognized_audio(bot, message, path, title, duration, markup):
                     process.kill()
                     await process.wait()
         async with asyncio.timeout(45):
-            identity = await bot.get_me()
+            stage = time.monotonic()
+            identity = getattr(bot, "me", None) or await bot.get_me()
             username = str(identity.username or '').lstrip('@')
             caption = '@' + username if username else str(identity.first_name or 'မုဒြာ Music')
-            return await bot.send_audio(message.chat.id, upload, title=title[:120],
+            result = await bot.send_audio(message.chat.id, upload, title=title[:120],
                                         duration=int(duration or 0), caption=caption,
                                         reply_to_message_id=message.id, reply_markup=markup)
+            LOG.info("Recognition audio sent after %.2fs (Telegram reuse=%s)", time.monotonic() - stage, bool(file_id))
+            return result

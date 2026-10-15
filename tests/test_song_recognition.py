@@ -129,3 +129,67 @@ class RecognitionTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.gather(task, return_exceptions=True)
         self.assertTrue(task.cancelled())
         self.assertEqual(player.metadata_tasks, {})
+
+    def test_delivered_cache_is_bounded_expires_and_stores_our_file_ids(self):
+        from song_recognition import DeliveredAudioCache
+        from unittest.mock import patch
+        cache = DeliveredAudioCache()
+        with patch('song_recognition.time.monotonic', return_value=100):
+            for i in range(65):
+                cache.put(str(i), 'Purple', N(file_id='own-file-'+str(i), duration=168))
+            self.assertEqual(len(cache.items), 64)
+            self.assertIsNone(cache.get('0'))
+            self.assertEqual(cache.get('64'), ('Purple', 'own-file-64', 168))
+        with patch('song_recognition.time.monotonic', return_value=3701):
+            self.assertIsNone(cache.get('64'))
+        cache.discard('63')
+        self.assertIsNone(cache.get('63'))
+
+    async def test_reuse_our_telegram_file_without_upload_or_identity_rpc(self):
+        from song_recognition import send_recognized_audio
+        from unittest.mock import patch
+        bot = N(me=N(username='mudyar_music_bot'), get_me=AsyncMock(), send_audio=AsyncMock())
+        with patch('song_recognition.asyncio.create_subprocess_exec', new=AsyncMock()) as process:
+            await send_recognized_audio(bot, N(chat=N(id=-100), id=3), None, 'Purple', 168,
+                                        object(), file_id='our-telegram-file-id')
+            process.assert_not_awaited()
+        bot.get_me.assert_not_awaited()
+        self.assertEqual(bot.send_audio.call_args.args[1], 'our-telegram-file-id')
+
+    async def test_cached_clip_bypasses_recognition_and_download(self):
+        import ast
+        import logging
+        import time
+        import uuid
+        from song_recognition import DeliveredAudioCache
+        from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+        from pyrogram.enums import ParseMode
+        tree = ast.parse(Path('main.py').read_text())
+        node = next(n for n in ast.walk(tree) if isinstance(n, ast.AsyncFunctionDef) and n.name == 'findsong_command')
+        node.decorator_list = []
+        node.returns = None
+        for arg in node.args.args:
+            arg.annotation = None
+        cache = DeliveredAudioCache()
+        cache.put('clip:video123', 'Purple', N(file_id='our-file', duration=168))
+        source = N(download=AsyncMock(), find=AsyncMock())
+        recognizer = N(busy=False, recognize=AsyncMock())
+        progress = N(delete=AsyncMock(), edit_text=AsyncMock())
+        msg = N(reply_to_message=N(video=N(file_size=1000, file_unique_id='video123')),
+                chat=N(id=-100), from_user=N(id=7), reply_text=AsyncMock(return_value=progress))
+        sent = N(audio=N(file_id='our-file', duration=168))
+        sender = AsyncMock(return_value=sent)
+        namespace = dict(recognition_media=recognition_media, MAX_AUDIO_BYTES=20*1024*1024,
+                         recognizer=recognizer, delivered_audio=cache, time=time, uuid=uuid,
+                         recognition_source=source, recognition_results={}, InlineKeyboardMarkup=InlineKeyboardMarkup,
+                         InlineKeyboardButton=InlineKeyboardButton, send_recognized_audio=sender,
+                         bot=object(), log=logging.getLogger('test'), asyncio=asyncio, ParseMode=ParseMode,
+                         clean_temp=lambda path: None)
+        exec(compile(ast.Module(body=[node], type_ignores=[]), '<findsong>', 'exec'), namespace)
+        await namespace['findsong_command'](None, msg)
+        recognizer.recognize.assert_not_awaited()
+        source.find.assert_not_awaited()
+        source.download.assert_not_awaited()
+        self.assertEqual(sender.call_args.kwargs['file_id'], 'our-file')
+        self.assertEqual(msg.reply_text.call_args.args[0], '🔎 သီချင်းရှာနေတယ်…')
+        progress.delete.assert_awaited_once()

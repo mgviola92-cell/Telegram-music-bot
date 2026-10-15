@@ -36,7 +36,7 @@ from voice_transport import clear_stale_voice, ensure_native_sender, AudioTransp
 from source_race import ParallelSources
 from track_metadata import remember_metadata, lookup_metadata
 from queue_receipts import acknowledge_queued, schedule_receipts
-from song_recognition import SongRecognizer, recognition_media, send_recognized_audio
+from song_recognition import SongRecognizer, recognition_media, send_recognized_audio, DeliveredAudioCache
 from pyrogram.enums import ParseMode
 from types import SimpleNamespace
 from direct_stream import (resolve_soundcloud_https,
@@ -793,6 +793,7 @@ async def main() -> None:
     recognition_source = next((s for s in lybot.sources if s.username == "VoiceShazamBot"), None) if lybot else None
     recognizer = SongRecognizer(bot, recognition_source) if recognition_source else None
     recognition_results = {}
+    delivered_audio = DeliveredAudioCache()
     metadata_slots = asyncio.Semaphore(2)
 
     async def resolve_for_queue(song, prefer_stream):
@@ -1590,20 +1591,37 @@ async def main() -> None:
             await msg.reply_text("⚠️ 20 MB အောက် Audio / Video ကို သုံးပါ။")
             return
         if recognizer is None:
-            await msg.reply_text("⚠️ VoiceShazam source မဖွင့်ထားသေးဘူး။")
+            await msg.reply_text("⚠️ သီချင်းခွဲခြားတဲ့စနစ် မဖွင့်ထားသေးဘူး။")
             return
-        if recognizer.busy:
+        clip_key = "clip:" + str(getattr(media, "file_unique_id", "") or "") if getattr(media, "file_unique_id", None) else None
+        cached_audio = delivered_audio.get(clip_key)
+        if recognizer.busy and not cached_audio:
             await msg.reply_text("⏳ အခြားသီချင်း ခွဲခြားနေတယ်။ ခဏနေ ပြန်စမ်းပါ။")
             return
-        progress = await msg.reply_text("🔎 အသံအပိုင်းတိုကို @VoiceShazamBot ဆီပို့ပြီး သီချင်းခွဲခြားနေတယ်…")
+        progress = await msg.reply_text("🔎 သီချင်းရှာနေတယ်…")
         audio_path = None
         token = None
+        song_key = None
         try:
-            title, candidate = await recognizer.recognize(msg.reply_to_message, with_audio=True)
-            await progress.edit_text("🎵 " + title + "\n⏳ သီချင်းဖိုင် ယူနေတယ်…", parse_mode=ParseMode.DISABLED)
-            if candidate is None:
-                candidate = await recognition_source.find(title)
-            audio_path, _, audio_duration = await recognition_source.download(candidate)
+            started = time.monotonic()
+            if cached_audio:
+                title, own_file_id, audio_duration = cached_audio
+                log.info("Recognition clip cache hit")
+            else:
+                title, candidate = await recognizer.recognize(msg.reply_to_message, with_audio=True)
+                await progress.edit_text("🎵 " + title + "\n⏳ သီချင်းဖိုင် ယူနေတယ်…", parse_mode=ParseMode.DISABLED)
+                if candidate is None:
+                    candidate = await recognition_source.find(title)
+                source_media = getattr(candidate.message, "audio", None) or getattr(candidate.message, "document", None)
+                unique = getattr(source_media, "file_unique_id", None)
+                song_key = "song:" + unique if unique else None
+                known_song = delivered_audio.get(song_key)
+                if known_song:
+                    title, own_file_id, audio_duration = known_song
+                    log.info("Recognition song cache hit")
+                else:
+                    own_file_id = None
+                    audio_path, _, audio_duration = await recognition_source.download(candidate)
             now = time.monotonic()
             for key, result in list(recognition_results.items()):
                 if result[3] < now:
@@ -1613,15 +1631,22 @@ async def main() -> None:
             token = uuid.uuid4().hex[:16]
             recognition_results[token] = (msg.chat.id, getattr(msg.from_user, "id", None), title, now + 600)
             markup = InlineKeyboardMarkup([[InlineKeyboardButton("▶ ဖွင့်မယ်", callback_data="findplay:" + token)]])
-            await send_recognized_audio(bot, msg, audio_path, title, audio_duration, markup)
+            sent_audio = await send_recognized_audio(bot, msg, audio_path, title, audio_duration, markup,
+                                                     file_id=own_file_id)
+            if not sent_audio or not getattr(sent_audio, "audio", None):
+                raise RuntimeError("Audio delivery did not complete")
+            delivered_audio.put(clip_key, title, getattr(sent_audio, "audio", None))
+            delivered_audio.put(song_key, title, getattr(sent_audio, "audio", None))
             try:
                 await progress.delete()
             except Exception:
                 pass
-            log.info("Song recognition completed in chat %s", msg.chat.id)
+            log.info("Song recognition completed in chat %s after %.2fs", msg.chat.id, time.monotonic() - started)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
+            delivered_audio.discard(clip_key)
+            delivered_audio.discard(song_key)
             log.info("Song recognition unavailable (%s)", type(exc).__name__)
             if token:
                 recognition_results.pop(token, None)

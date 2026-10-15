@@ -144,7 +144,7 @@ class LyBotSource:
                             if label:
                                 selected_id, selected_label = message.id, label
                                 callback = asyncio.create_task(select_song(self.client, message, label))
-                    await asyncio.sleep(1)
+                    await asyncio.sleep(.5)
         except asyncio.CancelledError:
             raise
         except Exception as exc:

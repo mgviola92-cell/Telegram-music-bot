@@ -85,6 +85,9 @@ class MVSEPTests(unittest.IsolatedAsyncioTestCase):
             await ms.MVSEPSeparator('test-token').separate(self.path, self.path.with_name('out'))
         self.assertEqual(self.created,0)
         self.assertEqual(self.cleanup,[])
+    async def test_boolean_false_is_free_mode(self):
+        self.premium=False
+        self.assertTrue(await ms.MVSEPSeparator('test-token').preflight())
     async def test_existing_user_job_is_not_canceled_or_overlapped(self):
         self.queued=True
         with self.assertRaises(ms.KaraokeQuota):

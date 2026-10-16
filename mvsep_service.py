@@ -3,6 +3,7 @@ import asyncio
 import json
 import os
 import re
+import logging
 from pathlib import Path
 from urllib.parse import urlsplit
 from aiohttp import ClientSession, ClientTimeout, FormData
@@ -109,10 +110,17 @@ class MVSEPSeparator:
         async with session.get(BASE + '/api/app/user', params={'api_token': self.token},
                                allow_redirects=False) as response:
             row = await bounded_json(response)
-        user = row.get('data', {})
+        data = row.get('data', {})
+        candidates = [data, row.get('user'), row]
+        if isinstance(data,dict):candidates.insert(0,data.get('user'))
+        user = next((value for value in candidates if isinstance(value,dict) and 'premium_enabled' in value),{})
+        value = user.get('premium_enabled')
+        disabled = value in (False, 0, '0')
+        state = 'disabled' if disabled else 'enabled' if value in (True, 1, '1') else 'unknown'
+        logging.getLogger('telegram_music').info('MVSEP account gate premium_mode=%s',state)
         # Refuse paid mode rather than changing the owner's account preferences.
-        if not isinstance(user, dict) or str(user.get('premium_enabled')) != '0':
-            raise KaraokeQuota('MVSEP must have premium spending disabled')
+        if not disabled:
+            raise KaraokeQuota('MVSEP premium spending is enabled' if state=='enabled' else 'MVSEP premium spending status unavailable')
         if user.get('current_queue') not in (None, False, 0, '0', [], {}):
             raise KaraokeQuota('MVSEP already has an active separation')
         return True

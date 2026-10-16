@@ -45,9 +45,16 @@ player-card feature only after this verification and report its limitations.
 16 October: authenticated account/API and synthetic upload passed. The account's
 premium-credit consumption was disabled and re-read as disabled. One 20.064-second
 sample stayed waiting for four minutes and timed out before GPU processing.
-No instrumental result or real-song quality has passed yet. A second isolated
-diagnostic may wait up to ten minutes; normal user jobs retain four-minute remote
-and five-minute total limits. The player-card UI is prepared but disabled by default.
+The second isolated diagnostic also stayed in `waiting` for ten minutes and
+timed out without reaching GPU processing (11:33:40Z–11:43:41Z). No instrumental
+result or real-song quality has passed. Do not enable the feature based on the
+unit tests or successful upload alone. Free queue latency did not meet the
+requested practical experience during these tests. The player-card UI remains
+prepared but disabled (`MUSIC_KARAOKE_ENABLED=0`). Clear `MVSEP_PROBE_UNTIL`
+and `MVSEP_PROBE_DISABLE_PREMIUM` to zero after this session; no automatic retry.
+Normal user jobs retain four-minute remote and five-minute total limits.
+During the second waiting test Render memory was about 188 MiB out of 512 MiB;
+this is an idle queue-wait observation, not a concurrent-playback benchmark.
 After a technical remote PASS, set `MUSIC_KARAOKE_ENABLED=1` and
 `MVSEP_PROBE_UNTIL=0`. This exposes a beta Karaoke button for group admins.
 It takes the exact currently playing song, keeps playback running, and returns

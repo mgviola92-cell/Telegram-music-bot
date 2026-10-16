@@ -1603,8 +1603,7 @@ async def main() -> None:
             "Private Group: Music Bot ကို Admin + Invite Users ပေးထားပါ။\n"
             "/play (/p) /search /vplay /queue /now /skip (/s)\n"
             "/pause /resume /stop /clear (/c)\n"
-            "/quality /normalize /effects — နောက်သီချင်းအတွက် အသံညှိမယ်\n"
-            "/effect — Radio / Echo / Chorus / Tremolo / Vibrato / Wide / Chipmunk / Tiny Voice\n"
+            "အသံညှိရန် သီချင်းကဒ်ထဲက Effects / Quality / Normalize ခလုတ်တွေ သုံးပါ။\n"
             "/autoplay on|off · /toptracks /stats\n"
             "/shuffle /remove 1 /clear /loop — Admin Controls\n"
             "/radio — Local / International radio\n"
@@ -1849,73 +1848,10 @@ async def main() -> None:
                                 selected_track=choice_track(choice))
         await play_command(bot, proxy)
 
-    def audio_menu(player):
-        settings = player.audio_settings
-        text = (f"🎛 Audio Settings\nQuality: {settings.quality.upper()}\n"
-                f"Normalize: {'ON' if settings.normalize else 'OFF'}\nEffect: {EFFECT_LABELS[settings.effect]}\n\n"
-                "နောက်သီချင်းကစ သက်ရောက်မယ်။ /effect normal နဲ့ effect ပိတ်နိုင်တယ်။\n"
-                "High 48kHz stereo · Medium 36kHz mono · Low 24kHz mono\n"
-                "Wide Stereo ကို High quality နဲ့ သုံးပါ။")
-        rows=[
-            [InlineKeyboardButton(q.title(), callback_data="audio:quality:"+q) for q in ("high","medium","low")],
-            [InlineKeyboardButton("Normalize ON", callback_data="audio:normalize:on"),
-             InlineKeyboardButton("OFF", callback_data="audio:normalize:off")]]
-        options=list(EFFECT_LABELS.items())
-        for i in range(0,len(options),2):
-            rows.append([InlineKeyboardButton(("✓ " if settings.effect==value else "")+label,
-                                              callback_data="audio:effect:"+value) for value,label in options[i:i+2]])
-        markup=InlineKeyboardMarkup(rows)
-        return text, markup
-
-    @bot.on_message(filters.command(["quality", "normalize", "effect", "effects"] + list(EFFECTS)) & filters.group)
-    async def audio_command(_: Client, msg: Message) -> None:
-        if not await require_admin(msg):
-            return
-        player = players[msg.chat.id]
-        command = msg.command[0].lower()
-        value = msg.command[1].lower() if len(msg.command) > 1 else None
-        try:
-            if command == "quality" and value:
-                player.audio_settings = replace(player.audio_settings, quality=value)
-            elif command == "normalize" and value:
-                if value not in ("on", "off"):
-                    raise ValueError()
-                player.audio_settings = replace(player.audio_settings, normalize=value == "on")
-            elif command in ("effect", "effects") and value:
-                player.audio_settings = replace(player.audio_settings, effect=value)
-            elif command in EFFECTS:
-                if value not in (None, "on", "off"):
-                    raise ValueError()
-                player.audio_settings = replace(player.audio_settings, effect="normal" if value == "off" else command)
-        except ValueError:
-            await msg.reply_text("🎛 /quality high|medium|low\n/normalize on|off\n/effect " + "|".join(EFFECTS))
-            return
-        text, markup = audio_menu(player)
-        await msg.reply_text(text, reply_markup=markup)
-
     @bot.on_callback_query(filters.regex(r"^audio:(quality|normalize|effect):[a-z]+$"))
-    async def audio_pick(_: Client, cb: CallbackQuery) -> None:
-        if not cb.message or not cb.from_user:
-            await cb.answer()
-            return
-        if not await is_chat_admin(cb.message.chat.id, cb.from_user.id):
-            await cb.answer("🛡 Group Admin ပဲ ပြောင်းနိုင်တယ်။", show_alert=True)
-            return
-        _, key, value = cb.data.split(":")
-        player = players[cb.message.chat.id]
-        try:
-            if key == "normalize" and value not in ("on", "off"):
-                raise ValueError()
-            player.audio_settings = replace(player.audio_settings, **{key: value == "on" if key == "normalize" else value})
-        except ValueError:
-            await cb.answer("Invalid audio setting", show_alert=True)
-            return
-        await cb.answer("နောက်သီချင်းကစ သက်ရောက်မယ်။")
-        text, markup = audio_menu(player)
-        try:
-            await cb.message.edit_text(text, reply_markup=markup)
-        except Exception:
-            pass
+    async def retired_audio_menu(_: Client, cb: CallbackQuery) -> None:
+        # Old standalone menus must not mutate current playback settings.
+        await cb.answer("သီချင်းကဒ်ထဲက Effects / Quality ခလုတ်တွေကို သုံးပါ။",show_alert=True)
 
     @bot.on_message(filters.command("autoplay") & filters.group)
     async def autoplay_command(_: Client, msg: Message) -> None:
@@ -3016,3 +2952,4 @@ async def main() -> None:
 
 if __name__ == "__main__":
     asyncio.run(main())
+

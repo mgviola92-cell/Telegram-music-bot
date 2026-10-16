@@ -42,7 +42,12 @@ player-card feature only after this verification and report its limitations.
 
 ## Live result
 
-Pending authenticated test. The player-card UI is prepared but disabled by default.
+16 October: authenticated account/API and synthetic upload passed. The account's
+premium-credit consumption was disabled and re-read as disabled. One 20.064-second
+sample stayed waiting for four minutes and timed out before GPU processing.
+No instrumental result or real-song quality has passed yet. A second isolated
+diagnostic may wait up to ten minutes; normal user jobs retain four-minute remote
+and five-minute total limits. The player-card UI is prepared but disabled by default.
 After a technical remote PASS, set `MUSIC_KARAOKE_ENABLED=1` and
 `MVSEP_PROBE_UNTIL=0`. This exposes a beta Karaoke button for group admins.
 It takes the exact currently playing song, keeps playback running, and returns

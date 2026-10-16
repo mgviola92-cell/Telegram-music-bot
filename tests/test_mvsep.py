@@ -135,7 +135,7 @@ class MediaTests(unittest.IsolatedAsyncioTestCase):
         class Fake:
             def __init__(self,token):pass
             async def preflight(self):return True
-            async def separate(self,path,destination,progress):
+            async def separate(self,path,destination,progress,**kwargs):
                 await progress('processing')
                 shutil.copyfile(path,destination)
                 return str(destination)

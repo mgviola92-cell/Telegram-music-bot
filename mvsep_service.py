@@ -133,7 +133,7 @@ class MVSEPSeparator:
             raise KaraokeQuota('MVSEP already has an active separation')
         return True
 
-    async def separate(self, path, destination, progress=None):
+    async def separate(self, path, destination, progress=None, queue_timeout=240):
         path = Path(path)
         if not path.is_file() or not 0 < path.stat().st_size <= MAX_INPUT:
             raise KaraokeUnavailable('Input too large')
@@ -159,7 +159,7 @@ class MVSEPSeparator:
                 if not isinstance(job, str) or not re.fullmatch(r'[A-Za-z0-9_.-]{8,240}', job):
                     job = None
                     raise KaraokeUnavailable('Invalid job reference')
-                async with asyncio.timeout(240):
+                async with asyncio.timeout(min(600,max(1,int(queue_timeout)))):
                     last_status = None
                     while True:
                         async with session.get(BASE + '/api/separation/get',

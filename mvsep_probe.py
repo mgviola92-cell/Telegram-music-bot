@@ -55,7 +55,7 @@ async def run_mvsep_probe(players, until):
                 nonlocal phase
                 phase=status
                 LOG.info('MVSEP probe status=%s elapsed_seconds=%.1f', status, time.monotonic()-started)
-            task = asyncio.create_task(provider.separate(path, Path(folder)/'remote.mp3', progress))
+            task = asyncio.create_task(provider.separate(path, Path(folder)/'remote.mp3', progress,queue_timeout=600))
             try:
                 while not task.done():
                     await asyncio.sleep(1)

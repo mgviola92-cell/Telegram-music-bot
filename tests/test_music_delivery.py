@@ -62,6 +62,11 @@ class AudioRecording(unittest.IsolatedAsyncioTestCase):
         for i in range(10):c.put(str(i),bytes(1024*1024))
         self.assertLessEqual(sum(map(len,c.items.values())),8*1024*1024)
 
+    async def test_warmup_recovers_after_transient_tts_timeout(self):
+        w=WelcomeAudio();w.pcm=AsyncMock(side_effect=[TimeoutError(),b'pcm',b'batch',b'batch'])
+        with patch('welcome_audio.asyncio.sleep',AsyncMock()):await w.warmup()
+        self.assertTrue(w.ready);self.assertEqual(w.pcm.await_count,4)
+
 class ExtendedPersistence(unittest.IsolatedAsyncioTestCase):
     async def test_modes_recording_and_broadcast_survive_restart(self):
         client=SavedClient();s=MusicOwnerStore(client,'x'*32);await s.load();await s.claim(7,'x'*32)

@@ -239,14 +239,21 @@ class WelcomeAudio:
         return await self.pcm(self.render(name,kind,style),voice)
 
     async def warmup(self):
-        try:
-            pcm = await self.pcm(self.render(''),VOICES['male'])
-            self.ready = True
-            log.info('Burmese welcome TTS ready pcm_bytes=%s voice=%s',len(pcm),VOICES['male'])
-        except Exception as exc:
-            # Normal music must never wait on or fail because of TTS availability.
-            log.warning('Welcome TTS unavailable; normal audio unchanged (%s)',type(exc).__name__)
-            if self.settings and self.settings.ready and self.settings.data.get('audio'):self.ready=True
+        # Startup connectivity may be transient; keep this work off the music path.
+        for attempt in range(3):
+            try:
+                pcm = await self.pcm(self.render(''),VOICES['male'])
+                self.ready = True
+                log.info('Burmese welcome TTS ready pcm_bytes=%s voice=%s',len(pcm),VOICES['male'])
+                break
+            except Exception as exc:
+                log.warning('Welcome TTS warmup attempt=%s unavailable (%s)',attempt+1,type(exc).__name__)
+                if self.settings and self.settings.ready and self.settings.data.get('audio'):
+                    self.ready=True
+                if attempt<2:
+                    await asyncio.sleep(2*(attempt+1))
+        if not self.ready:
+            log.warning('Welcome TTS unavailable; normal audio unchanged')
         if self.ready:
             for voice in VOICES.values():
                 try:

@@ -5,7 +5,8 @@ from pytgcalls.types import AudioQuality, MediaStream
 
 QUALITIES = {'high': AudioQuality.HIGH, 'medium': AudioQuality.MEDIUM, 'low': AudioQuality.LOW}
 EFFECT_LABELS = {
-    'normal':'Normal', 'nightcore':'Nightcore', 'bassboost':'Bassboost', 'slowed':'Slowed',
+    'normal':'Normal', 'vocal':'🎤 Vocal Reduce',
+    'nightcore':'Nightcore', 'bassboost':'Bassboost', 'slowed':'Slowed',
     'radio':'📻 Radio', 'echo':'🫧 Echo', 'chorus':'🎶 Chorus', 'tremolo':'🌊 Tremolo',
     'vibrato':'🌀 Vibrato', 'wide':'🎧 Wide Stereo', 'chipmunk':'🐿 Chipmunk', 'tiny':'👾 Tiny Voice',
 }
@@ -46,6 +47,13 @@ class AudioSettings:
         elif self.effect == 'vibrato':chain += ['vibrato=f=6:d=0.3']
         elif self.effect == 'wide' and self.parameters.value[1]==2:
             chain += ['stereowiden=delay=12:feedback=0.15:crossfeed=0.1:drymix=0.9']
+        elif self.effect == 'vocal':
+            # Mono-compatible difference mix with 10% centre residual. sqrt(2)
+            # compensates FFmpeg's mono/stereo mixing coefficients. Mono input
+            # bypasses the matrix; >2 channels use the standard mono/stereo downmix.
+            # One expression/output avoids duplicate per-channel evaluation.
+            left,right=(0.777817459,0.636396103) if self.parameters.value[1]==2 else (.55,.45)
+            chain += [rf"aformat=channel_layouts=mono|stereo,aeval=if(eq(nb_in_channels\,2)\,{left}*val(0)-{right}*val(min(1\,nb_in_channels-1))\,val(0)):c=mono"]
         if self.normalize:
             chain += ['loudnorm=I=-16:TP=-1.5:LRA=11', f'aresample={rate}']
         if chain:

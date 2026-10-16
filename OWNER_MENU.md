@@ -149,9 +149,23 @@ pitch and speed to 1.35x; Tiny Voice uses 1.25x with subtle vibrato. Progress an
 playback-duration calculations use those same speed ratios. These are ordinary
 live FFmpeg filters, not AI voice cloning. Meow conversion is not included.
 
+Vocal Reduce is a live centre-reduction effect in the existing music-card Effects
+picker, with no standalone command or external service. It keeps 10% of the
+shared stereo centre and mixes the difference signal in the same polarity into
+both output channels, so mono phone playback remains audible. Genuine mono
+sources bypass the matrix; multichannel sources use FFmpeg's mono/stereo downmix.
+All output qualities are supported.
+It can also reduce centred instruments/bass; stereo vocals, reverb and backing
+voices may remain. Dual-mono recordings can become quieter. This is not AI
+stem separation or an MP3 generator. Normalize is independent and can increase
+the remaining voice along with the music. Effects still start on the next track;
+Normal restores the unfiltered path for subsequent tracks.
+
 `MUSIC_EFFECTS_PROBE_UNTIL` enables an expiring deployment-only synthetic FFmpeg
 benchmark. It decodes sixty seconds per preset, logs CPU/wall seconds, and does
 not send messages or join voice chats. Cases run sequentially and stop before
 starting another case if any VC is active/preparing. The figures measure filter
 processing, not end-to-end network/Telegram load or a guarantee for four VCs.
+`MUSIC_EFFECTS_PROBE_ONLY=vocal` limits that expiring probe to two ten-second
+stereo cases (Vocal Reduce with Normalize OFF/ON), with no audio files or API calls.
 

@@ -2820,6 +2820,7 @@ async def main() -> None:
     owner_probe_task: asyncio.Task | None = None
     lyrics_probe_task: asyncio.Task | None = None
     effects_probe_task: asyncio.Task | None = None
+    mvsep_probe_task: asyncio.Task | None = None
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, shutdown.set)
@@ -2864,6 +2865,11 @@ async def main() -> None:
         if 0<effects_probe_until-time.time()<=900:
             from effect_probe import run_effect_probe
             effects_probe_task=asyncio.create_task(run_effect_probe(players))
+        try:mvsep_probe_until=float(os.getenv('MVSEP_PROBE_UNTIL','0'))
+        except ValueError:mvsep_probe_until=0
+        if 0<mvsep_probe_until-time.time()<=900:
+            from mvsep_probe import run_mvsep_probe
+            mvsep_probe_task=asyncio.create_task(run_mvsep_probe(players,mvsep_probe_until))
         log.info("Music Bot started; maximum active voice chats: %s", max_groups)
         log.info("Named audio stream-only mode: %s", stream_only_enabled())
         log.info("Parallel music sources enabled: %s", source_names if lybot else [])
@@ -2894,6 +2900,9 @@ async def main() -> None:
         await shutdown.wait()
     finally:
         ready = False
+        if mvsep_probe_task:
+            mvsep_probe_task.cancel()
+            await asyncio.gather(mvsep_probe_task,return_exceptions=True)
         for task in (welcome_warmup_task, radio_warmup_task, radio_probe_task, owner_probe_task, lyrics_probe_task, effects_probe_task):
             if task:
                 task.cancel()

@@ -197,3 +197,19 @@ class PartyBatch(unittest.IsolatedAsyncioTestCase):
         self.delay.stop()
         from welcome_audio import JOIN_DELAY_SECONDS
         self.assertEqual(JOIN_DELAY_SECONDS,5.0)
+
+
+class JoinCommand(unittest.IsolatedAsyncioTestCase):
+    context=PartyCommand.context
+
+    async def test_join_waits_silently_with_normal_welcome(self):
+        ctx,msg,p,panel=self.context();msg.command=['join'];ctx['welcome'].request=__import__('unittest').mock.Mock()
+        await ctx['welcome_party_command'](None,msg)
+        ctx['start_idle'].assert_awaited_once_with(1,p,quiet=True)
+        ctx['welcome'].request.assert_not_called()
+        self.assertEqual(ctx['welcome'].styles[1],'normal');self.assertTrue(p.keep_idle)
+    async def test_join_does_not_restart_current_music(self):
+        song=SimpleNamespace(title='Playing');ctx,msg,p,panel=self.context(song);msg.command=['join']
+        ctx['welcome'].request=__import__('unittest').mock.Mock()
+        await ctx['welcome_party_command'](None,msg)
+        ctx['start_idle'].assert_not_awaited();ctx['welcome'].request.assert_not_called();self.assertIs(p.current,song)

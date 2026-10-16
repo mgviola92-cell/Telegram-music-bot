@@ -124,7 +124,7 @@ class PrivateChecks(unittest.IsolatedAsyncioTestCase):
         bot.on_message=lambda *a,**k:lambda f:handlers.append(f) or f
         bot.on_callback_query=lambda *a,**k:lambda f:handlers.append(f) or f
         m=PrivateSongs(bot,AsyncMock(),{},lambda p:None);m.register()
-        return m,next(f for f in handlers if f.__name__=='private_song')
+        return m,lambda _,msg:m.deliver(msg,(msg.text or '').removeprefix('/play '))
     async def test_voice_group_priority_preempts_lookup(self):
         m,handler=self.manager();started=asyncio.Event()
         async def resolve(*args):started.set();await asyncio.Event().wait()
@@ -158,3 +158,47 @@ class PrivateChecks(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(send.call_args.args[2],'/tmp/source.mp3')
         self.assertEqual(m.cache.get('purple')[1],'this-bot-file')
         m.cleanup.assert_called_once_with('/tmp/source.mp3');self.assertIsNone(m.job)
+
+
+class PrivateSearchPages(unittest.IsolatedAsyncioTestCase):
+    def manager(self):
+        from music_search import SearchChoice
+        handlers={};bot=N()
+        def register(*a,**k):
+            def save(f):handlers[f.__name__]=f;return f
+            return save
+        bot.on_message=bot.on_callback_query=register
+        choices=[SearchChoice('Purple '+str(i),'https://soundcloud.com/a/'+str(i),120+i) for i in range(10)]
+        searcher=AsyncMock(return_value=choices)
+        m=PrivateSongs(bot,AsyncMock(),{},lambda p:None,searcher);m.register()
+        panel=N(id=11,chat=N(id=7),edit_text=AsyncMock(),reply_text=AsyncMock())
+        msg=N(text='purple',from_user=N(id=7),chat=N(id=7),id=10,reply_text=AsyncMock(return_value=panel))
+        return m,handlers,msg,panel,choices
+    async def test_bare_name_shows_five_and_pages_without_downloading(self):
+        m,h,msg,panel,choices=self.manager();await h['private_song'](None,msg)
+        text=panel.edit_text.call_args.args[0]
+        self.assertIn('1/2',text);self.assertIn('Purple 4',text);self.assertNotIn('Purple 5',text)
+        token=next(iter(m.sessions))
+        cb=N(from_user=N(id=7),message=panel,data=f'dml:{token}:page:1',answer=AsyncMock())
+        await h['search_result'](None,cb)
+        self.assertIn('2/2',panel.edit_text.call_args.args[0]);self.assertIn('Purple 9',panel.edit_text.call_args.args[0])
+        m.resolver.assert_not_awaited();self.assertEqual(msg.reply_text.await_count,1)
+    async def test_selection_passes_exact_choice_not_original_query(self):
+        m,h,msg,panel,choices=self.manager();await h['private_song'](None,msg)
+        m.deliver=AsyncMock();token=next(iter(m.sessions))
+        cb=N(from_user=N(id=7),message=panel,data=f'dml:{token}:pick:7',answer=AsyncMock())
+        await h['search_result'](None,cb)
+        self.assertIs(m.deliver.call_args.args[2],choices[7])
+    async def test_other_user_and_expired_buttons_cannot_deliver(self):
+        m,h,msg,panel,choices=self.manager();await h['private_song'](None,msg)
+        m.deliver=AsyncMock();token=next(iter(m.sessions))
+        cb=N(from_user=N(id=8),message=panel,data=f'dml:{token}:pick:0',answer=AsyncMock())
+        await h['search_result'](None,cb)
+        cb.from_user.id=7;m.sessions[token]['until']=0
+        await h['search_result'](None,cb);m.deliver.assert_not_awaited()
+    async def test_group_request_preempts_metadata_lookup(self):
+        m,h,msg,panel,choices=self.manager();started=asyncio.Event()
+        async def pending(*args):started.set();await asyncio.Event().wait()
+        m.searcher=pending
+        task=asyncio.create_task(h['private_song'](None,msg));await started.wait();m.preempt();await task
+        self.assertFalse(m.searching);self.assertFalse(m.search_tasks);self.assertFalse(m.sessions)

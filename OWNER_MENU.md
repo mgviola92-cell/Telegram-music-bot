@@ -90,10 +90,27 @@ The saved draft survives restart, but an interrupted delivery is never auto-resu
 ## Private song requests
 
 In private chat, send `/play title`, `/song title`, `/search title`, or a song name.
-The bot returns its own MP3 audio message with a Lyrics button; it does not join a VC.
+The bot shows five related results per page with Previous/Next inline buttons, editing
+the same message. Selecting a result delivers that specific track as the bot’s own MP3
+with a Lyrics button; metadata lookup alone never downloads the audio or joins a VC.
+Private search sessions expire after five minutes; only the requester can use their
+buttons. Searches are bounded to two concurrent metadata lookups, and a new group
+play request can preempt them. A new search replaces that user’s earlier session.
 Files are limited to 20 MB and ten minutes. One private request runs at a time,
 with a 15-second per-user interval. Group VC preparation takes priority and can
 cancel a private lookup. Cached Telegram file IDs expire after one hour and the
 cache is limited to 64 entries. Temporary source files are cleaned after delivery.
 Strict stream-only mode intentionally disables file delivery. Existing group direct
 HTTPS streaming and group source selection are unchanged.
+
+## Join a VC without music
+
+A group admin can open the group VC and send `/join`. The assistant joins with
+a silent stream, enables normal VC greetings, and waits for subsequent arrivals.
+It does not play an opening announcement or restart an existing song. `/stop`
+leaves. `/welcome` opens the voice/style/mode settings and does not itself join.
+`/လူတောင်းပွဲ` (`/partyvc`) joins if necessary, selects party mode, and speaks the
+full introduction after five seconds. Normal welcomes wait five seconds and use
+the member’s name according to the selected TTS/recording mode. Party arrivals
+are collected into batches and use the short collective greeting. Existing
+participants in the initial eight-second connection snapshot are not announced.

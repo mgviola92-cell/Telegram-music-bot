@@ -912,6 +912,9 @@ async def main() -> None:
             return await lybot.resolve(queue_track_title(song))
 
     async def resolve_private_song(query):
+        if not isinstance(query,str):
+            if stream_only_enabled():raise StreamOnlyPlaybackError("Private file requests disabled")
+            return await resolve_for_queue(choice_track(query),False)
         if stream_only_enabled():
             raise StreamOnlyPlaybackError("Private file requests disabled in strict stream-only mode")
         if is_youtube_url(query):
@@ -922,7 +925,16 @@ async def main() -> None:
             raise ValueError("Unsupported song URL")
         return await resolve_for_queue(Track(query,query,youtube=True),False)
 
-    private_songs=PrivateSongs(bot,resolve_private_song,players,clean_temp)
+    async def search_private_songs(query):
+        if is_youtube_url(query):query=await youtube_title(query)
+        if query.startswith(("http://","https://")):
+            if not allowed_url(query,{"soundcloud.com","www.soundcloud.com","m.soundcloud.com"}):
+                raise ValueError("Unsupported song URL")
+            from music_search import SearchChoice
+            return [SearchChoice(query,query)]
+        return await collect_choices(query,lybot.sources if lybot and not stream_only_enabled() else (),limit=10,timeout=10)
+
+    private_songs=PrivateSongs(bot,resolve_private_song,players,clean_temp,search_private_songs)
     private_songs.register()
 
     async def describe_primary(query):
@@ -1576,7 +1588,7 @@ async def main() -> None:
             "🎧 မုဒြာ Music Bot — VC Player\n\n"
             "Group VC ဖွင့်ပြီး /play Faded လို့ သီချင်းနာမည် ရိုက်နိုင်တယ်။\n"
             "Audio File ကို Reply လုပ်ပြီး /play လည်းရတယ်။\n"
-            "Private chat မှာ /play သီချင်းနာမည် လို့ တောင်းရင် MP3 ဖိုင် ပို့ပေးမယ်။\n"
+            "Private chat မှာ သီချင်းနာမည် ရိုက်ပြီး စာရင်းထဲက ရွေးရင် MP3 ဖိုင် ပို့ပေးမယ်။\n"
             "/findsong — Video / Voice / Audio ကို reply လုပ်ပြီး သီချင်းရှာပါ။\n"
             "Video: ကိုယ်ပိုင် MP4 ကို Reply လုပ်ပြီး /vplay သုံးပါ။\n"
             "Music: ရင်းမြစ်များစွာမှာ တစ်ပြိုင်တည်းရှာမယ်။\n"
@@ -1590,6 +1602,7 @@ async def main() -> None:
             "/shuffle /remove 1 /clear /loop — Admin Controls\n"
             "/radio — Local / International radio\n"
             "/welcome — မြန်မာ VC/Group ကြိုဆိုအသံ\n"
+            "/join — သီချင်းမပါဘဲ VC ထဲဝင်စောင့်မယ်\n"
             "/လူတောင်းပွဲ — VC လူတောင်းပွဲ ကြိုဆိုပုံစံ\n"
             "/idle on|off — Queue ကုန်ရင် VC ထဲဆက်နေမလား\n"
             "/stream on|off — Direct HTTPS audio\n"
@@ -2138,8 +2151,9 @@ async def main() -> None:
             [b("👨 Thiha", "male"), b("👩 Nilar", "female")],
             [b("🔊 အသံစမ်းမယ်", "test")]])
 
-    @bot.on_message(filters.command(["လူတောင်းပွဲ", "partyvc"]) & filters.group)
+    @bot.on_message(filters.command(["လူတောင်းပွဲ", "partyvc", "join"]) & filters.group)
     async def welcome_party_command(_: Client, msg: Message) -> None:
+        party = (getattr(msg,"command",None) or ["partyvc"])[0].lower() != "join"
         if not await require_admin(msg):
             return
         chat_id = msg.chat.id
@@ -2151,7 +2165,7 @@ async def main() -> None:
         if player.loading_task and not player.loading_task.done():
             await msg.reply_text("⏳ သီချင်းပြင်ဆင်နေတယ်။ ပြီးတာနဲ့ /လူတောင်းပွဲ ပြန်သုံးနိုင်တယ်။")
             return
-        progress = await msg.reply_text("🎙 လူတောင်းပွဲ ကြိုဆိုအသံ ပြင်ဆင်နေတယ်…")
+        progress = await msg.reply_text("🎙 လူတောင်းပွဲ ကြိုဆိုအသံ ပြင်ဆင်နေတယ်…" if party else "🎙 VC ထဲ ဝင်နေတယ်…")
         own_task = asyncio.current_task()
         standalone = player.current is None and player.idle_mode is None
         if standalone:
@@ -2164,7 +2178,7 @@ async def main() -> None:
                     await asyncio.wait_for(welcome.warmup(),18)
             if not welcome.ready:
                 raise RuntimeError("Burmese speech unavailable")
-            welcome.styles[chat_id] = "party"
+            welcome.styles[chat_id] = "party" if party else "normal"
             welcome.modes[chat_id] = "vc"
             if standalone:
                 await ensure_assistant_in_group(msg.chat)
@@ -2181,13 +2195,14 @@ async def main() -> None:
                     player.keep_idle = True
                     if not await start_idle(chat_id,player,quiet=True):
                         raise RuntimeError("VC not available")
-                if not welcome.request(chat_id, msg.from_user.id if msg.from_user else 0,
+                if party and not welcome.request(chat_id, msg.from_user.id if msg.from_user else 0,
                                        "",force=True,delay=5):
                     await progress.edit_text("🎙 လူတောင်းပွဲ ပုံစံ ဖွင့်ထားပြီ။ ကြိုဆိုအသံ ပြောနေဆဲဆို ခဏစောင့်ပါ။ "
                                              "Mixer ပိတ်ထားခဲ့ရင် နောက်သီချင်း/Radio ကစ အသုံးဝင်မယ်။")
                     return
             text, keyboard = welcome_menu(chat_id)
-            await progress.edit_text("🎙 လူတောင်းပွဲ ဖွင့်ထားပြီ။ VC ဝင်လာသူကို ဒီပုံစံနဲ့ ကြိုဆိုမယ်။\n\n" + text,
+            await progress.edit_text(("🎙 လူတောင်းပွဲ ဖွင့်ထားပြီ။ VC ဝင်လာသူကို ဒီပုံစံနဲ့ ကြိုဆိုမယ်။\n\n" if party else
+                                      "🎙 VC ထဲ ရောက်ပြီ။ နောက်ဝင်လာသူတွေကို ပုံမှန် ကြိုဆိုမယ်။ /stop နဲ့ ထွက်နိုင်တယ်။\n\n") + text,
                                      reply_markup=keyboard)
             player.welcome_panel_id = progress.id
         except asyncio.CancelledError:

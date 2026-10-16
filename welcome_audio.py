@@ -169,6 +169,7 @@ class WelcomeAudio:
         return self.voices.get(chat,default)
 
     def render(self,name,kind='vc',style='normal'):
+        if kind=='group':style='normal'
         if self.settings and self.settings.ready:
             key=style if style in {'party','party_batch'} else kind
             return self.settings.text(key,safe_name(name) or 'သူငယ်ချင်း')
@@ -225,6 +226,7 @@ class WelcomeAudio:
             return pcm
 
     async def speech(self,name,kind,style,voice,*,chat=None):
+        if kind=='group':style='normal'
         key=style if style in {'party','party_batch'} else kind
         if self.settings and self.settings.ready and self.recordings is not None:
             mode=self.settings.data.get('audio_modes',{}).get(key,'tts');clip=self.settings.data.get('audio',{}).get(key)

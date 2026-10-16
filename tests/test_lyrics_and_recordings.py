@@ -36,6 +36,12 @@ class RecordingPoolTests(unittest.IsolatedAsyncioTestCase):
         outputs=[await w.speech('','vc','party_batch',VOICES['male'],chat=7) for _ in range(10)]
         self.assertTrue(all(a!=b for a,b in zip(outputs,outputs[1:])))
         self.assertEqual(await w.speech('','vc','party',VOICES['male'],chat=7),b'long')
+    async def test_group_arrival_never_uses_party_recordings(self):
+        data={'voice':'male','audio':{'party':{'file_id':'party','seconds':5},'group':{'file_id':'group','seconds':5}},'audio_modes':{'party':'clip','group':'clip'}}
+        settings=N(ready=True,data=data,text=lambda key,name:key)
+        w=WelcomeAudio(settings);w.recordings=N(get=AsyncMock(side_effect=lambda f:f.encode()))
+        self.assertEqual(await w.speech('Name','group','party',VOICES['male']),b'group')
+        self.assertEqual(w.render('Name','group','party'),'group')
     def test_old_single_recording_is_valid_without_migration_loss(self):
         old={'v':1,'owner':7,'texts':{},'groups':{},'audio':{'vc':{'file_id':'old','seconds':5}},'audio_modes':{'vc':'name_clip'}}
         d=parse_state(json.dumps(old).encode());self.assertEqual(recording_choices(d,'vc')[0]['file_id'],'old')

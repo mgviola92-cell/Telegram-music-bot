@@ -9,6 +9,12 @@ MVSEP API, MDX-B Inst_HQ_3 (`sep_type=23`, `add_opt1=8`), MP3 output and `is_dem
 The owner account must have premium spending disabled; existing unrelated queued
 jobs are never canceled. There are no paid mirrors or quota retries.
 
+An expiring setup probe can use `MVSEP_PROBE_DISABLE_PREMIUM=1` after informing
+the owner that premium credits will be disabled for free-only use. It changes
+only an explicitly enabled flag, calls the documented disable endpoint, and
+re-reads the account before uploading. Normal Karaoke jobs never change account
+preferences. Clear this setup flag with the probe flag after testing.
+
 ## Diagnostic phase
 
 Set `MVSEP_PROBE_UNTIL` to a Unix timestamp up to 15 minutes in the future after

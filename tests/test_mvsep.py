@@ -48,6 +48,11 @@ class MVSEPTests(unittest.IsolatedAsyncioTestCase):
             form=await req.post()
             self.assertEqual(form['hash'], 'test-job.mp3')
             return web.json_response({'success': True})
+        async def disable(req):
+            form=await req.post()
+            self.assertEqual(form['api_token'],'test-token')
+            self.premium=0
+            return web.json_response({'success':True})
         async def output(req):
             self.assertNotIn('Authorization', req.headers)
             self.assertNotIn('api_token', req.query)
@@ -58,6 +63,7 @@ class MVSEPTests(unittest.IsolatedAsyncioTestCase):
         app.router.add_get('/api/separation/get', get)
         app.router.add_post('/api/separation/cancel', cleanup)
         app.router.add_post('/api/separation/delete', cleanup)
+        app.router.add_post('/api/app/disable_premium', disable)
         app.router.add_get('/storage/result.mp3', output)
         self.runner=web.AppRunner(app)
         await self.runner.setup()
@@ -88,6 +94,11 @@ class MVSEPTests(unittest.IsolatedAsyncioTestCase):
     async def test_boolean_false_is_free_mode(self):
         self.premium=False
         self.assertTrue(await ms.MVSEPSeparator('test-token').preflight())
+    async def test_explicit_free_setup_disables_premium_and_verifies_without_job(self):
+        self.premium=1
+        self.assertTrue(await ms.MVSEPSeparator('test-token').disable_premium())
+        self.assertEqual(self.premium,0)
+        self.assertEqual(self.created,0)
     async def test_existing_user_job_is_not_canceled_or_overlapped(self):
         self.queued=True
         with self.assertRaises(ms.KaraokeQuota):

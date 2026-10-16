@@ -7,7 +7,7 @@ import tempfile
 import time
 from pathlib import Path
 from karaoke_audio import audio_command, inspect_audio, prepare_result
-from mvsep_service import MVSEPSeparator
+from mvsep_service import MVSEPSeparator,KaraokeQuota
 
 LOG = logging.getLogger('telegram_music')
 
@@ -32,7 +32,12 @@ async def run_mvsep_probe(players, until):
     try:
         provider=MVSEPSeparator(token)
         phase='checking_free'
-        await provider.preflight()
+        try:
+            await provider.preflight()
+        except KaraokeQuota as exc:
+            if str(exc)!='MVSEP premium spending is enabled' or os.getenv('MVSEP_PROBE_DISABLE_PREMIUM')!='1':raise
+            await provider.disable_premium()
+            LOG.info('MVSEP free-only setup: premium spending disabled and verified')
         LOG.info('MVSEP probe account/free API preflight PASS')
         with tempfile.TemporaryDirectory(prefix='mudyar_karaoke_probe_') as folder:
             path = Path(folder) / 'synthetic.mp3'
@@ -41,8 +46,9 @@ async def run_mvsep_probe(players, until):
             if busy(players):
                 LOG.info('MVSEP probe skipped before upload: playback has priority')
                 return
-            phase='input_inspection'
-            seconds, _ = await inspect_audio(path,diagnostic=True)
+            # This fixed generated fixture is pre-validated by the real decode CI
+            # test. Do not require Render to synthesize or encode test input.
+            seconds=20.064
             phase='remote_separation'
             started = time.monotonic()
             async def progress(status):
@@ -64,7 +70,7 @@ async def run_mvsep_probe(players, until):
                     task.cancel()
                     await asyncio.gather(task, return_exceptions=True)
             phase='result_validation'
-            output = await prepare_result(raw, Path(folder)/'ready.mp3', seconds)
+            output = await prepare_result(raw, Path(folder)/'ready.mp3', seconds,diagnostic=True)
             LOG.info('MVSEP probe PASS input_seconds=%.2f output_bytes=%s elapsed_seconds=%.1f; technical decode only',
                      seconds, Path(output).stat().st_size, time.monotonic()-started)
     except asyncio.CancelledError:

@@ -77,15 +77,15 @@ async def prepare_input(source, directory):
     return str(destination), seconds
 
 
-async def prepare_result(source, destination, expected):
-    seconds, codec = await inspect_audio(source)
+async def prepare_result(source, destination, expected, diagnostic=False):
+    seconds, codec = await inspect_audio(source,diagnostic=diagnostic)
     if codec != 'mp3' or abs(seconds - expected) > max(3, expected * .03):
         raise KaraokeUnavailable('Invalid instrumental output')
     # MVSEP is asked for MP3 already. Copy compressed packets, no local encode.
     await audio_command(['ffmpeg', '-nostdin', '-v', 'error', '-threads', '1',
         '-protocol_whitelist', 'file,pipe', '-i', str(source), '-vn', '-map_metadata', '-1',
-        '-c:a', 'copy', '-fs', str(MAX_INPUT+1), '-y', str(destination)], 15)
-    await inspect_audio(destination)
+        '-c:a', 'copy', '-fs', str(MAX_INPUT+1), '-y', str(destination)], 15, diagnostic=diagnostic)
+    await inspect_audio(destination,diagnostic=diagnostic)
     await audio_command(['ffmpeg', '-nostdin', '-v', 'error', '-threads', '1',
-        '-protocol_whitelist', 'file,pipe', '-i', str(destination), '-t', '2', '-f', 'null', '-'], 8)
+        '-protocol_whitelist', 'file,pipe', '-i', str(destination), '-t', '2', '-f', 'null', '-'], 8, diagnostic=diagnostic)
     return str(destination)

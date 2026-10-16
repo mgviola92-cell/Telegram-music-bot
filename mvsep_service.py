@@ -106,6 +106,14 @@ class MVSEPSeparator:
         async with ClientSession(timeout=ClientTimeout(total=15,connect=8)) as session:
             return await self.check_free(session)
 
+    async def disable_premium(self):
+        """One-time free-only account setup, never called by normal song jobs."""
+        async with ClientSession(timeout=ClientTimeout(total=15,connect=8)) as session:
+            async with session.post(BASE+'/api/app/disable_premium',
+                    data={'api_token':self.token},allow_redirects=False) as response:
+                await bounded_json(response)
+            return await self.check_free(session)
+
     async def check_free(self, session):
         async with session.get(BASE + '/api/app/user', params={'api_token': self.token},
                                allow_redirects=False) as response:

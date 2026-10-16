@@ -12,7 +12,7 @@ jobs:
         with:
           python-version: '3.12'
       - name: Compile Python sources
-        run: python -m py_compile main.py generate_session.py audius_source.py song_cache.py music_ui.py idle_media.py youtube_health.py archive_source.py prefetch.py direct_stream.py player_visuals.py stream_probe.py network_audio.py bot_source_probe.py lybot_source.py voice_transport.py source_race.py track_metadata.py queue_receipts.py song_recognition.py audio_options.py music_search.py music_stats.py music_cleanup.py feature_probe.py radio_catalog.py welcome_audio.py radio_welcome_probe.py music_owner_store.py music_owner_ui.py greeting_recordings.py owner_broadcast.py private_songs.py lyrics_service.py effect_probe.py
+        run: python -m py_compile main.py generate_session.py audius_source.py song_cache.py music_ui.py idle_media.py youtube_health.py archive_source.py prefetch.py direct_stream.py player_visuals.py stream_probe.py network_audio.py bot_source_probe.py lybot_source.py voice_transport.py source_race.py track_metadata.py queue_receipts.py song_recognition.py audio_options.py music_search.py music_stats.py music_cleanup.py feature_probe.py radio_catalog.py welcome_audio.py radio_welcome_probe.py music_owner_store.py music_owner_ui.py greeting_recordings.py owner_broadcast.py private_songs.py lyrics_service.py effect_probe.py karaoke_service.py karaoke_ui.py karaoke_modal_worker.py
       - name: Install music dependencies
         run: python -m pip install -r requirements.txt
       - name: Verify optional MTProto crypto acceleration is installed

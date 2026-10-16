@@ -165,10 +165,11 @@ class AudioFilterTests(unittest.IsolatedAsyncioTestCase):
     async def test_audio_settings_do_not_restart_current_stream(self):
         player=main.Player(current=main.Track('Now','query'))
         calls=Mock()
-        msg=N(chat=N(id=-100),command=['quality','low'],reply_text=AsyncMock())
-        ns=dict(vars(main));ns.update(players={-100:player},require_admin=AsyncMock(return_value=True),calls=calls,
-                                     audio_menu=lambda p:('settings',None))
-        await closure('audio_command',ns)(None,msg)
+        player.panel_id=4
+        cb=N(data='mud:qlow:-100',message=N(id=4,chat=N(id=-100)),from_user=N(id=7),answer=AsyncMock())
+        ns=dict(vars(main));ns.update(players={-100:player},is_chat_admin=AsyncMock(return_value=True),calls=calls,
+                                     update_player_panel=AsyncMock())
+        await closure('panel_callback',ns)(None,cb)
         self.assertEqual(player.audio_settings.quality,'low')
         self.assertEqual(player.playing_settings,AudioSettings())
         calls.assert_not_called()

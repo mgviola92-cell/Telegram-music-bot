@@ -11,7 +11,6 @@ from typing import Any
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from player_visuals import lyrics_search_url
 from audio_options import EFFECT_LABELS
-from karaoke_service import configured_provider
 
 
 def queue_remove(items: deque, position: int) -> Any:
@@ -85,8 +84,6 @@ def player_controls(chat_id: int, *, paused: bool = False, loop: bool = False,
              button("🏆 Top Tracks", "top")]])
     if menu != "main":
         rows.append([button("‹ Back", "back")])
-    if configured_provider() is not None:
-        rows.append([InlineKeyboardButton("🎤 Karaoke · စမ်းသပ်ဆဲ",callback_data="karaoke:current")])
     rows.append([InlineKeyboardButton("🎤 Lyrics", callback_data="lyrics:current")])
     return InlineKeyboardMarkup(rows)
 

@@ -134,10 +134,11 @@ fixed sample, logs only status/length and sends no Telegram messages.
 
 ## Fun audio effects
 
-The player card's Effects menu and `/effects` expose twelve exclusive presets:
+The player card's Effects menu exposes twelve exclusive presets:
 Normal, Nightcore, Bassboost, Slowed, Radio, Echo, Chorus, Tremolo, Vibrato,
-Wide Stereo, Chipmunk and Tiny Voice. Choose one effect at a time. `/effect normal`
-turns it off; `/effect <name>` or `/<name>` selects it. Tiny Voice uses `/tiny`.
+Wide Stereo, Chipmunk and Tiny Voice. Choose one effect at a time using the card buttons. Normal turns it off.
+There are no standalone effect/quality/normalization commands or menus; `/radio`
+is reserved for the live radio station picker, never the Radio audio preset.
 Existing admin permissions and next-track application remain unchanged: selecting
 an effect never restarts the current song. Normalize remains an independent option.
 
@@ -153,3 +154,4 @@ benchmark. It decodes sixty seconds per preset, logs CPU/wall seconds, and does
 not send messages or join voice chats. Cases run sequentially and stop before
 starting another case if any VC is active/preparing. The figures measure filter
 processing, not end-to-end network/Telegram load or a guarantee for four VCs.
+

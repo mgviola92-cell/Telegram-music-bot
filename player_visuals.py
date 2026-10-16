@@ -89,27 +89,13 @@ def format_clock(seconds: float | None) -> str:
 
 
 def player_caption(
-    title: str, elapsed: float, duration: float | None, *, paused: bool = False
+    title: str, elapsed: float, duration: float | None, *, paused: bool = False, requester: str = "—"
 ) -> str:
-    """Telegram caption or text; updates are throttled to avoid chat noise."""
-    width = 14
-    if duration and duration > 0:
-        ratio = max(0., min(1., elapsed / duration))
-        filled = min(width, int(ratio * width))
-        bar = "━" * filled + "─" * (width - filled)
-        total = format_clock(duration)
-    else:
-        bar = "─" * width
-        total = "--:--"
-    icon = "⏸" if paused else "▶️"
-    pulse = "▂▂▂▂▂" if paused else PULSES[(int(elapsed) // 20) % len(PULSES)]
-    cleaned = re.sub(r"[\x00-\x1f\x7f]", " ", title or "Unknown track").strip()
-    return (
-        "🎧 မုဒြာ MUSIC  " + "🎶 " + pulse + "\n"
-        "🎵 " + cleaned[:160] + "\n\n"
-        + icon + " " + bar + "\n"
-        + format_clock(elapsed) + " / " + total
-    )
+    """Static duration; Telegram cards cannot expose a seekable audio timeline."""
+    from card_layout import render
+    from music_ui import clean_track_title
+    return render('playing', title=clean_track_title(title), duration=format_clock(duration),
+                  requester=requester, status='Paused' if paused else 'Started Streaming')
 
 
 def lyrics_search_url(title: str) -> str:

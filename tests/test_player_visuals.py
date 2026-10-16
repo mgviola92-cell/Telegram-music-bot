@@ -13,21 +13,20 @@ from direct_stream import resolve_soundcloud_https
 
 
 class ProgressCardTest(unittest.TestCase):
-    def test_player_progress_and_animated_pulse(self):
-        caption = player_caption("Hello World", 85, 250)
-        self.assertIn("🎵 Hello World", caption)
-        self.assertIn("01:25 / 04:10", caption)
-        self.assertIn("━", caption)
-        self.assertNotEqual(
-            player_caption("Hello World", 10, 250),
-            player_caption("Hello World", 50, 250),
-        )
+    def test_static_card_has_duration_and_no_progress_edits(self):
+        caption=player_caption('Hello World',85,250,requester='Sam')
+        self.assertIn('▸ Title : Hello World',caption)
+        self.assertIn('04:10',caption)
+        self.assertIn('Requested by : Sam',caption)
+        self.assertNotIn('01:25',caption)
+        self.assertNotIn('━',caption)
+        self.assertEqual(player_caption('Hello World',10,250),player_caption('Hello World',50,250))
 
     def test_duration_unknown_pauses(self):
-        caption = player_caption("A sample", 20, None, paused=True)
-        self.assertIn("--:--", caption)
-        self.assertIn("⏸", caption)
-        self.assertEqual(format_clock(0), "00:00")
+        caption=player_caption('A sample',20,None,paused=True)
+        self.assertIn('--:--',caption)
+        self.assertIn('Paused',caption)
+        self.assertEqual(format_clock(0),'00:00')
 
     def test_lyrics_button_requests_in_bot_text(self):
         markup=player_controls(-100,title='Hello World')

@@ -19,7 +19,8 @@ class QueueReceiptTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn('ရှာနေဆဲ',message.edit_text.call_args.args[0])
         track.title='Purple – Wink & pGb · VoiceShazamBot';track.metadata_resolved=True
         await sync_receipts(player)
-        self.assertEqual(message.edit_text.call_args.args[0],'✅ Queue ထဲထည့်ပြီးပြီ — Purple – Wink & pGb')
+        self.assertIn('▸ Title : Purple – Wink & pGb',message.edit_text.call_args.args[0])
+        self.assertIn('Queue #1',message.edit_text.call_args.args[0])
         self.assertNotIn('purple pgb wink',message.edit_text.call_args.args[0])
         player.queue_refresh_task.cancel()
         await asyncio.gather(player.queue_refresh_task,return_exceptions=True)

@@ -86,6 +86,7 @@ class Track:
     autoplay: bool = False
     output_speed: float = 1.0
     original_duration_seconds: float | None = None
+    requester: str = "—"
 
 
 @dataclass
@@ -865,6 +866,8 @@ async def main() -> None:
     calls = PyTgCalls(assistant, workers=min(max_groups, 4))
     radio_catalog = RadioCatalog()
     owner_settings = MusicOwnerStore(assistant)
+    from card_layout import configure as configure_cards
+    configure_cards(lambda: owner_settings.data.get("cards", {}))
     welcome = WelcomeAudio(owner_settings,bot=bot)
     owner_ui = MusicOwnerUI(bot,owner_settings,welcome,players)
     owner_ui.register()
@@ -1037,7 +1040,7 @@ async def main() -> None:
         song = player.current
         text = player_caption(
             song.title, elapsed_for(player), song.duration_seconds,
-            paused=player.paused,
+            paused=player.paused, requester=song.requester,
         )
         buttons = player_controls(
             chat_id, paused=player.paused,
@@ -1048,12 +1051,12 @@ async def main() -> None:
         try:
             if player.panel_is_photo:
                 await bot.edit_message_caption(
-                    chat_id, player.panel_id, caption=text,
+                    chat_id, player.panel_id, caption=text, parse_mode=ParseMode.DISABLED,
                     reply_markup=buttons,
                 )
             else:
                 await bot.edit_message_text(
-                    chat_id, player.panel_id, text,
+                    chat_id, player.panel_id, text, parse_mode=ParseMode.DISABLED,
                     reply_markup=buttons,
                 )
         except Exception as exc:
@@ -1085,9 +1088,10 @@ async def main() -> None:
         if player.current is not song:
             return
         image = artwork_for(song.source) if not song.video else None
+        from default_artwork import default_photo
         title = player_caption(
             song.title, elapsed_for(player), song.duration_seconds,
-            paused=player.paused,
+            paused=player.paused, requester=song.requester,
         )
         if admin_muted:
             title += "\n\n🔇 VC Admin က Assistant ကို mute ထားတယ်။ Unmute / Allow to Speak ပေးပါ။"
@@ -1104,21 +1108,27 @@ async def main() -> None:
             if image and artwork_is_safe(image):
                 try:
                     panel = await asyncio.wait_for(
-                        bot.send_photo(chat_id, photo=image, caption=title, reply_markup=buttons),
+                        bot.send_photo(chat_id, photo=image, caption=title, reply_markup=buttons, parse_mode=ParseMode.DISABLED, reply_to_message_id=getattr(progress,"reply_to_message_id",None)),
                         timeout=5,
                     )
                     is_photo = True
                 except Exception as exc:
                     log.info("Artwork unavailable (%s); using lightweight text UI",
                              type(exc).__name__)
+            if panel is None and not song.video:
+                try:
+                    panel = await asyncio.wait_for(bot.send_photo(chat_id, photo=default_photo(), caption=title, reply_markup=buttons, parse_mode=ParseMode.DISABLED, reply_to_message_id=getattr(progress,"reply_to_message_id",None)),timeout=5)
+                    is_photo = True
+                except Exception as exc:
+                    log.info("Default artwork unavailable (%s)",type(exc).__name__)
             if panel is None:
                 if progress is not None:
                     try:
-                        panel = await progress.edit_text(title, reply_markup=buttons)
+                        panel = await progress.edit_text(title, reply_markup=buttons,parse_mode=ParseMode.DISABLED)
                     except Exception:
                         panel = None
                 if panel is None:
-                    panel = await bot.send_message(chat_id, title, reply_markup=buttons)
+                    panel = await bot.send_message(chat_id, title, reply_markup=buttons,parse_mode=ParseMode.DISABLED)
             if player.current is not song:
                 try:
                     await bot.delete_messages(chat_id, panel.id)
@@ -1139,9 +1149,8 @@ async def main() -> None:
                     pass
             if player.progress_task is not None and not player.progress_task.done():
                 player.progress_task.cancel()
-            player.progress_task = asyncio.create_task(
-                update_progress_until_changed(chat_id, song)
-            )
+            player.progress_task = None
+
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -1714,6 +1723,8 @@ async def main() -> None:
             )
             return
 
+        request_user = getattr(msg,"from_user",None)
+        track.requester = (request_user.first_name or "—") if request_user else "Anonymous admin"
         player = players[msg.chat.id]
         player.resolver = resolve_for_queue
         player.autoplay_prepare = lambda: start_autoplay(player)

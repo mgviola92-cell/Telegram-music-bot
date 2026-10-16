@@ -169,3 +169,7 @@ processing, not end-to-end network/Telegram load or a guarantee for four VCs.
 `MUSIC_EFFECTS_PROBE_ONLY=vocal` limits that expiring probe to two ten-second
 stereo cases (Vocal Reduce with Normalize OFF/ON), with no audio files or API calls.
 
+
+
+## Card layout
+Private `/owner` → ကဒ်အပြင်အဆင် changes the global brand, playing card and queue reply. Plain text only; placeholders: `{brand}`, `{title}`, `{duration}`, `{requester}`, `{position}`, `{status}`. Brand: 100 characters, templates: 400. Reset each independently. Settings share the existing private Saved Messages persistence and preserve greeting recordings/broadcast settings. New cards use the saved layout. No seekable Telegram timeline; static duration only, no periodic card edits. Missing SoundCloud artwork uses a bundled JPEG after audio has already started. All player controls and queue popup remain.

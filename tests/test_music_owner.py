@@ -135,3 +135,24 @@ class OwnerUIChecks(unittest.IsolatedAsyncioTestCase):
             _,k=self.ui.menu(key)
             self.assertTrue(any(b.callback_data=='own:home' for row in k.inline_keyboard for b in row))
             self.assertTrue(all(len(b.callback_data.encode())<=64 for row in k.inline_keyboard for b in row))
+
+    async def test_card_template_owner_flow_persists_without_tts(self):
+        callback=next(f for f in self.handlers if f.__name__=='owner_callback')
+        panel=SimpleNamespace(id=42,chat=SimpleNamespace(id=7),edit_text=AsyncMock())
+        cb=SimpleNamespace(from_user=SimpleNamespace(id=7),message=panel,
+                           data='own:cardedit:queued',answer=AsyncMock())
+        await callback(None,cb)
+        self.assertEqual(self.ui.pending[7][0],'card-queued')
+        handler=next(f for f in self.handlers if f.__name__=='owner_text')
+        class Stop(Exception):pass
+        def stop():raise Stop()
+        msg=SimpleNamespace(from_user=SimpleNamespace(id=7),text='➜ #{position} {title} · {requester}',
+                            reply_text=AsyncMock(),stop_propagation=stop)
+        with self.assertRaises(Stop):await handler(None,msg)
+        restart=MusicOwnerStore(self.client);await restart.load()
+        self.assertEqual(restart.data['cards']['queued'],msg.text)
+        self.assertNotIn(7,self.ui.pending)
+        self.assertFalse(self.ui.busy)
+        cb.data='own:cardreset:queued'
+        await callback(None,cb)
+        self.assertNotIn('queued',self.store.data['cards'])

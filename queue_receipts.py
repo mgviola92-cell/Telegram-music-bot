@@ -2,24 +2,28 @@
 import asyncio
 from music_ui import queue_track_title
 from pyrogram.enums import ParseMode
+from card_layout import render
+from player_visuals import format_clock
 
 
-def receipt_text(track, *, playing=False):
+def receipt_text(track, *, playing=False, position=1):
     if getattr(track, 'metadata_failed', False) and not getattr(track, 'metadata_resolved', False):
         return '⚠️ Queue ထဲထည့်ထားတယ်။ သီချင်း Source ရှာမရသေးဘူး။'
     title = queue_track_title(track)
-    return ('▶️ ဖွင့်နေပြီ — ' if playing else '✅ Queue ထဲထည့်ပြီးပြီ — ') + title
+    return render('playing' if playing else 'queued',title=title,
+                  duration=format_clock(getattr(track,'duration_seconds',None)),
+                  requester=getattr(track,'requester','—'),position=position,status='Started Streaming')
 
 
 async def sync_receipts(player):
     entries = list(player.queue)
     if player.current is not None:
         entries.append(player.current)
-    for track in entries:
+    for position,track in enumerate(entries,1):
         message = getattr(track, 'queue_receipt', None)
         if message is None:
             continue
-        text = receipt_text(track, playing=track is player.current)
+        text = receipt_text(track, playing=track is player.current,position=position)
         if text == getattr(track, 'queue_receipt_text', None):
             continue
         try:
@@ -48,7 +52,8 @@ def schedule_receipts(player):
 
 async def acknowledge_queued(player, track, message):
     track.queue_receipt = message
-    text = receipt_text(track)
+    position=next((i for i,t in enumerate(player.queue,1) if t is track),1)
+    text = receipt_text(track,position=position)
     await message.edit_text(text, parse_mode=ParseMode.DISABLED)
     track.queue_receipt_text = text
     schedule_receipts(player)

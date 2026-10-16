@@ -11,6 +11,7 @@ from music_owner_store import DEFAULTS, LABELS, validate_text, recording_choices
 from welcome_audio import VOICES, BYTES_PER_SECOND, safe_name
 from greeting_recordings import ingest_recording
 from owner_broadcast import OwnerBroadcast
+from card_layout import DEFAULTS as CARD_DEFAULTS, LABELS as CARD_LABELS, validate as validate_card
 
 log=logging.getLogger('telegram_music')
 
@@ -26,6 +27,14 @@ class MusicOwnerUI:
 
     def menu(self,page='home'):
         def b(label,action):return B(label,callback_data='own:'+action)
+        if page=='cards':
+            text='ကဒ်အပြင်အဆင် · Group အားလုံးအတွက်\n\nပြင်ချင်တာ ရွေးပါ။'
+            return text,K([[b(label,'card:'+key)] for key,label in CARD_LABELS.items()]+[[b('‹ Owner Menu','home')]])
+        if page.startswith('card-'):
+            key=page[5:]
+            text=CARD_LABELS[key]+'\n\n'+self.store.data.get('cards',{}).get(key,CARD_DEFAULTS[key])
+            text+='\n\nသုံးနိုင်သောနေရာများ: {brand} {status} {title} {duration} {requester} {position}\nနာမည်မှာ placeholder မသုံးပါနဲ့။ အသစ်ထွက်မယ့်ကဒ်တွင် ပြောင်းမယ်။'
+            return text,K([[b('စာသားပြင်မယ်','cardedit:'+key),b('မူလပြန်ထားမယ်','cardreset:'+key)],[b('‹ ကဒ်များ','cards')]])
         if page=='texts':
             return ('📝 ကြိုဆိုစာ ပြင်မယ် · Group အားလုံးအတွက်\nပြင်ချင်တဲ့ စာသားကို ရွေးပါ။',
                     K([[b(v,'show:'+k)] for k,v in LABELS.items()]+[[b('↩ Owner Menu','home')]]))
@@ -46,6 +55,7 @@ class MusicOwnerUI:
                        [b('↩ Owner Menu','home')]]))
         return ('⚙️ မုဒြာ Music · Owner Menu\n\nကြိုဆိုစာနဲ့ default အသံကို ဒီနေရာကနေ ပြင်နိုင်တယ်။\n'
                 'သိမ်းထားတာတွေက restart/deploy ပြီးလည်း ပြန်ရမယ်။',K([
+                [b('ကဒ်အပြင်အဆင်','cards')],
                 [b('📝 ကြိုဆိုစာ အတို / အရှည်','texts')],
                 [b('🎙 Default အသံ','voices')],
                 [B('📣 Broadcast',callback_data='bc:home')],
@@ -145,9 +155,20 @@ class MusicOwnerUI:
             action=parts[0]
             key=parts[1] if len(parts)>1 else ''
             try:
-                if action in {'home','texts','voices'}:
+                if action in {'home','texts','voices','cards'}:
                     await self.show(cb.message,action,True)
-                elif action=='audio' and key in LABELS:
+                elif action=='card' and key in CARD_DEFAULTS:
+                    await self.show(cb.message,'card-'+key,True)
+                elif action=='cardedit' and key in CARD_DEFAULTS:
+                    self.pending[user]=('card-'+key,time.monotonic()+300,cb.message)
+                    await cb.message.edit_text('စာသားအသစ်ကို ပို့ပါ။ /cancel နှင့် ပြန်ထွက်နိုင်တယ်။',parse_mode=ParseMode.DISABLED)
+                elif action=='cardreset' and key in CARD_DEFAULTS:
+                    self.busy=True
+                    try:
+                        await self.store.set_card(user,key)
+                        await self.show(cb.message,'card-'+key,True)
+                    finally:self.busy=False
+                elif action=='audio'  and key in LABELS:
                     text,k=self.audio_menu(key)
                     await cb.message.edit_text(text,reply_markup=k,parse_mode=ParseMode.DISABLED)
                 elif action=='upload' and key in LABELS:
@@ -231,6 +252,16 @@ class MusicOwnerUI:
             if time.monotonic()>until:
                 self.pending.pop(user,None)
                 await msg.reply_text('Edit သက်တမ်းကုန်ပြီ။ /owner ပြန်ခေါ်ပါ။')
+                msg.stop_propagation();return
+            if key.startswith('card-'):
+                self.busy=True
+                try:
+                    await self.store.set_card(user,key[5:],msg.text)
+                    self.pending.pop(user,None)
+                    await self.show(panel,key,True)
+                except ValueError as exc:await msg.reply_text(str(exc))
+                except Exception:await msg.reply_text('မသိမ်းရသေးဘူး။ /owner နှင့် ပြန်စမ်းပါ။')
+                finally:self.busy=False
                 msg.stop_propagation();return
             try:text=validate_text(key,msg.text)
             except ValueError as exc:

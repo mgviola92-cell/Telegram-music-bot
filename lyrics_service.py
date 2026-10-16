@@ -44,12 +44,19 @@ class LyricsLookup:
         cached=self.cache.get(key)
         if cached and cached[0]>time.monotonic():self.cache.move_to_end(key);return cached[1]
         async with self.slots:
-            async with ClientSession(timeout=ClientTimeout(total=8),headers={'User-Agent':'MudyarMusic/1.0 (Telegram lyrics lookup)'}) as client:
+            async with ClientSession(timeout=ClientTimeout(total=8),headers={'User-Agent':'MudyarMusic/1.0 (Telegram lyrics lookup)','Accept':'application/json'}) as client:
                 async with client.get('https://lrclib.net/api/search',params={'q':query_text(title)},allow_redirects=False) as response:
                     if response.status!=200:raise ValueError('Lyrics service unavailable')
-                    payload=await response.content.read(1024*1024+1)
-                    if len(payload)>1024*1024:raise ValueError('Lyrics response too large')
-                    result=choose_record(json.loads(payload),title,duration)
+                    payload=bytearray()
+                    async for chunk in response.content.iter_chunked(65536):
+                        payload.extend(chunk)
+                        if len(payload)>1024*1024:raise ValueError('Lyrics response too large')
+                    try:records=json.loads(payload)
+                    except (ValueError,UnicodeError):
+                        import logging
+                        logging.getLogger('telegram_music').info('Lyrics response invalid content_type=%s bytes=%s',response.content_type,len(payload))
+                        raise
+                    result=choose_record(records,title,duration)
         self.cache[key]=(time.monotonic()+(3600 if result else 120),result)
         while len(self.cache)>32:self.cache.popitem(last=False)
         return result

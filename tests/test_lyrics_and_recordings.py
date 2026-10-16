@@ -3,7 +3,7 @@ import json
 import unittest
 from types import SimpleNamespace as N
 from unittest.mock import AsyncMock,patch
-from lyrics_service import LyricsUI,choose_record,query_text
+from lyrics_service import LyricsUI,LyricsLookup,choose_record,query_text
 from music_owner_store import MusicOwnerStore,recording_choices,parse_state
 from welcome_audio import WelcomeAudio,VOICES
 from test_music_owner import SavedClient
@@ -83,3 +83,26 @@ class LyricsTests(unittest.IsolatedAsyncioTestCase):
             await callback(None,cb)
             self.assertTrue(panel.edit_text.call_args.kwargs['reply_markup'].inline_keyboard[0][0].url)
             self.assertFalse(ui.busy)
+
+
+class LyricsResponseTests(unittest.IsolatedAsyncioTestCase):
+    async def fetch(self,chunks):
+        class Content:
+            async def iter_chunked(self,size):
+                for chunk in chunks:yield chunk
+        class Response:
+            status=200;content_type='application/json';content=Content()
+            async def __aenter__(self):return self
+            async def __aexit__(self,*args):pass
+        class Session:
+            def __init__(self,*args,**kwargs):pass
+            async def __aenter__(self):return self
+            async def __aexit__(self,*args):pass
+            def get(self,*args,**kwargs):return Response()
+        with patch('lyrics_service.ClientSession',Session):return await LyricsLookup().find('Perfect Ed Sheeran',263)
+    async def test_chunked_json_is_read_completely_before_parsing(self):
+        payload=json.dumps([{'trackName':'Perfect','artistName':'Ed Sheeran','duration':263,'plainLyrics':'test text'}]).encode()
+        result=await self.fetch([payload[:13],payload[13:29],payload[29:]])
+        self.assertEqual(result[0],'test text')
+    async def test_chunked_body_remains_bounded(self):
+        with self.assertRaises(ValueError):await self.fetch([bytes(65536)]*17)

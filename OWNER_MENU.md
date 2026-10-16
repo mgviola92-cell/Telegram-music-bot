@@ -61,3 +61,39 @@ retry loading at most once per minute.
 `MUSIC_OWNER_PROBE_UNTIL` accepts an expiring Unix timestamp within 900 seconds
 of startup for a deployment-only create/edit/read persistence roundtrip. It
 never binds a real or test owner, changes greeting templates, or joins a VC.
+
+## Recorded greetings
+
+Each of the four templates has its own Voice/Audio menu. Upload a voice message
+or audio file up to 5 MB and 40 seconds. The bot validates and converts it to MP3,
+then stores its own Telegram file ID with the settings. Decoded audio is bounded
+in RAM; temporary conversion uses pipes. Failed retrieval falls back to saved TTS.
+
+Choose TTS, the recording alone, or (for normal VC/group greetings with a recording
+of at most 30 seconds) a dynamic name spoken by TTS followed by the recording.
+Uploading a party introduction does not change normal VC greetings or their names.
+Preview plays only in the owner's private chat. Removing a recording restores TTS.
+
+## Owner Broadcast
+
+Open Broadcast, send or forward one announcement, select known groups, and review.
+The bot shows a private copy and the target count before the explicit Send button.
+Only that confirmation starts delivery; opening menus and restarting never sends.
+Text, photos, videos, audio, voice, documents and animations are supported when
+Telegram permits copying. Recipients see a copy from this bot rather than a forward.
+
+Progress shows sent, failed/unconfirmed and not attempted counts. Cancel stops
+remaining groups; delivered announcements cannot be recalled by Cancel. Requests
+are paced, short FloodWaits are respected, and uncertain deliveries are not retried.
+The saved draft survives restart, but an interrupted delivery is never auto-resumed.
+
+## Private song requests
+
+In private chat, send `/play title`, `/song title`, `/search title`, or a song name.
+The bot returns its own MP3 audio message with a Lyrics button; it does not join a VC.
+Files are limited to 20 MB and ten minutes. One private request runs at a time,
+with a 15-second per-user interval. Group VC preparation takes priority and can
+cancel a private lookup. Cached Telegram file IDs expire after one hour and the
+cache is limited to 64 entries. Temporary source files are cleaned after delivery.
+Strict stream-only mode intentionally disables file delivery. Existing group direct
+HTTPS streaming and group source selection are unchanged.

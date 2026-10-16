@@ -29,6 +29,7 @@ from radio_catalog import RadioCatalog
 from welcome_audio import WelcomeAudio
 from music_owner_store import MusicOwnerStore
 from music_owner_ui import MusicOwnerUI
+from private_songs import PrivateSongs
 from youtube_health import youtube_guard
 from archive_source import get_archive_audio
 from prefetch import PreparedAudio, AsyncPreparedAudio
@@ -863,7 +864,7 @@ async def main() -> None:
     calls = PyTgCalls(assistant, workers=min(max_groups, 4))
     radio_catalog = RadioCatalog()
     owner_settings = MusicOwnerStore(assistant)
-    welcome = WelcomeAudio(owner_settings)
+    welcome = WelcomeAudio(owner_settings,bot=bot)
     owner_ui = MusicOwnerUI(bot,owner_settings,welcome,players)
     owner_ui.register()
     calls.welcome_audio = welcome
@@ -909,6 +910,20 @@ async def main() -> None:
                 raise
             log.info("Selected SoundCloud audio unavailable (%s); matching selected title on bot sources", type(exc).__name__)
             return await lybot.resolve(queue_track_title(song))
+
+    async def resolve_private_song(query):
+        if stream_only_enabled():
+            raise StreamOnlyPlaybackError("Private file requests disabled in strict stream-only mode")
+        if is_youtube_url(query):
+            query=await youtube_title(query)
+            if not query:raise ValueError("No public song title")
+        elif query.startswith(("http://","https://")) and not allowed_url(query,{
+                "soundcloud.com","www.soundcloud.com","m.soundcloud.com"}):
+            raise ValueError("Unsupported song URL")
+        return await resolve_for_queue(Track(query,query,youtube=True),False)
+
+    private_songs=PrivateSongs(bot,resolve_private_song,players,clean_temp)
+    private_songs.register()
 
     async def describe_primary(query):
         known = lookup_metadata(query)
@@ -1561,6 +1576,7 @@ async def main() -> None:
             "🎧 မုဒြာ Music Bot — VC Player\n\n"
             "Group VC ဖွင့်ပြီး /play Faded လို့ သီချင်းနာမည် ရိုက်နိုင်တယ်။\n"
             "Audio File ကို Reply လုပ်ပြီး /play လည်းရတယ်။\n"
+            "Private chat မှာ /play သီချင်းနာမည် လို့ တောင်းရင် MP3 ဖိုင် ပို့ပေးမယ်။\n"
             "/findsong — Video / Voice / Audio ကို reply လုပ်ပြီး သီချင်းရှာပါ။\n"
             "Video: ကိုယ်ပိုင် MP4 ကို Reply လုပ်ပြီး /vplay သုံးပါ။\n"
             "Music: ရင်းမြစ်များစွာမှာ တစ်ပြိုင်တည်းရှာမယ်။\n"
@@ -1604,6 +1620,7 @@ async def main() -> None:
 
     @bot.on_message(filters.command(["play", "p", "vplay"]) & filters.group)
     async def play_command(_: Client, msg: Message) -> None:
+        private_songs.preempt()
         video_mode = msg.command[0].lower() == "vplay"
         link_progress = None
         selected_track = getattr(msg, "selected_track", None)
@@ -2953,6 +2970,8 @@ async def main() -> None:
                 player.cancel_download.set()
             discard_prepared(player)
             clean_temp(player.temp_file)
+        await private_songs.close()
+        await owner_ui.close()
         await owner_settings.close()
         await bot.stop()
         if assistant.is_connected:

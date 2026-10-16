@@ -1,4 +1,4 @@
-"""Private, owner-only music controls. No outbound group broadcasts."""
+"""Private, owner-only music controls. Recorded greetings and explicitly reviewed broadcasts."""
 import asyncio
 import io
 import logging
@@ -8,6 +8,8 @@ from pyrogram.enums import ParseMode
 from pyrogram.types import InlineKeyboardButton as B, InlineKeyboardMarkup as K
 from music_owner_store import DEFAULTS, LABELS, validate_text
 from welcome_audio import VOICES, BYTES_PER_SECOND, safe_name
+from greeting_recordings import ingest_recording
+from owner_broadcast import OwnerBroadcast
 
 log=logging.getLogger('telegram_music')
 
@@ -18,6 +20,8 @@ class MusicOwnerUI:
         self.pending={}
         self.busy=False
         self.last_load=-1000
+        self.record_pending={}
+        self.broadcast=OwnerBroadcast(self)
 
     def menu(self,page='home'):
         def b(label,action):return B(label,callback_data='own:'+action)
@@ -31,6 +35,7 @@ class MusicOwnerUI:
                    'အားလုံးကို ပြောမယ့်စာဖြစ်လို့ နာမည် placeholder မသုံးပါနဲ့။\n')
             return text,K([[b('✏️ စာသားပြင်မယ်','edit:'+page)],
                 [b('👨 အသံစမ်း','preview:'+page+':male'),b('👩 အသံစမ်း','preview:'+page+':female')],
+                [b('🎙 ကိုယ်ပိုင်အသံဖိုင် / TTS','audio:'+page)],
                 [b('မူလစာသား ပြန်ထားမယ်','reset:'+page)],
                 [b('↩ ကြိုဆိုစာများ','texts'),b('⚙️ Owner Menu','home')]])
         if page=='voices':
@@ -42,6 +47,7 @@ class MusicOwnerUI:
                 'သိမ်းထားတာတွေက restart/deploy ပြီးလည်း ပြန်ရမယ်။',K([
                 [b('📝 ကြိုဆိုစာ အတို / အရှည်','texts')],
                 [b('🎙 Default အသံ','voices')],
+                [B('📣 Broadcast',callback_data='bc:home')],
                 [b('📊 Bot Status','status'),b('👥 Group စာရင်း','groups:0')]]))
 
     async def show(self,msg,page='home',edit=False):
@@ -68,7 +74,27 @@ class MusicOwnerUI:
         await self.bot.send_audio(chat,f,title=LABELS[key],performer='မုဒြာ Music',
                                   duration=round(len(pcm)/BYTES_PER_SECOND),caption='🎙 '+voice)
 
+    def audio_menu(self,key):
+        def b(t,a):return B(t,callback_data='own:'+a+':'+key)
+        clip=self.store.data.get('audio',{}).get(key)
+        mode=self.store.data.get('audio_modes',{}).get(key,'tts')
+        text='🎙 '+LABELS[key]+'\nအသုံးပြုနေတာ: '+mode
+        rows=[[b('📥 Voice / အသံဖိုင် တင်မယ်','upload')],[b('📝 TTS စာသားအသံ သုံးမယ်','mode-tts')]]
+        if clip:
+            text+=f"\nအသံဖိုင်: {clip['seconds']:.1f} စက္ကန့်"
+            rows.append([b('🔊 ဖိုင်ကို နားထောင်မယ်','clip-preview'),b('ဖိုင်သုံးမယ်','mode-clip')])
+            if key in {'vc','group'} and clip['seconds']<=30:
+                rows.append([b('နာမည် TTS + ဖိုင် ဆက်ဖွင့်မယ်','mode-name_clip')])
+            rows.append([b('🗑 အသံဖိုင်ဖြုတ်မယ်','clip-remove')])
+        rows.append([b('↩ စာသားနှင့် အသံ','show'),B('⚙️ Owner Menu',callback_data='own:home')])
+        text+='\nVoice/Audio 5 MB၊ ၄၀ စက္ကန့်အထိ။ နာမည်တွဲသုံးမယ့်ဖိုင်က ၃၀ စက္ကန့်အထိ။'
+        return text,K(rows)
+
+    async def close(self):
+        await self.broadcast.close()
+
     def register(self):
+        self.broadcast.register()
         @self.bot.on_message(filters.private & filters.command(['owner','start','cancel']),group=-2)
         async def owner_command(_,msg):
             user=msg.from_user.id if msg.from_user else None
@@ -89,6 +115,8 @@ class MusicOwnerUI:
                     await msg.reply_text('🔒 Owner အတွက်ပဲ သုံးနိုင်တယ်။ ပထမဆုံး ချိတ်ဆက်ဖို့ တစ်ကြိမ်သုံး setup code လိုတယ်။')
                     msg.stop_propagation();return
             self.pending.pop(user,None)
+            self.record_pending.pop(user,None)
+            self.broadcast.waiting=False
             if self.busy:
                 await msg.reply_text('⏳ လက်ရှိအလုပ် ပြီးအောင် ခဏစောင့်ပါ။')
             else:await self.show(msg)
@@ -105,12 +133,34 @@ class MusicOwnerUI:
                 await cb.answer('အလုပ်လုပ်နေတယ်။ ခဏစောင့်ပါ။');return
             await cb.answer()
             self.pending.pop(user,None)
+            self.record_pending.pop(user,None)
+            self.broadcast.waiting=False
             parts=cb.data.split(':')[1:]
             action=parts[0]
             key=parts[1] if len(parts)>1 else ''
             try:
                 if action in {'home','texts','voices'}:
                     await self.show(cb.message,action,True)
+                elif action=='audio' and key in LABELS:
+                    text,k=self.audio_menu(key)
+                    await cb.message.edit_text(text,reply_markup=k,parse_mode=ParseMode.DISABLED)
+                elif action=='upload' and key in LABELS:
+                    self.record_pending[user]=(key,time.monotonic()+300,cb.message)
+                    await cb.message.edit_text('🎙 Voice message ဒါမှမဟုတ် အသံဖိုင်ကို ဒီ private chat ထဲ ပို့ပါ။ 5 MB / ၄၀ စက္ကန့်အထိ။',
+                        reply_markup=K([[B('↩ မတင်တော့ဘူး',callback_data='own:audio:'+key)]]))
+                elif action.startswith('mode-') and key in LABELS:
+                    self.busy=True
+                    try:await self.store.set_audio_mode(user,key,action[5:])
+                    finally:self.busy=False
+                    text,k=self.audio_menu(key);await cb.message.edit_text(text,reply_markup=k,parse_mode=ParseMode.DISABLED)
+                elif action=='clip-remove' and key in LABELS:
+                    self.busy=True
+                    try:await self.store.remove_recording(user,key)
+                    finally:self.busy=False
+                    text,k=self.audio_menu(key);await cb.message.edit_text(text,reply_markup=k,parse_mode=ParseMode.DISABLED)
+                elif action=='clip-preview' and key in LABELS:
+                    clip=self.store.data.get('audio',{}).get(key)
+                    if clip:await self.bot.send_audio(user,clip['file_id'],caption='🎙 '+LABELS[key])
                 elif action=='show' and key in LABELS:
                     await self.show(cb.message,key,True)
                 elif action=='edit' and key in LABELS:
@@ -183,5 +233,31 @@ class MusicOwnerUI:
                 log.info('Music greeting save unavailable (%s)',type(exc).__name__)
                 await panel.edit_text('⚠️ မသိမ်းရသေးဘူး။ စာသားကို ပိုတိုအောင် ပြင်ပြီး ပြန်ပို့ပါ၊ '
                                       'ဒါမှမဟုတ် /owner ပြန်ခေါ်ပါ။')
+            finally:self.busy=False
+            msg.stop_propagation()
+
+        @self.bot.on_message(filters.private,group=-4)
+        async def owner_recording(_,msg):
+            user=msg.from_user.id if msg.from_user else None
+            pending=self.record_pending.get(user)
+            if not pending or not self.store.authorized(user):return
+            if msg.text and msg.text.startswith('/'):return
+            if self.busy:msg.stop_propagation();return
+            key,until,panel=pending
+            if time.monotonic()>until:
+                self.record_pending.pop(user,None)
+                await msg.reply_text('အသံတင်ရန် သက်တမ်းကုန်ပြီ။ /owner ပြန်သုံးပါ။')
+                msg.stop_propagation();return
+            self.busy=True
+            try:
+                await panel.edit_text('🎙 အသံဖိုင် စစ်ပြီး သိမ်းနေတယ်…')
+                await ingest_recording(self.bot,msg,key,self.store,user,self.welcome.recordings)
+                self.welcome.ready=True
+                self.record_pending.pop(user,None)
+                text,k=self.audio_menu(key)
+                await panel.edit_text(text,reply_markup=k,parse_mode=ParseMode.DISABLED)
+            except Exception as exc:
+                log.info('Greeting recording unavailable (%s)',type(exc).__name__)
+                await panel.edit_text('⚠️ အသံဖိုင် မသိမ်းရသေးဘူး။ Voice/Audio 5 MB၊ ၄၀ စက္ကန့်အောက်နဲ့ ပြန်ပို့ပါ။ /cancel နဲ့ ထွက်နိုင်တယ်။')
             finally:self.busy=False
             msg.stop_propagation()

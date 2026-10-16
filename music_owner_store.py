@@ -65,16 +65,30 @@ def parse_state(raw):
             raise ValueError('Invalid group')
     if d.get('voice','male') not in {'male','female'}:
         raise ValueError('Invalid voice')
+    audio=d.get('audio',{});modes=d.get('audio_modes',{})
+    if not isinstance(audio,dict) or len(audio)>4 or not isinstance(modes,dict) or len(modes)>4:
+        raise ValueError('Invalid recording settings')
+    for key,clip in audio.items():
+        if (key not in DEFAULTS or not isinstance(clip,dict) or not isinstance(clip.get('file_id'),str)
+                or not 1<=len(clip['file_id'])<=2000 or type(clip.get('seconds')) not in {int,float}
+                or not .25<=clip['seconds']<=40):raise ValueError('Invalid recording')
+    for key,mode in modes.items():
+        if key not in DEFAULTS or mode not in {'tts','clip','name_clip'}:raise ValueError('Invalid audio mode')
+        if mode!='tts' and key not in audio:raise ValueError('Missing recording')
+        if mode=='name_clip' and (key not in {'vc','group'} or audio[key]['seconds']>30):raise ValueError('Invalid named recording')
+    broadcast=d.get('broadcast')
+    if broadcast is not None and (owner is None or not isinstance(broadcast,dict) or broadcast.get('chat_id')!=owner
+            or type(broadcast.get('message_id')) is not int or broadcast['message_id']<=0):raise ValueError('Invalid broadcast source')
     revision=d.get('revision',0)
     if type(revision) is not int or revision<0:raise ValueError('Invalid revision')
-    return {'v':1,'owner':owner,'texts':texts,'groups':groups,'voice':d.get('voice','male'),'revision':revision}
+    return {'v':1,'owner':owner,'texts':texts,'groups':groups,'voice':d.get('voice','male'),'revision':revision,'audio':audio,'audio_modes':modes,'broadcast':broadcast}
 
 
 class MusicOwnerStore:
     def __init__(self,client,setup_code=None):
         self.client=client
         self.setup_code=setup_code if setup_code is not None else os.getenv('MUSIC_OWNER_SETUP_CODE','')
-        self.data={'v':1,'owner':None,'texts':{},'groups':{},'voice':'male','revision':0}
+        self.data={'v':1,'owner':None,'texts':{},'groups':{},'voice':'male','revision':0,'audio':{},'audio_modes':{},'broadcast':None}
         self.ready=False
         self.message_id=None
         self.lock=asyncio.Lock()
@@ -180,6 +194,26 @@ class MusicOwnerStore:
         async with self.lock:
             if not self.authorized(user):raise PermissionError('Owner only')
             data=copy.deepcopy(self.data);data['voice']=voice
+            await self._persist(data)
+
+    async def set_recording(self,user,key,file_id,seconds):
+        async with self.lock:
+            if not self.authorized(user):raise PermissionError('Owner only')
+            data=copy.deepcopy(self.data);data['audio'][key]={'file_id':file_id,'seconds':seconds}
+            data['audio_modes'][key]='clip';await self._persist(data)
+    async def set_audio_mode(self,user,key,mode):
+        async with self.lock:
+            if not self.authorized(user):raise PermissionError('Owner only')
+            data=copy.deepcopy(self.data);data['audio_modes'][key]=mode;await self._persist(data)
+    async def remove_recording(self,user,key):
+        async with self.lock:
+            if not self.authorized(user):raise PermissionError('Owner only')
+            data=copy.deepcopy(self.data);data['audio'].pop(key,None);data['audio_modes'].pop(key,None)
+            await self._persist(data)
+    async def set_broadcast(self,user,message_id):
+        async with self.lock:
+            if not self.authorized(user):raise PermissionError('Owner only')
+            data=copy.deepcopy(self.data);data['broadcast']={'chat_id':user,'message_id':message_id}
             await self._persist(data)
 
     def observe_group(self,chat):

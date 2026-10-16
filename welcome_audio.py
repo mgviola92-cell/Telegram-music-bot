@@ -138,8 +138,12 @@ class WelcomeStream(MediaStream):
 
 
 class WelcomeAudio:
-    def __init__(self,settings=None):
+    def __init__(self,settings=None,bot=None):
         self.settings = settings
+        self.recordings = None
+        if bot is not None:
+            from greeting_recordings import RecordingCache
+            self.recordings = RecordingCache(bot)
         self.modes = {}
         self.voices = {}
         self.styles = {}
@@ -219,6 +223,21 @@ class WelcomeAudio:
                 self.cache.popitem(last=False)
             return pcm
 
+    async def speech(self,name,kind,style,voice):
+        key=style if style in {'party','party_batch'} else kind
+        if self.settings and self.settings.ready and self.recordings is not None:
+            mode=self.settings.data.get('audio_modes',{}).get(key,'tts');clip=self.settings.data.get('audio',{}).get(key)
+            if mode!='tts' and clip:
+                try:
+                    pcm=await self.recordings.get(clip['file_id'])
+                    if mode=='name_clip':
+                        intro=await self.pcm('မင်္ဂလာပါ၊ '+(safe_name(name) or 'သူငယ်ချင်း')+'။',voice)
+                        pcm=intro+bytes(BYTES_PER_SECOND//5)+pcm
+                    if len(pcm)>MAX_SECONDS*BYTES_PER_SECOND:raise ValueError('Greeting too long')
+                    return pcm
+                except Exception as exc:log.info('Recorded greeting unavailable; using text (%s)',type(exc).__name__)
+        return await self.pcm(self.render(name,kind,style),voice)
+
     async def warmup(self):
         try:
             pcm = await self.pcm(self.render(''),VOICES['male'])
@@ -227,6 +246,7 @@ class WelcomeAudio:
         except Exception as exc:
             # Normal music must never wait on or fail because of TTS availability.
             log.warning('Welcome TTS unavailable; normal audio unchanged (%s)',type(exc).__name__)
+            if self.settings and self.settings.ready and self.settings.data.get('audio'):self.ready=True
         if self.ready:
             for voice in VOICES.values():
                 try:
@@ -268,7 +288,7 @@ class WelcomeAudio:
         async def deliver():
             try:
                 voice = VOICES[expected_voice]
-                pcm = await asyncio.wait_for(self.pcm(self.render(name,kind,style or expected_style),voice),18)
+                pcm = await asyncio.wait_for(self.speech(name,kind,style or expected_style,voice),18)
                 await asyncio.sleep(max(0,not_before-time.monotonic()))
                 if (self.pipes.get(chat) is not expected or self.mode(chat) == 'off'
                         or self.styles.get(chat,'normal') != expected_style

@@ -118,7 +118,7 @@ class SearchTests(unittest.IsolatedAsyncioTestCase):
         msg=N(command=['play','https://youtu.be/abcdefghijk'],text='/play https://youtu.be/abcdefghijk',
               reply_to_message=None,chat=N(id=-100),reply_text=AsyncMock(return_value=progress))
         # Stop after assistant join to inspect mapped track without running a VC.
-        ns=dict(vars(main));ns.update(players={-100:player},youtube_audio_enabled=lambda:False,
+        ns=dict(vars(main));ns.update(private_songs=N(preempt=lambda:None),players={-100:player},youtube_audio_enabled=lambda:False,
             youtube_title=AsyncMock(return_value='Faded – Alan Walker'),allowed_hosts=set(),
             resolve_for_queue=object(),start_autoplay=Mock(),ensure_assistant_in_group=AsyncMock(side_effect=RuntimeError('test gate')))
         handler=closure('play_command',ns)

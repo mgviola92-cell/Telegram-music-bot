@@ -173,3 +173,9 @@ stereo cases (Vocal Reduce with Normalize OFF/ON), with no audio files or API ca
 
 ## Card layout
 Private `/owner` → ကဒ်အပြင်အဆင် changes the global brand, playing card and queue reply. Plain text only; placeholders: `{brand}`, `{title}`, `{duration}`, `{requester}`, `{position}`, `{status}`. Brand: 100 characters, templates: 400. Reset each independently. Settings share the existing private Saved Messages persistence and preserve greeting recordings/broadcast settings. New cards use the saved layout. No seekable Telegram timeline; static duration only, no periodic card edits. Missing SoundCloud artwork uses a bundled JPEG after audio has already started. All player controls and queue popup remain.
+
+
+## Bandwidth savings
+Photo cards reuse up to 32 of this bot's Telegram photo IDs. Private MP3 file IDs are kept for up to seven days (64 entries); repeated source audio is keyed by Telegram file_unique_id when available. Both caches store IDs, not media bytes, and reset on restart. Private search metadata is reused for 60 seconds / 32 queries.
+
+An empty VC with a valid assistant-only participant snapshot is paused after three minutes and rechecked every 30 seconds. A JOIN event resumes it before welcome greeting handling; polling also recovers missed JOIN events. Manual admin pauses are never automatically resumed. Unknown snapshots / API errors do not trigger pause. Silent greeting input stays active when VC greetings are enabled. Audio quality, direct streaming, radio/autoplay settings, disk cache limits and source ordering remain unchanged. Native transport keepalive can still consume bandwidth while paused; no guaranteed percentage reduction.

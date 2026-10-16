@@ -30,7 +30,7 @@ async def verify_song_file(path):
 class PrivateSongs:
     def __init__(self,bot,resolver,players,cleanup,searcher=None,lyric_button=None):
         self.bot,self.resolver,self.players,self.cleanup=bot,resolver,players,cleanup
-        self.cache=DeliveredAudioCache();self.recent=OrderedDict();self.job=None
+        self.cache=DeliveredAudioCache();self.search_cache=OrderedDict();self.recent=OrderedDict();self.job=None
         self.lyric_button=lyric_button or (lambda t,d:B("🎤 Lyrics",url=lyrics_search_url(t)))
         self.searcher=searcher or collect_choices;self.sessions=OrderedDict();self.searching=set();self.search_recent=OrderedDict();self.search_tasks={}
     def preempt(self):
@@ -92,8 +92,17 @@ class PrivateSongs:
             panel=None
             try:
                 panel=await msg.reply_text('🔎 သီချင်းစာရင်း ရှာနေတယ်…')
-                task=asyncio.create_task(self.searcher(text));self.search_tasks[uid]=task
-                choices=await asyncio.wait_for(task,12)
+                key=text.casefold()
+                cached_search=self.search_cache.get(key)
+                if cached_search and cached_search[0]>time.monotonic():
+                    choices=cached_search[1]
+                    self.search_cache.move_to_end(key)
+                else:
+                    task=asyncio.create_task(self.searcher(text));self.search_tasks[uid]=task
+                    choices=await asyncio.wait_for(task,12)
+                    if choices:
+                        self.search_cache[key]=(time.monotonic()+60,list(choices)[:15])
+                        while len(self.search_cache)>32:self.search_cache.popitem(last=False)
                 if not choices:
                     await panel.edit_text('သီချင်းမတွေ့သေးဘူး။ အဆိုတော်နာမည်ပါ ထည့်ပြီး ပြန်ရှာပါ။');return
                 self.sessions=OrderedDict((k,v) for k,v in self.sessions.items() if v['until']>time.monotonic() and v['user']!=uid)
@@ -131,6 +140,10 @@ class PrivateSongs:
     def cache_key(text,choice=None):
         if choice is None:return text.casefold()
         candidate=choice.candidate
+        message=getattr(candidate,'message',None)
+        audio=getattr(message,'audio',None) or getattr(message,'document',None)
+        unique=getattr(audio,'file_unique_id',None)
+        if unique:return ('telegram-audio|'+str(unique))
         return (choice.source+'|'+choice.title+'|'+str(getattr(getattr(candidate,'message',None),'id',''))+'|'+
                 str(getattr(getattr(candidate,'source',None),'username',''))).casefold()
 

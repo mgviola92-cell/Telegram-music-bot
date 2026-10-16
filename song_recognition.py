@@ -34,7 +34,7 @@ class DeliveredAudioCache:
     def put(self, key, title, audio):
         if not key or not audio or not getattr(audio, "file_id", None):
             return
-        self.items[key] = (time.monotonic() + 3600,
+        self.items[key] = (time.monotonic() + 7*86400,
                            (title, audio.file_id, getattr(audio, "duration", 0) or 0))
         self.items.move_to_end(key)
         while len(self.items) > 64:

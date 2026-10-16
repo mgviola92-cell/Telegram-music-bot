@@ -140,7 +140,7 @@ class RecognitionTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(cache.items), 64)
             self.assertIsNone(cache.get('0'))
             self.assertEqual(cache.get('64'), ('Purple', 'own-file-64', 168))
-        with patch('song_recognition.time.monotonic', return_value=3701):
+        with patch('song_recognition.time.monotonic', return_value=7*86400+101):
             self.assertIsNone(cache.get('64'))
         cache.discard('63')
         self.assertIsNone(cache.get('63'))

@@ -1034,6 +1034,9 @@ async def main() -> None:
             withheld += now - player.paused_since
         return max(0., now - player.started_at - withheld)
 
+    from telegram_photo_cache import TelegramPhotoCache
+    photo_cache = TelegramPhotoCache()
+
     async def edit_panel(chat_id: int, player: Player) -> None:
         if player.panel_id is None or player.current is None:
             return
@@ -1108,7 +1111,7 @@ async def main() -> None:
             if image and artwork_is_safe(image):
                 try:
                     panel = await asyncio.wait_for(
-                        bot.send_photo(chat_id, photo=image, caption=title, reply_markup=buttons, parse_mode=ParseMode.DISABLED, reply_to_message_id=getattr(progress,"reply_to_message_id",None)),
+                        photo_cache.send(bot, chat_id, image, image, caption=title, reply_markup=buttons, parse_mode=ParseMode.DISABLED, reply_to_message_id=getattr(progress,"reply_to_message_id",None)),
                         timeout=5,
                     )
                     is_photo = True
@@ -1117,7 +1120,7 @@ async def main() -> None:
                              type(exc).__name__)
             if panel is None and not song.video:
                 try:
-                    panel = await asyncio.wait_for(bot.send_photo(chat_id, photo=default_photo(), caption=title, reply_markup=buttons, parse_mode=ParseMode.DISABLED, reply_to_message_id=getattr(progress,"reply_to_message_id",None)),timeout=5)
+                    panel = await asyncio.wait_for(photo_cache.send(bot, chat_id, "default-v1", default_photo, caption=title, reply_markup=buttons, parse_mode=ParseMode.DISABLED, reply_to_message_id=getattr(progress,"reply_to_message_id",None)),timeout=5)
                     is_photo = True
                 except Exception as exc:
                     log.info("Default artwork unavailable (%s)",type(exc).__name__)
@@ -2226,6 +2229,9 @@ async def main() -> None:
 
     @calls.on_update(call_filters.call_participant(GroupCallParticipant.Action.JOINED))
     async def welcome_vc_join(_: PyTgCalls, update: UpdatedGroupCallParticipant) -> None:
+        if bandwidth_saver is not None:
+            try:await bandwidth_saver.arrival(update.chat_id,update.participant.user_id)
+            except Exception as exc:log.info('Bandwidth resume deferred (%s)',type(exc).__name__)
         player = players.get(update.chat_id)
         if (not player or player.paused or welcome.mode(update.chat_id) not in {"vc", "both"}
                 or update.chat_id not in welcome.pipes or update.participant.user_id == identity.id):
@@ -2456,6 +2462,7 @@ async def main() -> None:
                 await msg.reply_text("သီချင်းဖွင့်ထားတာ မရှိသေးဘူး။")
                 return
             action = msg.command[0].lower()
+            if bandwidth_saver is not None:bandwidth_saver.manual(msg.chat.id)
             try:
                 if action == "pause":
                     await calls.pause(msg.chat.id)
@@ -2566,6 +2573,7 @@ async def main() -> None:
             if player.current is None:
                 return
             try:
+                if action in {"pause","resume"} and bandwidth_saver is not None:bandwidth_saver.manual(chat_id)
                 if action == "pause":
                     await calls.pause(chat_id)
                     if not player.paused:
@@ -2822,6 +2830,8 @@ async def main() -> None:
     feature_probe_task: asyncio.Task | None = None
     cleanup_task: asyncio.Task | None = None
     watchdog_task: asyncio.Task | None = None
+    bandwidth_task = None
+    bandwidth_saver = None
     probe_task: asyncio.Task | None = None
     bot_probe_task: asyncio.Task | None = None
     candidate_probe_task: asyncio.Task | None = None
@@ -2902,6 +2912,9 @@ async def main() -> None:
         cleanup_task = asyncio.create_task(housekeeping(
             protected_media_paths, maintain_cache))
         watchdog_task = asyncio.create_task(watch_voice_connections())
+        from bandwidth_saver import EmptyRoomSaver
+        bandwidth_saver=EmptyRoomSaver(calls,players,identity.id,welcome,update_player_panel)
+        bandwidth_task=asyncio.create_task(bandwidth_saver.run())
         await shutdown.wait()
     finally:
         ready = False
@@ -2909,6 +2922,9 @@ async def main() -> None:
             if task:
                 task.cancel()
         await asyncio.gather(*(t for t in (welcome_warmup_task, radio_warmup_task, radio_probe_task, owner_probe_task, lyrics_probe_task, effects_probe_task) if t), return_exceptions=True)
+        if bandwidth_task:
+            bandwidth_task.cancel()
+            await asyncio.gather(bandwidth_task,return_exceptions=True)
         await welcome.close()
         if feature_probe_task is not None:
             feature_probe_task.cancel()

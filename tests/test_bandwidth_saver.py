@@ -84,3 +84,13 @@ class BandwidthChecks(unittest.IsolatedAsyncioTestCase):
         await ns['welcome_vc_join'](None,O(chat_id=1,participant=O(user_id=8)))
         self.assertFalse(self.p.paused)
         welcome.request.assert_called_once()
+    async def test_custom_photo_and_invalid_id_falls_back_to_bundle(self):
+        from telegram_photo_cache import send_default_photo
+        cache=TelegramPhotoCache();sent=O(photo=O(file_id='cached_id'))
+        bot=O(send_photo=AsyncMock(return_value=sent))
+        await send_default_photo(cache,bot,1,'AgAC_custom_123')
+        self.assertEqual(bot.send_photo.call_args.kwargs['photo'],'AgAC_custom_123')
+        class FileIdInvalid(Exception):pass
+        bot.send_photo.side_effect=[FileIdInvalid(),sent]
+        await send_default_photo(TelegramPhotoCache(),bot,1,'AgAC_invalid_123')
+        self.assertTrue(bot.send_photo.call_args.kwargs['photo'].read().startswith(b'\xff\xd8'))

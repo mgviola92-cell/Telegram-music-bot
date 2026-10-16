@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import string
+import re
 import time
 import tempfile
 from pathlib import Path
@@ -93,12 +94,15 @@ def parse_state(raw):
     broadcast=d.get('broadcast')
     if broadcast is not None and (owner is None or not isinstance(broadcast,dict) or broadcast.get('chat_id')!=owner
             or type(broadcast.get('message_id')) is not int or broadcast['message_id']<=0):raise ValueError('Invalid broadcast source')
+    photo=d.get('default_photo')
+    if photo is not None and (not isinstance(photo,str) or not re.fullmatch(r'[A-Za-z0-9_-]{10,2048}',photo)):
+        raise ValueError('Invalid default photo')
     cards=d.get('cards',{})
     if not isinstance(cards,dict) or len(cards)>3:raise ValueError('Invalid cards')
     for key,value in cards.items():validate_card(key,value)
     revision=d.get('revision',0)
     if type(revision) is not int or revision<0:raise ValueError('Invalid revision')
-    return {'v':1,'owner':owner,'texts':texts,'groups':groups,'voice':d.get('voice','male'),'revision':revision,'audio':audio,'audio_modes':modes,'broadcast':broadcast,'cards':cards}
+    return {'v':1,'owner':owner,'texts':texts,'groups':groups,'voice':d.get('voice','male'),'revision':revision,'audio':audio,'audio_modes':modes,'broadcast':broadcast,'cards':cards,'default_photo':photo}
 
 
 class MusicOwnerStore:
@@ -204,6 +208,12 @@ class MusicOwnerStore:
         async with self.lock:
             if not self.authorized(user):raise PermissionError('Owner only')
             data=copy.deepcopy(self.data);data['texts'].pop(key,None)
+            await self._persist(data)
+
+    async def set_default_photo(self,user,file_id=None):
+        async with self.lock:
+            if not self.authorized(user):raise PermissionError('Owner only')
+            data=copy.deepcopy(self.data);data['default_photo']=file_id
             await self._persist(data)
 
     async def set_card(self,user,key,text=None):

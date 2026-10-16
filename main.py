@@ -1034,7 +1034,7 @@ async def main() -> None:
             withheld += now - player.paused_since
         return max(0., now - player.started_at - withheld)
 
-    from telegram_photo_cache import TelegramPhotoCache
+    from telegram_photo_cache import TelegramPhotoCache, send_default_photo
     photo_cache = TelegramPhotoCache()
 
     async def edit_panel(chat_id: int, player: Player) -> None:
@@ -1120,7 +1120,7 @@ async def main() -> None:
                              type(exc).__name__)
             if panel is None and not song.video:
                 try:
-                    panel = await asyncio.wait_for(photo_cache.send(bot, chat_id, "default-v1", default_photo, caption=title, reply_markup=buttons, parse_mode=ParseMode.DISABLED, reply_to_message_id=getattr(progress,"reply_to_message_id",None)),timeout=5)
+                    panel = await asyncio.wait_for(send_default_photo(photo_cache, bot, chat_id, owner_settings.data.get("default_photo"), caption=title, reply_markup=buttons, parse_mode=ParseMode.DISABLED, reply_to_message_id=getattr(progress,"reply_to_message_id",None)),timeout=5)
                     is_photo = True
                 except Exception as exc:
                     log.info("Default artwork unavailable (%s)",type(exc).__name__)

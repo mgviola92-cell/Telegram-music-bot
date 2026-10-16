@@ -21,3 +21,12 @@ class TelegramPhotoCache:
                 self.items[key]=file_id
                 while len(self.items)>32:self.items.popitem(last=False)
             return sent
+
+
+async def send_default_photo(cache,bot,chat,custom=None,**kwargs):
+    from default_artwork import default_photo
+    if custom:
+        try:return await cache.send(bot,chat,'custom:'+custom,custom,**kwargs)
+        except Exception as exc:
+            if type(exc).__name__ not in {'FileIdInvalid','FileReferenceExpired','FileReferenceEmpty','MediaEmpty'}:raise
+    return await cache.send(bot,chat,'default-v1',default_photo,**kwargs)

@@ -156,3 +156,39 @@ class OwnerUIChecks(unittest.IsolatedAsyncioTestCase):
         cb.data='own:cardreset:queued'
         await callback(None,cb)
         self.assertNotIn('queued',self.store.data['cards'])
+
+    async def test_default_photo_upload_reset_and_owner_only(self):
+        callback=next(f for f in self.handlers if f.__name__=='owner_callback')
+        recording=next(f for f in self.handlers if f.__name__=='owner_recording')
+        panel=SimpleNamespace(id=42,chat=SimpleNamespace(id=7),edit_text=AsyncMock())
+        cb=SimpleNamespace(from_user=SimpleNamespace(id=7),message=panel,data='own:photo-upload',answer=AsyncMock())
+        await callback(None,cb)
+        self.assertEqual(self.ui.record_pending[7][0],'card-photo')
+        class Stop(Exception):pass
+        def stop():raise Stop()
+        msg=SimpleNamespace(from_user=SimpleNamespace(id=7),text=None,photo=SimpleNamespace(file_id='AgAC_valid_photo_123',file_size=12345),reply_text=AsyncMock(),stop_propagation=stop)
+        with self.assertRaises(Stop):await recording(None,msg)
+        restored=MusicOwnerStore(self.client);await restored.load()
+        self.assertEqual(restored.data['default_photo'],'AgAC_valid_photo_123')
+        self.assertFalse(self.ui.busy)
+        self.assertNotIn(7,self.ui.record_pending)
+        with self.assertRaises(PermissionError):await self.store.set_default_photo(8,None)
+        cb.data='own:photo-reset';await callback(None,cb)
+        restored=MusicOwnerStore(self.client);await restored.load()
+        self.assertIsNone(restored.data['default_photo'])
+        self.assertTrue(restored.authorized(7))
+
+    async def test_document_does_not_replace_photo_and_cancel_clears_pending(self):
+        callback=next(f for f in self.handlers if f.__name__=='owner_callback')
+        recording=next(f for f in self.handlers if f.__name__=='owner_recording')
+        panel=SimpleNamespace(id=42,chat=SimpleNamespace(id=7),edit_text=AsyncMock())
+        cb=SimpleNamespace(from_user=SimpleNamespace(id=7),message=panel,data='own:photo-upload',answer=AsyncMock())
+        await callback(None,cb)
+        class Stop(Exception):pass
+        def stop():raise Stop()
+        msg=SimpleNamespace(from_user=SimpleNamespace(id=7),text=None,photo=None,reply_text=AsyncMock(),stop_propagation=stop)
+        with self.assertRaises(Stop):await recording(None,msg)
+        self.assertFalse(self.store.data.get('default_photo'))
+        self.assertIn(7,self.ui.record_pending)
+        cb.data='own:photo';await callback(None,cb)
+        self.assertNotIn(7,self.ui.record_pending)

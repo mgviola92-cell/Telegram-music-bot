@@ -55,8 +55,8 @@ class CardLayoutTest(unittest.IsolatedAsyncioTestCase):
         panel=Obj(id=33)
         bot=Obj(send_photo=AsyncMock(return_value=panel),delete_messages=AsyncMock(),send_message=AsyncMock())
         progress=Obj(reply_to_message_id=17,delete=AsyncMock())
-        from telegram_photo_cache import TelegramPhotoCache
-        ns=dict(vars(main));ns.update(photo_cache=TelegramPhotoCache(),bot=bot,calls=Obj(),identity=Obj(id=7),
+        from telegram_photo_cache import TelegramPhotoCache, send_default_photo
+        ns=dict(vars(main));ns.update(photo_cache=TelegramPhotoCache(),send_default_photo=send_default_photo,owner_settings=Obj(data={}),bot=bot,calls=Obj(),identity=Obj(id=7),
              ensure_voice_audio=AsyncMock(return_value=False),artwork_for=lambda q:None,elapsed_for=lambda p:5)
         exec(compile(ast.Module(body=[handler],type_ignores=[]),'card-handler','exec'),ns)
         await ns['announce_now_playing'](1,player,song,progress)

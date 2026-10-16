@@ -29,7 +29,13 @@ class MusicOwnerUI:
         def b(label,action):return B(label,callback_data='own:'+action)
         if page=='cards':
             text='ကဒ်အပြင်အဆင် · Group အားလုံးအတွက်\n\nပြင်ချင်တာ ရွေးပါ။'
-            return text,K([[b(label,'card:'+key)] for key,label in CARD_LABELS.items()]+[[b('‹ Owner Menu','home')]])
+            return text,K([[b(label,'card:'+key)] for key,label in CARD_LABELS.items()]+[[b('Default ပုံ','photo')],[b('‹ Owner Menu','home')]])
+        if page=='photo':
+            custom=bool(self.store.data.get('default_photo'))
+            text='Default artwork\n\nအသုံးပြုနေတာ: '+('ကိုယ်ပိုင်ပုံ' if custom else 'မူလ မုဒြာပုံ')
+            text+='\nသီချင်း artwork မရမှ ဒီပုံကို သုံးမယ်။ နောက်သီချင်းကဒ်ကစ ပြောင်းမယ်။'
+            return text,K([[b('ပုံတင် / ပြောင်းမယ်','photo-upload'),b('ပုံကြည့်မယ်','photo-preview')],
+                           [b('မူလပုံ ပြန်ထားမယ်','photo-reset')],[b('‹ ကဒ်အပြင်အဆင်','cards')]])
         if page.startswith('card-'):
             key=page[5:]
             text=CARD_LABELS[key]+'\n\n'+self.store.data.get('cards',{}).get(key,CARD_DEFAULTS[key])
@@ -155,8 +161,21 @@ class MusicOwnerUI:
             action=parts[0]
             key=parts[1] if len(parts)>1 else ''
             try:
-                if action in {'home','texts','voices','cards'}:
+                if action in {'home','texts','voices','cards','photo'}:
                     await self.show(cb.message,action,True)
+                elif action=='photo-upload':
+                    self.record_pending[user]=('card-photo',time.monotonic()+300,cb.message)
+                    await cb.message.edit_text('Default ပုံကို Photo အဖြစ် ဒီ private chat ထဲ ပို့ပါ။ 5 MB အထိ။\n/cancel နှင့် ထွက်နိုင်တယ်။',
+                        reply_markup=K([[B('‹ မတင်တော့ဘူး',callback_data='own:photo')]]),parse_mode=ParseMode.DISABLED)
+                elif action=='photo-reset':
+                    self.busy=True
+                    try:
+                        await self.store.set_default_photo(user)
+                        await self.show(cb.message,'photo',True)
+                    finally:self.busy=False
+                elif action=='photo-preview':
+                    from telegram_photo_cache import send_default_photo,TelegramPhotoCache
+                    await send_default_photo(TelegramPhotoCache(),self.bot,user,self.store.data.get('default_photo'),caption='Default artwork',parse_mode=ParseMode.DISABLED)
                 elif action=='card' and key in CARD_DEFAULTS:
                     await self.show(cb.message,'card-'+key,True)
                 elif action=='cardedit' and key in CARD_DEFAULTS:
@@ -296,6 +315,15 @@ class MusicOwnerUI:
                 msg.stop_propagation();return
             self.busy=True
             try:
+                if key=='card-photo':
+                    photo=getattr(msg,'photo',None)
+                    if not photo or not getattr(photo,'file_id',None) or not 0<getattr(photo,'file_size',0)<=5*1024*1024:
+                        await msg.reply_text('Photo အဖြစ် 5 MB အောက် ပို့ပါ။ File/Document မဟုတ်ဘဲ ပုံအဖြစ် ပို့ပေးပါ။')
+                    else:
+                        await self.store.set_default_photo(user,photo.file_id)
+                        self.record_pending.pop(user,None)
+                        await self.show(panel,'photo',True)
+                    return
                 await panel.edit_text('🎙 အသံဖိုင် စစ်ပြီး သိမ်းနေတယ်…')
                 await ingest_recording(self.bot,msg,key,self.store,user,self.welcome.recordings)
                 self.welcome.ready=True
@@ -304,6 +332,8 @@ class MusicOwnerUI:
                 await panel.edit_text(text,reply_markup=k,parse_mode=ParseMode.DISABLED)
             except Exception as exc:
                 log.info('Greeting recording unavailable (%s)',type(exc).__name__)
-                await panel.edit_text('⚠️ အသံဖိုင် မသိမ်းရသေးဘူး။ Voice/Audio 5 MB၊ ၄၀ စက္ကန့်အောက်နဲ့ ပြန်ပို့ပါ။ /cancel နဲ့ ထွက်နိုင်တယ်။')
-            finally:self.busy=False
+                await panel.edit_text('ပုံ မသိမ်းရသေးဘူး။ /owner နှင့် ပြန်စမ်းပါ။' if key=='card-photo' else '⚠️ အသံဖိုင် မသိမ်းရသေးဘူး။ Voice/Audio 5 MB၊ ၄၀ စက္ကန့်အောက်နဲ့ ပြန်ပို့ပါ။ /cancel နဲ့ ထွက်နိုင်တယ်။')
+            finally:
+                self.busy=False
+                if key=='card-photo':msg.stop_propagation()
             msg.stop_propagation()

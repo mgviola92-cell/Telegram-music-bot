@@ -131,3 +131,25 @@ shows an external search button rather than unrelated text. Burmese coverage
 depends on the provider's catalog. Results are bounded/cached in RAM; no lyrics
 files are saved. `LYRICS_PROBE_UNTIL` is an expiring deployment-only lookup of a
 fixed sample, logs only status/length and sends no Telegram messages.
+
+## Fun audio effects
+
+The player card's Effects menu and `/effects` expose twelve exclusive presets:
+Normal, Nightcore, Bassboost, Slowed, Radio, Echo, Chorus, Tremolo, Vibrato,
+Wide Stereo, Chipmunk and Tiny Voice. Choose one effect at a time. `/effect normal`
+turns it off; `/effect <name>` or `/<name>` selects it. Tiny Voice uses `/tiny`.
+Existing admin permissions and next-track application remain unchanged: selecting
+an effect never restarts the current song. Normalize remains an independent option.
+
+Radio narrows the frequency range; Echo adds a short reflection; Chorus adds a
+light delayed layer; Tremolo varies loudness; Vibrato varies pitch. Wide Stereo
+requires High (stereo) quality and is bypassed for mono qualities. Chipmunk raises
+pitch and speed to 1.35x; Tiny Voice uses 1.25x with subtle vibrato. Progress and
+playback-duration calculations use those same speed ratios. These are ordinary
+live FFmpeg filters, not AI voice cloning. Meow conversion is not included.
+
+`MUSIC_EFFECTS_PROBE_UNTIL` enables an expiring deployment-only synthetic FFmpeg
+benchmark. It decodes sixty seconds per preset, logs CPU/wall seconds, and does
+not send messages or join voice chats. Cases run sequentially and stop before
+starting another case if any VC is active/preparing. The figures measure filter
+processing, not end-to-end network/Telegram load or a guarantee for four VCs.

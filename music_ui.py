@@ -10,6 +10,7 @@ from typing import Any
 
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from player_visuals import lyrics_search_url
+from audio_options import EFFECT_LABELS
 
 
 def queue_remove(items: deque, position: int) -> Any:
@@ -69,16 +70,17 @@ def player_controls(chat_id: int, *, paused: bool = False, loop: bool = False,
         rows.append([button(("✓ " if quality == value else "") + label, "q"+value)
                      for label,value in (("High","high"),("Medium","medium"),("Low","low"))])
     elif menu == "effects":
-        for pairs in ((("Normal","normal"),("Nightcore","nightcore")),
-                      (("Bass","bassboost"),("Slowed","slowed"))):
-            rows.append([button(("✓ " if effect == value else "") + label, "fx"+value) for label,value in pairs])
+        options=list(EFFECT_LABELS.items())
+        for i in range(0,len(options),2):
+            rows.append([button(("✓ " if effect==value else "")+label,"fx"+value)
+                         for value,label in options[i:i+2]])
     elif menu == "top":
         rows.append([button("🌐 All Groups", "topall"), button("👥 This Group", "topgroup")])
     else:
         rows.extend([
             [button("🔊 Normalize " + ("ON" if normalize else "OFF"), "normalize"),
              button("🎚 Quality · " + quality.title(), "quality")],
-            [button("🎛 Effects" + (" · " + effect.title() if effect != "normal" else ""), "effects"),
+            [button("🎛 Effects" + (" · " + EFFECT_LABELS.get(effect,effect.title()) if effect != "normal" else ""), "effects"),
              button("🏆 Top Tracks", "top")]])
     if menu != "main":
         rows.append([button("‹ Back", "back")])

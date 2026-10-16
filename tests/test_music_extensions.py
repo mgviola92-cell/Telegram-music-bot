@@ -13,7 +13,7 @@ from types import SimpleNamespace as N
 from unittest.mock import AsyncMock, Mock, patch
 
 import main
-from audio_options import AudioSettings, apply_filters, ProcessedAudioStream
+from audio_options import AudioSettings, apply_filters, ProcessedAudioStream, EFFECTS
 from music_search import (SearchChoice, SearchSessions, collect_choices, choose_related,
                           youtube_id, youtube_title, related_query, title_key)
 from music_stats import MusicStats
@@ -152,7 +152,7 @@ class AudioFilterTests(unittest.IsolatedAsyncioTestCase):
     @unittest.skipUnless(shutil.which('ffmpeg'),'FFmpeg required')
     def test_all_quality_effect_normalization_combinations_decode_real_pcm(self):
         for quality in ('high','medium','low'):
-            for effect in ('normal','nightcore','bassboost','slowed'):
+            for effect in EFFECTS:
                 for normalize in (False,True):
                     with self.subTest(quality=quality,effect=effect,normalize=normalize):
                         settings=AudioSettings(quality,normalize,effect)

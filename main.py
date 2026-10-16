@@ -36,7 +36,7 @@ from archive_source import get_archive_audio
 from prefetch import PreparedAudio, AsyncPreparedAudio
 from stream_probe import probe_audio_url
 from network_audio import DirectAudioStream
-from audio_options import AudioSettings, ProcessedAudioStream, EFFECTS
+from audio_options import AudioSettings, ProcessedAudioStream, EFFECTS, EFFECT_LABELS
 from music_search import collect_choices, SearchSessions, youtube_title, related_query, choose_related, title_key, restricted_error, block_source, source_blocked
 from music_stats import record_play, stats_text, stats_popup
 from music_cleanup import housekeeping
@@ -1604,7 +1604,7 @@ async def main() -> None:
             "/play (/p) /search /vplay /queue /now /skip (/s)\n"
             "/pause /resume /stop /clear (/c)\n"
             "/quality /normalize /effects — နောက်သီချင်းအတွက် အသံညှိမယ်\n"
-            "/nightcore /bassboost /slowed · /effect normal\n"
+            "/effect — Radio / Echo / Chorus / Tremolo / Vibrato / Wide / Chipmunk / Tiny Voice\n"
             "/autoplay on|off · /toptracks /stats\n"
             "/shuffle /remove 1 /clear /loop — Admin Controls\n"
             "/radio — Local / International radio\n"
@@ -1852,20 +1852,22 @@ async def main() -> None:
     def audio_menu(player):
         settings = player.audio_settings
         text = (f"🎛 Audio Settings\nQuality: {settings.quality.upper()}\n"
-                f"Normalize: {'ON' if settings.normalize else 'OFF'}\nEffect: {settings.effect}\n\n"
+                f"Normalize: {'ON' if settings.normalize else 'OFF'}\nEffect: {EFFECT_LABELS[settings.effect]}\n\n"
                 "နောက်သီချင်းကစ သက်ရောက်မယ်။ /effect normal နဲ့ effect ပိတ်နိုင်တယ်။\n"
-                "High 48kHz stereo · Medium 36kHz mono · Low 24kHz mono")
-        markup = InlineKeyboardMarkup([
+                "High 48kHz stereo · Medium 36kHz mono · Low 24kHz mono\n"
+                "Wide Stereo ကို High quality နဲ့ သုံးပါ။")
+        rows=[
             [InlineKeyboardButton(q.title(), callback_data="audio:quality:"+q) for q in ("high","medium","low")],
             [InlineKeyboardButton("Normalize ON", callback_data="audio:normalize:on"),
-             InlineKeyboardButton("OFF", callback_data="audio:normalize:off")],
-            [InlineKeyboardButton(label, callback_data="audio:effect:"+value) for label,value in
-             (("Normal","normal"),("Nightcore","nightcore"))],
-            [InlineKeyboardButton(label, callback_data="audio:effect:"+value) for label,value in
-             (("Bass","bassboost"),("Slowed","slowed"))]])
+             InlineKeyboardButton("OFF", callback_data="audio:normalize:off")]]
+        options=list(EFFECT_LABELS.items())
+        for i in range(0,len(options),2):
+            rows.append([InlineKeyboardButton(("✓ " if settings.effect==value else "")+label,
+                                              callback_data="audio:effect:"+value) for value,label in options[i:i+2]])
+        markup=InlineKeyboardMarkup(rows)
         return text, markup
 
-    @bot.on_message(filters.command(["quality", "normalize", "effect", "effects", "nightcore", "bassboost", "slowed"]) & filters.group)
+    @bot.on_message(filters.command(["quality", "normalize", "effect", "effects"] + list(EFFECTS)) & filters.group)
     async def audio_command(_: Client, msg: Message) -> None:
         if not await require_admin(msg):
             return
@@ -1881,12 +1883,12 @@ async def main() -> None:
                 player.audio_settings = replace(player.audio_settings, normalize=value == "on")
             elif command in ("effect", "effects") and value:
                 player.audio_settings = replace(player.audio_settings, effect=value)
-            elif command in ("nightcore", "bassboost", "slowed"):
+            elif command in EFFECTS:
                 if value not in (None, "on", "off"):
                     raise ValueError()
                 player.audio_settings = replace(player.audio_settings, effect="normal" if value == "off" else command)
         except ValueError:
-            await msg.reply_text("🎛 /quality high|medium|low\n/normalize on|off\n/effect normal|nightcore|bassboost|slowed")
+            await msg.reply_text("🎛 /quality high|medium|low\n/normalize on|off\n/effect " + "|".join(EFFECTS))
             return
         text, markup = audio_menu(player)
         await msg.reply_text(text, reply_markup=markup)
@@ -2525,7 +2527,7 @@ async def main() -> None:
                 log.exception("Could not %s chat %s", action, msg.chat.id)
                 await msg.reply_text("⚠️ VC connection ပြန်စစ်ပါ။")
 
-    @bot.on_callback_query(filters.regex(r"^mud:(pause|resume|skip|stop|loop|queue|normalize|quality|effects|top|back|topall|topgroup|qhigh|qmedium|qlow|fxnormal|fxnightcore|fxbassboost|fxslowed):"))
+    @bot.on_callback_query(filters.regex(r"^mud:(pause|resume|skip|stop|loop|queue|normalize|quality|effects|top|back|topall|topgroup|qhigh|qmedium|qlow|fx[a-z]+):"))
     async def panel_callback(_: Client, cb: CallbackQuery) -> None:
         """One panel per chat; stale buttons cannot control future tracks."""
         try:
@@ -2561,8 +2563,7 @@ async def main() -> None:
         if not await is_chat_admin(chat_id, cb.from_user.id if cb.from_user else None):
             await cb.answer("🛡 Group Admin တွေကပဲ Control နှိပ်နိုင်တယ်။", show_alert=True)
             return
-        if action in ("normalize", "quality", "effects", "qhigh", "qmedium", "qlow",
-                      "fxnormal", "fxnightcore", "fxbassboost", "fxslowed"):
+        if action in ("normalize", "quality", "effects", "qhigh", "qmedium", "qlow") or (action.startswith("fx") and action[2:] in EFFECTS):
             if action == "normalize":
                 player.audio_settings = replace(player.audio_settings, normalize=not player.audio_settings.normalize)
                 player.control_menu = "main"
@@ -2882,6 +2883,7 @@ async def main() -> None:
     radio_probe_task: asyncio.Task | None = None
     owner_probe_task: asyncio.Task | None = None
     lyrics_probe_task: asyncio.Task | None = None
+    effects_probe_task: asyncio.Task | None = None
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, shutdown.set)
@@ -2921,6 +2923,11 @@ async def main() -> None:
         except ValueError:lyrics_probe_until=0
         if 0<lyrics_probe_until-time.time()<=900:
             lyrics_probe_task=asyncio.create_task(lyrics_ui.probe())
+        try:effects_probe_until=float(os.getenv('MUSIC_EFFECTS_PROBE_UNTIL','0'))
+        except ValueError:effects_probe_until=0
+        if 0<effects_probe_until-time.time()<=900:
+            from effect_probe import run_effect_probe
+            effects_probe_task=asyncio.create_task(run_effect_probe(players))
         log.info("Music Bot started; maximum active voice chats: %s", max_groups)
         log.info("Named audio stream-only mode: %s", stream_only_enabled())
         log.info("Parallel music sources enabled: %s", source_names if lybot else [])
@@ -2951,10 +2958,10 @@ async def main() -> None:
         await shutdown.wait()
     finally:
         ready = False
-        for task in (welcome_warmup_task, radio_warmup_task, radio_probe_task, owner_probe_task, lyrics_probe_task):
+        for task in (welcome_warmup_task, radio_warmup_task, radio_probe_task, owner_probe_task, lyrics_probe_task, effects_probe_task):
             if task:
                 task.cancel()
-        await asyncio.gather(*(t for t in (welcome_warmup_task, radio_warmup_task, radio_probe_task, owner_probe_task, lyrics_probe_task) if t), return_exceptions=True)
+        await asyncio.gather(*(t for t in (welcome_warmup_task, radio_warmup_task, radio_probe_task, owner_probe_task, lyrics_probe_task, effects_probe_task) if t), return_exceptions=True)
         await welcome.close()
         if feature_probe_task is not None:
             feature_probe_task.cancel()

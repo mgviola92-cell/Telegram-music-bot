@@ -31,7 +31,6 @@ from music_owner_store import MusicOwnerStore
 from music_owner_ui import MusicOwnerUI
 from private_songs import PrivateSongs
 from lyrics_service import LyricsUI
-from karaoke_ui import KaraokeUI
 from youtube_health import youtube_guard
 from archive_source import get_archive_audio
 from prefetch import PreparedAudio, AsyncPreparedAudio
@@ -942,17 +941,6 @@ async def main() -> None:
         return queue_track_title(player.current),player.current.duration_seconds
     lyrics_ui=LyricsUI(bot,current_lyrics)
     lyrics_ui.register()
-    def current_karaoke(chat,panel):
-        player=players.get(chat)
-        if not player or not player.current or player.panel_id!=panel or player.current.video or not player.temp_file:return None
-        song=player.current
-        return queue_track_title(song),player.temp_file,song.original_duration_seconds or song.duration_seconds
-    async def queue_karaoke(cb,audio_message):
-        proxy=SimpleNamespace(chat=cb.message.chat,from_user=cb.from_user,command=['play'],text='/play',
-                              reply_to_message=audio_message,reply_text=cb.message.reply_text)
-        await play_command(bot,proxy)
-    karaoke=KaraokeUI(bot,current_karaoke,lambda chat,user:is_chat_admin(chat,user),queue_karaoke)
-    karaoke.register()
     private_songs=PrivateSongs(bot,resolve_private_song,players,clean_temp,search_private_songs,lyrics_ui.button)
     private_songs.register()
 
@@ -2832,7 +2820,6 @@ async def main() -> None:
     owner_probe_task: asyncio.Task | None = None
     lyrics_probe_task: asyncio.Task | None = None
     effects_probe_task: asyncio.Task | None = None
-    mvsep_probe_task: asyncio.Task | None = None
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, shutdown.set)
@@ -2877,11 +2864,6 @@ async def main() -> None:
         if 0<effects_probe_until-time.time()<=900:
             from effect_probe import run_effect_probe
             effects_probe_task=asyncio.create_task(run_effect_probe(players))
-        try:mvsep_probe_until=float(os.getenv('MVSEP_PROBE_UNTIL','0'))
-        except ValueError:mvsep_probe_until=0
-        if 0<mvsep_probe_until-time.time()<=900:
-            from mvsep_probe import run_mvsep_probe
-            mvsep_probe_task=asyncio.create_task(run_mvsep_probe(players,mvsep_probe_until))
         log.info("Music Bot started; maximum active voice chats: %s", max_groups)
         log.info("Named audio stream-only mode: %s", stream_only_enabled())
         log.info("Parallel music sources enabled: %s", source_names if lybot else [])
@@ -2912,10 +2894,6 @@ async def main() -> None:
         await shutdown.wait()
     finally:
         ready = False
-        await karaoke.close()
-        if mvsep_probe_task:
-            mvsep_probe_task.cancel()
-            await asyncio.gather(mvsep_probe_task,return_exceptions=True)
         for task in (welcome_warmup_task, radio_warmup_task, radio_probe_task, owner_probe_task, lyrics_probe_task, effects_probe_task):
             if task:
                 task.cancel()

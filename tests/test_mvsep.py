@@ -120,6 +120,7 @@ class MediaTests(unittest.IsolatedAsyncioTestCase):
         import mvsep_probe
         class Fake:
             def __init__(self,token):pass
+            async def preflight(self):return True
             async def separate(self,path,destination,progress):
                 await progress('processing')
                 shutil.copyfile(path,destination)
@@ -157,6 +158,16 @@ class MediaTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(p.read_bytes(),original)
             with self.assertRaises(ms.KaraokeUnavailable):
                 await prepare_result(copied,Path(work)/'bad.mp3',100)
+    async def test_aac_matroska_is_remuxed_for_api_without_reencoding(self):
+        with tempfile.TemporaryDirectory() as root,tempfile.TemporaryDirectory() as work:
+            p=Path(root)/'song.mka'
+            await audio_command(['ffmpeg','-v','error','-f','lavfi','-i',
+                'sine=frequency=440:duration=1','-c:a','aac','-y',str(p)])
+            copied,seconds=await prepare_input(str(p),work)
+            self.assertEqual(Path(copied).suffix,'.m4a')
+            _,codec=await inspect_audio(copied)
+            self.assertEqual(codec,'aac')
+            self.assertTrue(p.exists())
     async def test_oversize_download_removes_partial(self):
         class Content:
             async def iter_chunked(self,size):

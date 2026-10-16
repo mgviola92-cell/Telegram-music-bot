@@ -27,6 +27,7 @@ async def run_mvsep_probe(players, until):
         LOG.info('MVSEP probe skipped: playback has priority')
         return
     LOG.info('MVSEP probe started: synthetic voice and tones; free-only; no Telegram audio')
+    phase='synthetic_audio'
     try:
         with tempfile.TemporaryDirectory(prefix='mudyar_karaoke_probe_') as folder:
             path = Path(folder) / 'synthetic.mp3'
@@ -41,8 +42,11 @@ async def run_mvsep_probe(players, until):
                 LOG.info('MVSEP probe skipped before upload: playback has priority')
                 return
             seconds, _ = await inspect_audio(path)
+            phase='remote_separation'
             started = time.monotonic()
             async def progress(status):
+                nonlocal phase
+                phase=status
                 LOG.info('MVSEP probe status=%s elapsed_seconds=%.1f', status, time.monotonic()-started)
             task = asyncio.create_task(MVSEPSeparator(token).separate(path, Path(folder)/'remote.mp3', progress))
             try:
@@ -65,4 +69,6 @@ async def run_mvsep_probe(players, until):
         raise
     except Exception as exc:
         # No raw exceptions, HTTP response, account details, signed URLs or token.
-        LOG.warning('MVSEP probe unavailable error_type=%s', type(exc).__name__)
+        from mvsep_service import KaraokeUnavailable
+        reason=str(exc) if isinstance(exc,KaraokeUnavailable) else type(exc).__name__
+        LOG.warning('MVSEP probe unavailable stage=%s reason=%s',phase,reason)

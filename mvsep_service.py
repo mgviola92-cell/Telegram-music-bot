@@ -54,8 +54,14 @@ async def bounded_json(response):
     except (ValueError, UnicodeError):
         raise KaraokeUnavailable('Invalid API response') from None
     if response.status != 200 or not isinstance(data, dict) or data.get('success') is not True:
-        # Never expose upstream error text (may include account/token/URLs).
-        raise KaraokeUnavailable('MVSEP request rejected')
+        # Classify, never print upstream text (may include account/token/URLs).
+        message = str(data.get('message', '')) + ' ' + str(data.get('data', '')) if isinstance(data, dict) else ''
+        text = message.casefold()
+        if any(word in text for word in ('api token','api_token','api key','unauthorized','authentication')):
+            raise KaraokeAuth('MVSEP token rejected')
+        if any(word in text for word in ('quota','limit','premium','credit','captcha','verify','verification')):
+            raise KaraokeQuota('MVSEP free API restricted')
+        raise KaraokeUnavailable('MVSEP request rejected HTTP ' + str(response.status))
     return data
 
 
@@ -115,7 +121,9 @@ class MVSEPSeparator:
         completed = False
         timeout = ClientTimeout(total=40, connect=10, sock_read=30)
         async with ClientSession(timeout=timeout) as session:
+            if progress:await progress('checking_free')
             await self.check_free(session)
+            if progress:await progress('submitting')
             try:
                 form = FormData()
                 for key, value in {'api_token': self.token, 'sep_type': '23',

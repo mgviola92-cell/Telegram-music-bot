@@ -99,7 +99,8 @@ class MVSEPTests(unittest.IsolatedAsyncioTestCase):
     async def test_cancel_only_our_job_and_no_resubmit(self):
         self.status='waiting'
         waiting=asyncio.Event()
-        async def progress(status):waiting.set()
+        async def progress(status):
+            if status=='waiting':waiting.set()
         task=asyncio.create_task(ms.MVSEPSeparator('test-token').separate(
             self.path, self.path.with_name('out'), progress))
         await asyncio.wait_for(waiting.wait(),2)

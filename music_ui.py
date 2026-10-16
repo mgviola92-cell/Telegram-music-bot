@@ -11,6 +11,7 @@ from typing import Any
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from player_visuals import lyrics_search_url
 from audio_options import EFFECT_LABELS
+from mvsep_service import configured_provider as karaoke_provider
 
 
 def queue_remove(items: deque, position: int) -> Any:
@@ -85,6 +86,8 @@ def player_controls(chat_id: int, *, paused: bool = False, loop: bool = False,
     if menu != "main":
         rows.append([button("‹ Back", "back")])
     rows.append([InlineKeyboardButton("🎤 Lyrics", callback_data="lyrics:current")])
+    if karaoke_provider():
+        rows.append([InlineKeyboardButton("🎤 Karaoke · စမ်းသပ်",callback_data="karaoke:current")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -127,3 +130,4 @@ def top_tracks_popup(rows, *, global_scope=False):
     if not rows:
         lines.append('သီချင်းမှတ်တမ်း မရှိသေးဘူး။')
     return _clip_popup('\n'.join(lines), 198)
+

@@ -31,6 +31,7 @@ from music_owner_store import MusicOwnerStore
 from music_owner_ui import MusicOwnerUI
 from private_songs import PrivateSongs
 from lyrics_service import LyricsUI
+from karaoke_ui import KaraokeUI
 from youtube_health import youtube_guard
 from archive_source import get_archive_audio
 from prefetch import PreparedAudio, AsyncPreparedAudio
@@ -941,6 +942,17 @@ async def main() -> None:
         return queue_track_title(player.current),player.current.duration_seconds
     lyrics_ui=LyricsUI(bot,current_lyrics)
     lyrics_ui.register()
+    def current_karaoke(chat,panel):
+        player=players.get(chat)
+        if not player or not player.current or player.panel_id!=panel or player.current.video or not player.temp_file:return None
+        song=player.current
+        return queue_track_title(song),player.temp_file,song.original_duration_seconds or song.duration_seconds
+    async def queue_karaoke(cb,audio_message):
+        proxy=SimpleNamespace(chat=cb.message.chat,from_user=cb.from_user,command=['play'],text='/play',
+                              reply_to_message=audio_message,reply_text=cb.message.reply_text)
+        await play_command(bot,proxy)
+    karaoke=KaraokeUI(bot,current_karaoke,lambda chat,user:is_chat_admin(chat,user),queue_karaoke)
+    karaoke.register()
     private_songs=PrivateSongs(bot,resolve_private_song,players,clean_temp,search_private_songs,lyrics_ui.button)
     private_songs.register()
 
@@ -2900,6 +2912,7 @@ async def main() -> None:
         await shutdown.wait()
     finally:
         ready = False
+        await karaoke.close()
         if mvsep_probe_task:
             mvsep_probe_task.cancel()
             await asyncio.gather(mvsep_probe_task,return_exceptions=True)

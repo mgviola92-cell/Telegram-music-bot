@@ -36,5 +36,12 @@ player-card feature only after this verification and report its limitations.
 
 ## Live result
 
-Pending authenticated test. No user-facing Karaoke button is enabled in this
-diagnostic release. Existing Radio and music-card-only effects are preserved.
+Pending authenticated test. The player-card UI is prepared but disabled by default.
+After a technical remote PASS, set `MUSIC_KARAOKE_ENABLED=1` and
+`MVSEP_PROBE_UNTIL=0`. This exposes a beta Karaoke button for group admins.
+It takes the exact currently playing song, keeps playback running, and returns
+the bot's own MP3 with an explicit Play button; it never swaps the current stream.
+Only one global job, six requests/hour, 96 MiB RAM headroom and 128 MiB disk
+headroom are enforced for Karaoke admission. Resource refusal never stops music.
+Results are bounded to eight Telegram message references for one hour.
+Existing Radio and music-card-only effects are preserved.

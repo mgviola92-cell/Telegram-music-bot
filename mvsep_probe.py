@@ -1,5 +1,6 @@
 """Expiring, idle-only technical separation test. Never sends Telegram messages."""
 import asyncio
+import base64
 import logging
 import os
 import tempfile
@@ -31,9 +32,11 @@ async def run_mvsep_probe(players, until):
     try:
         with tempfile.TemporaryDirectory(prefix='mudyar_karaoke_probe_') as folder:
             path = Path(folder) / 'synthetic.mp3'
+            voice=Path(folder)/'voice.mp3'
+            fixture=Path(__file__).parent/'tests'/'fixtures'/'synthetic_voice.b64'
+            voice.write_bytes(base64.b64decode(fixture.read_bytes(),validate=False))
             await audio_command(['ffmpeg', '-nostdin', '-v', 'error', '-threads', '1',
-                '-filter_complex_threads', '1', '-f', 'lavfi', '-i',
-                'flite=text=This is a synthetic voice for an instrumental separation test:voice=slt',
+                '-filter_complex_threads', '1', '-i', str(voice),
                 '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=44100:duration=20',
                 '-f', 'lavfi', '-i', 'sine=frequency=660:sample_rate=44100:duration=20',
                 '-filter_complex', '[0:a]apad,volume=1.5[v];[1:a]volume=0.7[l];[2:a]volume=0.7[r];[l][r]amerge[m];[v][m]amix=inputs=2:normalize=0',

@@ -115,6 +115,18 @@ class MVSEPTests(unittest.IsolatedAsyncioTestCase):
 
 
 class MediaTests(unittest.IsolatedAsyncioTestCase):
+    async def test_probe_fixture_mix_decode_without_flite_on_server(self):
+        import shutil,time
+        import mvsep_probe
+        class Fake:
+            def __init__(self,token):pass
+            async def separate(self,path,destination,progress):
+                await progress('processing')
+                shutil.copyfile(path,destination)
+                return str(destination)
+        with patch.dict(os.environ,{'MVSEP_API_TOKEN':'test-token'}),patch('mvsep_probe.MVSEPSeparator',Fake),self.assertLogs('telegram_music',level='INFO') as logs:
+            await mvsep_probe.run_mvsep_probe({},time.time()+60)
+        self.assertTrue(any('probe PASS' in row for row in logs.output))
     def test_untrusted_hosts_redirect_targets_and_embedded_credentials_rejected(self):
         for url in ['https://mvsep.com.evil.test/storage/x.mp3','http://de.mvsep.com/storage/x',
                     'https://de.mvsep.com@evil.test/storage/x','https://de.mvsep.com:444/storage/x',
@@ -125,6 +137,12 @@ class MediaTests(unittest.IsolatedAsyncioTestCase):
     def test_feature_off_without_opt_in_even_with_token(self):
         with patch.dict(os.environ,{'MVSEP_API_TOKEN':'test-token'},clear=True):
             self.assertIsNone(ms.configured_provider())
+    def test_card_karaoke_button_is_hidden_until_explicitly_enabled(self):
+        from music_ui import player_controls
+        with patch.dict(os.environ,{'MVSEP_API_TOKEN':'test-token'},clear=True):
+            self.assertNotIn('karaoke:current',[b.callback_data for row in player_controls(-100).inline_keyboard for b in row])
+        with patch.dict(os.environ,{'MVSEP_API_TOKEN':'test-token','MUSIC_KARAOKE_ENABLED':'1'},clear=True):
+            self.assertIn('karaoke:current',[b.callback_data for row in player_controls(-100).inline_keyboard for b in row])
     async def test_real_mp3_copy_decode_and_duration_check_preserves_source(self):
         with tempfile.TemporaryDirectory() as root,tempfile.TemporaryDirectory() as work:
             p=Path(root)/'song.mp3'

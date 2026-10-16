@@ -101,6 +101,10 @@ class MVSEPSeparator:
             raise ValueError('Missing MVSEP token')
         self.token = token
 
+    async def preflight(self):
+        async with ClientSession(timeout=ClientTimeout(total=15,connect=8)) as session:
+            return await self.check_free(session)
+
     async def check_free(self, session):
         async with session.get(BASE + '/api/app/user', params={'api_token': self.token},
                                allow_redirects=False) as response:
@@ -109,7 +113,7 @@ class MVSEPSeparator:
         # Refuse paid mode rather than changing the owner's account preferences.
         if not isinstance(user, dict) or str(user.get('premium_enabled')) != '0':
             raise KaraokeQuota('MVSEP must have premium spending disabled')
-        if user.get('current_queue'):
+        if user.get('current_queue') not in (None, False, 0, '0', [], {}):
             raise KaraokeQuota('MVSEP already has an active separation')
         return True
 
@@ -169,10 +173,10 @@ class MVSEPSeparator:
                             if not completed:
                                 async with session.post(BASE + '/api/separation/cancel',
                                     data={'api_token': self.token, 'hash': job}, allow_redirects=False) as response:
-                                    await response.read()
+                                    await response.content.read(65536)
                             async with session.post(BASE + '/api/separation/delete',
                                 data={'api_token': self.token, 'hash': job}, allow_redirects=False) as response:
-                                await response.read()
+                                await response.content.read(65536)
                     except (Exception, asyncio.CancelledError):
                         pass
 

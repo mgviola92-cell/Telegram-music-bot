@@ -82,7 +82,7 @@ def player_controls(chat_id: int, *, paused: bool = False, loop: bool = False,
              button("🏆 Top Tracks", "top")]])
     if menu != "main":
         rows.append([button("‹ Back", "back")])
-    rows.append([InlineKeyboardButton("🎤 Lyrics ↗", url=lyrics_search_url(title))])
+    rows.append([InlineKeyboardButton("🎤 Lyrics", callback_data="lyrics:current")])
     return InlineKeyboardMarkup(rows)
 
 

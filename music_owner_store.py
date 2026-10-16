@@ -44,6 +44,13 @@ def validate_text(kind,text):
     return text
 
 
+MAX_RECORDINGS=10
+
+def recording_choices(data,key):
+    clip=data.get('audio',{}).get(key)
+    return [clip]+list(clip.get('variants',[])) if clip else []
+
+
 def parse_state(raw):
     if len(raw)>MAX_BYTES:
         raise ValueError('Owner state too large')
@@ -69,13 +76,19 @@ def parse_state(raw):
     if not isinstance(audio,dict) or len(audio)>4 or not isinstance(modes,dict) or len(modes)>4:
         raise ValueError('Invalid recording settings')
     for key,clip in audio.items():
-        if (key not in DEFAULTS or not isinstance(clip,dict) or not isinstance(clip.get('file_id'),str)
-                or not 1<=len(clip['file_id'])<=2000 or type(clip.get('seconds')) not in {int,float}
-                or not .25<=clip['seconds']<=40):raise ValueError('Invalid recording')
+        if key not in DEFAULTS or not isinstance(clip,dict):raise ValueError('Invalid recording')
+        variants=clip.get('variants',[])
+        if not isinstance(variants,list) or len(variants)>=MAX_RECORDINGS:raise ValueError('Too many recordings')
+        seen=set()
+        for entry in [clip]+variants:
+            if (not isinstance(entry,dict) or not isinstance(entry.get('file_id'),str)
+                    or not 1<=len(entry['file_id'])<=2000 or type(entry.get('seconds')) not in {int,float}
+                    or not .25<=entry['seconds']<=40 or entry['file_id'] in seen):raise ValueError('Invalid recording')
+            seen.add(entry['file_id'])
     for key,mode in modes.items():
         if key not in DEFAULTS or mode not in {'tts','clip','name_clip'}:raise ValueError('Invalid audio mode')
         if mode!='tts' and key not in audio:raise ValueError('Missing recording')
-        if mode=='name_clip' and (key not in {'vc','group'} or audio[key]['seconds']>30):raise ValueError('Invalid named recording')
+        if mode=='name_clip' and (key not in {'vc','group'} or any(c['seconds']>30 for c in recording_choices({'audio':audio},key))):raise ValueError('Invalid named recording')
     broadcast=d.get('broadcast')
     if broadcast is not None and (owner is None or not isinstance(broadcast,dict) or broadcast.get('chat_id')!=owner
             or type(broadcast.get('message_id')) is not int or broadcast['message_id']<=0):raise ValueError('Invalid broadcast source')
@@ -199,16 +212,28 @@ class MusicOwnerStore:
     async def set_recording(self,user,key,file_id,seconds):
         async with self.lock:
             if not self.authorized(user):raise PermissionError('Owner only')
-            data=copy.deepcopy(self.data);data['audio'][key]={'file_id':file_id,'seconds':seconds}
-            data['audio_modes'][key]='clip';await self._persist(data)
+            data=copy.deepcopy(self.data)
+            rows=recording_choices(data,key)
+            if len(rows)>=MAX_RECORDINGS:raise ValueError('အသံ ၁၀ ဖိုင် ပြည့်နေပြီ။ အဟောင်းတစ်ဖိုင် အရင်ဖြုတ်ပါ။')
+            new={'file_id':file_id,'seconds':seconds}
+            if rows:
+                data['audio'][key].setdefault('variants',[]).append(new)
+            else:data['audio'][key]=new
+            if data['audio_modes'].get(key)!='name_clip' or seconds>30:data['audio_modes'][key]='clip'
+            await self._persist(data)
     async def set_audio_mode(self,user,key,mode):
         async with self.lock:
             if not self.authorized(user):raise PermissionError('Owner only')
             data=copy.deepcopy(self.data);data['audio_modes'][key]=mode;await self._persist(data)
-    async def remove_recording(self,user,key):
+    async def remove_recording(self,user,key,file_id=None):
         async with self.lock:
             if not self.authorized(user):raise PermissionError('Owner only')
-            data=copy.deepcopy(self.data);data['audio'].pop(key,None);data['audio_modes'].pop(key,None)
+            data=copy.deepcopy(self.data)
+            rows=[{'file_id':c['file_id'],'seconds':c['seconds']} for c in recording_choices(data,key) if c['file_id']!=file_id] if file_id else []
+            if rows:
+                data['audio'][key]=rows[0]
+                if len(rows)>1:data['audio'][key]['variants']=rows[1:]
+            else:data['audio'].pop(key,None);data['audio_modes'].pop(key,None)
             await self._persist(data)
     async def set_broadcast(self,user,message_id):
         async with self.lock:

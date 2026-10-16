@@ -64,13 +64,18 @@ never binds a real or test owner, changes greeting templates, or joins a VC.
 
 ## Recorded greetings
 
-Each of the four templates has its own Voice/Audio menu. Upload a voice message
+Each of the four templates has its own Voice/Audio menu and a pool of up to ten
+recordings. Uploads append to that pool rather than replacing earlier recordings.
+Every greeting chooses a random file from its own category, avoiding the last
+successfully selected file in that chat when alternatives exist. Preview/delete
+controls address individual files; removing all files restores TTS. Existing single
+recordings migrate without changing owner identity or saved text. Upload a voice message
 or audio file up to 5 MB and 40 seconds. The bot validates and converts it to MP3,
 then stores its own Telegram file ID with the settings. Decoded audio is bounded
 in RAM; temporary conversion uses pipes. Failed retrieval falls back to saved TTS.
 
-Choose TTS, the recording alone, or (for normal VC/group greetings with a recording
-of at most 30 seconds) a dynamic name spoken by TTS followed by the recording.
+Choose TTS, the recording alone, or (for normal VC/group greetings with recordings
+of at most 30 seconds each) a dynamic name spoken by TTS followed by the recording.
 Uploading a party introduction does not change normal VC greetings or their names.
 Preview plays only in the owner's private chat. Removing a recording restores TTS.
 
@@ -114,3 +119,15 @@ full introduction after five seconds. Normal welcomes wait five seconds and use
 the member’s name according to the selected TTS/recording mode. Party arrivals
 are collected into batches and use the short collective greeting. Existing
 participants in the initial eight-second connection snapshot are not announced.
+
+## On-demand lyrics
+
+The player card, private MP3 and recognized-song MP3 have in-bot Lyrics buttons.
+A click searches LRCLIB metadata with title/artist and duration checks, then opens
+one paginated text message. Previous/Next edit that same text message; Close
+deletes it. Only the requesting user can page or close their view. Lyrics retrieval
+never runs during ordinary playback or song search. No match or a service failure
+shows an external search button rather than unrelated text. Burmese coverage
+depends on the provider's catalog. Results are bounded/cached in RAM; no lyrics
+files are saved. `LYRICS_PROBE_UNTIL` is an expiring deployment-only lookup of a
+fixed sample, logs only status/length and sends no Telegram messages.

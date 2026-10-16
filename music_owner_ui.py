@@ -1,12 +1,13 @@
 """Private, owner-only music controls. Recorded greetings and explicitly reviewed broadcasts."""
 import asyncio
 import io
+import hashlib
 import logging
 import time
 from pyrogram import filters
 from pyrogram.enums import ParseMode
 from pyrogram.types import InlineKeyboardButton as B, InlineKeyboardMarkup as K
-from music_owner_store import DEFAULTS, LABELS, validate_text
+from music_owner_store import DEFAULTS, LABELS, validate_text, recording_choices, MAX_RECORDINGS
 from welcome_audio import VOICES, BYTES_PER_SECOND, safe_name
 from greeting_recordings import ingest_recording
 from owner_broadcast import OwnerBroadcast
@@ -76,18 +77,23 @@ class MusicOwnerUI:
 
     def audio_menu(self,key):
         def b(t,a):return B(t,callback_data='own:'+a+':'+key)
-        clip=self.store.data.get('audio',{}).get(key)
+        clips=recording_choices(self.store.data,key)
         mode=self.store.data.get('audio_modes',{}).get(key,'tts')
-        text='🎙 '+LABELS[key]+'\nအသုံးပြုနေတာ: '+mode
-        rows=[[b('📥 Voice / အသံဖိုင် တင်မယ်','upload')],[b('📝 TTS စာသားအသံ သုံးမယ်','mode-tts')]]
-        if clip:
-            text+=f"\nအသံဖိုင်: {clip['seconds']:.1f} စက္ကန့်"
-            rows.append([b('🔊 ဖိုင်ကို နားထောင်မယ်','clip-preview'),b('ဖိုင်သုံးမယ်','mode-clip')])
-            if key in {'vc','group'} and clip['seconds']<=30:
-                rows.append([b('နာမည် TTS + ဖိုင် ဆက်ဖွင့်မယ်','mode-name_clip')])
-            rows.append([b('🗑 အသံဖိုင်ဖြုတ်မယ်','clip-remove')])
+        text='🎙 '+LABELS[key]+'\nအသုံးပြုနေတာ: '+mode+f'\nအသံဖိုင်: {len(clips)}/{MAX_RECORDINGS} · ကျပန်းရွေးဖွင့်မယ်'
+        rows=[]
+        if len(clips)<MAX_RECORDINGS:rows.append([b('📥 အသံဖိုင် ထပ်ထည့်မယ်','upload')])
+        rows.append([b('📝 TTS စာသားအသံ သုံးမယ်','mode-tts')])
+        if clips:
+            rows.append([b('🎲 အသံဖိုင်များ ကျပန်းသုံးမယ်','mode-clip')])
+            if key in {'vc','group'} and all(c['seconds']<=30 for c in clips):
+                rows.append([b('နာမည် TTS + ကျပန်းအသံဖိုင်','mode-name_clip')])
+            for i,c in enumerate(clips):
+                token=hashlib.sha256(c['file_id'].encode()).hexdigest()[:12]
+                rows.append([B(f"🔊 {i+1} · {c['seconds']:.1f}s",callback_data=f'own:clip-play:{key}:{token}'),
+                             B(f'🗑 {i+1}',callback_data=f'own:clip-del:{key}:{token}')])
+            rows.append([b('🗑 အသံဖိုင်အားလုံး ဖြုတ်မယ်','clip-remove')])
         rows.append([b('↩ စာသားနှင့် အသံ','show'),B('⚙️ Owner Menu',callback_data='own:home')])
-        text+='\nVoice/Audio 5 MB၊ ၄၀ စက္ကန့်အထိ။ နာမည်တွဲသုံးမယ့်ဖိုင်က ၃၀ စက္ကန့်အထိ။'
+        text+='\nတစ်ဖိုင် 5 MB / ၄၀ စက္ကန့်အထိ။ နာမည်တွဲသုံးဖို့ ဖိုင်အားလုံး ၃၀ စက္ကန့်အောက် လိုတယ်။'
         return text,K(rows)
 
     async def close(self):
@@ -158,6 +164,15 @@ class MusicOwnerUI:
                     try:await self.store.remove_recording(user,key)
                     finally:self.busy=False
                     text,k=self.audio_menu(key);await cb.message.edit_text(text,reply_markup=k,parse_mode=ParseMode.DISABLED)
+                elif action in {'clip-play','clip-del'} and key in LABELS and len(parts)==3:
+                    clip=next((c for c in recording_choices(self.store.data,key) if hashlib.sha256(c['file_id'].encode()).hexdigest()[:12]==parts[2]),None)
+                    if clip:
+                        if action=='clip-play':await self.bot.send_audio(user,clip['file_id'],caption='🎙 '+LABELS[key])
+                        else:
+                            self.busy=True
+                            try:await self.store.remove_recording(user,key,clip['file_id'])
+                            finally:self.busy=False
+                            text,k=self.audio_menu(key);await cb.message.edit_text(text,reply_markup=k,parse_mode=ParseMode.DISABLED)
                 elif action=='clip-preview' and key in LABELS:
                     clip=self.store.data.get('audio',{}).get(key)
                     if clip:await self.bot.send_audio(user,clip['file_id'],caption='🎙 '+LABELS[key])

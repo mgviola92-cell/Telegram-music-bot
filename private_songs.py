@@ -28,9 +28,10 @@ async def verify_song_file(path):
         if proc.returncode is None:proc.kill();await proc.wait()
 
 class PrivateSongs:
-    def __init__(self,bot,resolver,players,cleanup,searcher=None):
+    def __init__(self,bot,resolver,players,cleanup,searcher=None,lyric_button=None):
         self.bot,self.resolver,self.players,self.cleanup=bot,resolver,players,cleanup
         self.cache=DeliveredAudioCache();self.recent=OrderedDict();self.job=None
+        self.lyric_button=lyric_button or (lambda t,d:B("🎤 Lyrics",url=lyrics_search_url(t)))
         self.searcher=searcher or collect_choices;self.sessions=OrderedDict();self.searching=set();self.search_recent=OrderedDict();self.search_tasks={}
     def preempt(self):
         for task in list(self.search_tasks.values()):task.cancel()
@@ -157,7 +158,7 @@ class PrivateSongs:
                 job['stage']='upload'
                 try:
                     await send_recognized_audio(self.bot,msg,None,title,duration,
-                        K([[B('🎤 Lyrics',url=lyrics_search_url(title))]]),file_id=file_id)
+                        K([[self.lyric_button(title,duration)]]),file_id=file_id)
                     await panel.delete();return
                 except Exception:
                     self.cache.discard(self.cache_key(text,choice));job['stage']='resolve'
@@ -167,7 +168,7 @@ class PrivateSongs:
             job['stage']='upload';await panel.edit_text('🎵 သီချင်းဖိုင် ပို့နေတယ်…',
                 reply_markup=K([[B('⏹ ရပ်မယ်',callback_data='dms:'+nonce)]]))
             sent=await send_recognized_audio(self.bot,msg,path,title,duration,
-                K([[B('🎤 Lyrics',url=lyrics_search_url(title))]]))
+                K([[self.lyric_button(title,duration)]]))
             self.cache.put(self.cache_key(text,choice),title,sent.audio)
             await panel.delete()
         except asyncio.CancelledError:

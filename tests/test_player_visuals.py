@@ -29,13 +29,11 @@ class ProgressCardTest(unittest.TestCase):
         self.assertIn("⏸", caption)
         self.assertEqual(format_clock(0), "00:00")
 
-    def test_lyrics_button_is_a_link_not_full_lyrics(self):
-        markup = player_controls(-100123, title="Hello World")
-        lyrics = markup.inline_keyboard[-1][0]
-        self.assertIn("Lyrics", lyrics.text)
-        self.assertEqual(lyrics.url, lyrics_search_url("Hello World"))
-        self.assertIn("genius.com/search?q=", lyrics.url)
-        self.assertNotIn("Hello World", lyrics.url)  # URL-encoded spaces
+    def test_lyrics_button_requests_in_bot_text(self):
+        markup=player_controls(-100,title='Hello World')
+        lyrics=markup.inline_keyboard[-1][0]
+        self.assertEqual(lyrics.callback_data,'lyrics:current')
+        self.assertIsNone(lyrics.url)
 
     def test_safe_artwork_only_trusted_https_cdn(self):
         for bad in (

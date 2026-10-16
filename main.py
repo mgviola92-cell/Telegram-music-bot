@@ -30,6 +30,7 @@ from welcome_audio import WelcomeAudio
 from music_owner_store import MusicOwnerStore
 from music_owner_ui import MusicOwnerUI
 from private_songs import PrivateSongs
+from lyrics_service import LyricsUI
 from youtube_health import youtube_guard
 from archive_source import get_archive_audio
 from prefetch import PreparedAudio, AsyncPreparedAudio
@@ -934,7 +935,13 @@ async def main() -> None:
             return [SearchChoice(query,query)]
         return await collect_choices(query,lybot.sources if lybot and not stream_only_enabled() else (),limit=10,timeout=10)
 
-    private_songs=PrivateSongs(bot,resolve_private_song,players,clean_temp,search_private_songs)
+    def current_lyrics(chat,panel):
+        player=players.get(chat)
+        if not player or not player.current or player.panel_id!=panel:return None
+        return queue_track_title(player.current),player.current.duration_seconds
+    lyrics_ui=LyricsUI(bot,current_lyrics)
+    lyrics_ui.register()
+    private_songs=PrivateSongs(bot,resolve_private_song,players,clean_temp,search_private_songs,lyrics_ui.button)
     private_songs.register()
 
     async def describe_primary(query):
@@ -1990,7 +1997,8 @@ async def main() -> None:
                 recognition_results.pop(next(iter(recognition_results)))
             token = uuid.uuid4().hex[:16]
             recognition_results[token] = (msg.chat.id, getattr(msg.from_user, "id", None), title, now + 600)
-            markup = InlineKeyboardMarkup([[InlineKeyboardButton("▶ ဖွင့်မယ်", callback_data="findplay:" + token)]])
+            markup = InlineKeyboardMarkup([[InlineKeyboardButton("▶ ဖွင့်မယ်", callback_data="findplay:" + token)],
+                                           [lyrics_ui.button(title,audio_duration)]])
             sent_audio = await send_recognized_audio(bot, msg, audio_path, title, audio_duration, markup,
                                                      file_id=own_file_id)
             if not sent_audio or not getattr(sent_audio, "audio", None):
@@ -2873,6 +2881,7 @@ async def main() -> None:
     radio_warmup_task: asyncio.Task | None = None
     radio_probe_task: asyncio.Task | None = None
     owner_probe_task: asyncio.Task | None = None
+    lyrics_probe_task: asyncio.Task | None = None
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, shutdown.set)
@@ -2908,6 +2917,10 @@ async def main() -> None:
             owner_probe_until=0
         if 0 < owner_probe_until-time.time() <= 900:
             owner_probe_task=asyncio.create_task(owner_settings.probe_roundtrip())
+        try:lyrics_probe_until=float(os.getenv('LYRICS_PROBE_UNTIL','0'))
+        except ValueError:lyrics_probe_until=0
+        if 0<lyrics_probe_until-time.time()<=900:
+            lyrics_probe_task=asyncio.create_task(lyrics_ui.probe())
         log.info("Music Bot started; maximum active voice chats: %s", max_groups)
         log.info("Named audio stream-only mode: %s", stream_only_enabled())
         log.info("Parallel music sources enabled: %s", source_names if lybot else [])
@@ -2938,10 +2951,10 @@ async def main() -> None:
         await shutdown.wait()
     finally:
         ready = False
-        for task in (welcome_warmup_task, radio_warmup_task, radio_probe_task, owner_probe_task):
+        for task in (welcome_warmup_task, radio_warmup_task, radio_probe_task, owner_probe_task, lyrics_probe_task):
             if task:
                 task.cancel()
-        await asyncio.gather(*(t for t in (welcome_warmup_task, radio_warmup_task, radio_probe_task, owner_probe_task) if t), return_exceptions=True)
+        await asyncio.gather(*(t for t in (welcome_warmup_task, radio_warmup_task, radio_probe_task, owner_probe_task, lyrics_probe_task) if t), return_exceptions=True)
         await welcome.close()
         if feature_probe_task is not None:
             feature_probe_task.cancel()

@@ -179,7 +179,7 @@ class RecognitionTests(unittest.IsolatedAsyncioTestCase):
                 chat=N(id=-100), from_user=N(id=7), reply_text=AsyncMock(return_value=progress))
         sent = N(audio=N(file_id='our-file', duration=168))
         sender = AsyncMock(return_value=sent)
-        namespace = dict(recognition_media=recognition_media, MAX_AUDIO_BYTES=20*1024*1024,
+        namespace = dict(lyrics_ui=N(button=lambda t,d:InlineKeyboardButton("Lyrics",callback_data="lyr:test")), recognition_media=recognition_media, MAX_AUDIO_BYTES=20*1024*1024,
                          recognizer=recognizer, delivered_audio=cache, time=time, uuid=uuid,
                          recognition_source=source, recognition_results={}, InlineKeyboardMarkup=InlineKeyboardMarkup,
                          InlineKeyboardButton=InlineKeyboardButton, send_recognized_audio=sender,

@@ -4,6 +4,7 @@ import collections
 import logging
 import os
 import queue
+import random
 import re
 import shlex
 import tempfile
@@ -223,13 +224,20 @@ class WelcomeAudio:
                 self.cache.popitem(last=False)
             return pcm
 
-    async def speech(self,name,kind,style,voice):
+    async def speech(self,name,kind,style,voice,*,chat=None):
         key=style if style in {'party','party_batch'} else kind
         if self.settings and self.settings.ready and self.recordings is not None:
             mode=self.settings.data.get('audio_modes',{}).get(key,'tts');clip=self.settings.data.get('audio',{}).get(key)
             if mode!='tts' and clip:
                 try:
+                    from music_owner_store import recording_choices
+                    choices=recording_choices(self.settings.data,key)
+                    if not hasattr(self,'last_recordings'):self.last_recordings={}
+                    stamp=(chat,key);last=self.last_recordings.get(stamp)
+                    clip=random.choice([c for c in choices if c['file_id']!=last] or choices)
                     pcm=await self.recordings.get(clip['file_id'])
+                    if len(self.last_recordings)>=256:self.last_recordings.pop(next(iter(self.last_recordings)))
+                    self.last_recordings[stamp]=clip['file_id']
                     if mode=='name_clip':
                         intro=await self.pcm('မင်္ဂလာပါ၊ '+(safe_name(name) or 'သူငယ်ချင်း')+'။',voice)
                         pcm=intro+bytes(BYTES_PER_SECOND//5)+pcm
@@ -295,7 +303,7 @@ class WelcomeAudio:
         async def deliver():
             try:
                 voice = VOICES[expected_voice]
-                pcm = await asyncio.wait_for(self.speech(name,kind,style or expected_style,voice),18)
+                pcm = await asyncio.wait_for(self.speech(name,kind,style or expected_style,voice,chat=chat),18)
                 await asyncio.sleep(max(0,not_before-time.monotonic()))
                 if (self.pipes.get(chat) is not expected or self.mode(chat) == 'off'
                         or self.styles.get(chat,'normal') != expected_style

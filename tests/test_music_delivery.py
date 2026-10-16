@@ -13,7 +13,7 @@ from welcome_audio import WelcomeAudio,BYTES_PER_SECOND,VOICES
 from music_owner_store import MusicOwnerStore,parse_state
 from owner_broadcast import OwnerBroadcast
 from private_songs import PrivateSongs,verify_song_file
-from tests.test_music_owner import SavedClient
+from test_music_owner import SavedClient
 
 def wav(seconds=1):
     f=io.BytesIO()

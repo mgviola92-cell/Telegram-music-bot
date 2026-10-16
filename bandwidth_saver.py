@@ -23,6 +23,8 @@ class EmptyRoomSaver:
         if player.paused_since:player.paused_seconds+=self.clock()-player.paused_since
         player.paused_since=0.;player.paused=False
         self.manual(chat)
+        if player.current is not None:
+            player.current.control_actor="";player.current.control_actor_id=None
         log.info('Bandwidth saver resumed VC chat %s',chat)
         await self.changed(chat,player)
     async def arrival(self,chat,user):
@@ -63,6 +65,8 @@ class EmptyRoomSaver:
             if self.clock()-old[1]<180:return
             if await asyncio.wait_for(self.calls.pause(chat),5) is False:return
             player.paused=True;player.paused_since=self.clock();self.held[chat]=token
+            if player.current is not None:
+                player.current.control_actor="";player.current.control_actor_id=None
             log.info('Bandwidth saver paused empty VC chat %s',chat)
             await self.changed(chat,player)
     async def run(self):

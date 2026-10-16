@@ -1,4 +1,5 @@
 import ast
+from html import unescape
 import asyncio
 from collections import deque
 from pathlib import Path
@@ -16,12 +17,12 @@ class QueueReceiptTest(unittest.IsolatedAsyncioTestCase):
         track=Track('purple pgb wink','purple pgb wink',youtube=True)
         player=Player(queue=deque([track]));message=Obj(edit_text=AsyncMock())
         await acknowledge_queued(player,track,message)
-        self.assertIn('ရှာနေဆဲ',message.edit_text.call_args.args[0])
+        self.assertIn('ရှာနေဆဲ',unescape(message.edit_text.call_args.args[0]))
         track.title='Purple – Wink & pGb · VoiceShazamBot';track.metadata_resolved=True
         await sync_receipts(player)
-        self.assertIn('▸ Title : Purple – Wink & pGb',message.edit_text.call_args.args[0])
-        self.assertIn('Queue #1',message.edit_text.call_args.args[0])
-        self.assertNotIn('purple pgb wink',message.edit_text.call_args.args[0])
+        self.assertIn('▸ Title : Purple – Wink & pGb',unescape(message.edit_text.call_args.args[0]))
+        self.assertIn('Queue #1',unescape(message.edit_text.call_args.args[0]))
+        self.assertNotIn('purple pgb wink',unescape(message.edit_text.call_args.args[0]))
         player.queue_refresh_task.cancel()
         await asyncio.gather(player.queue_refresh_task,return_exceptions=True)
 
@@ -35,7 +36,7 @@ class QueueReceiptTest(unittest.IsolatedAsyncioTestCase):
         await slot.task
         await asyncio.sleep(0)
         await sync_receipts(player)
-        self.assertIn('Purple – Wink & pGb',message.edit_text.call_args.args[0])
+        self.assertIn('Purple – Wink & pGb',unescape(message.edit_text.call_args.args[0]))
         self.assertTrue(track.metadata_resolved)
         player.queue_refresh_task.cancel()
         await asyncio.gather(player.queue_refresh_task,return_exceptions=True)
@@ -74,5 +75,5 @@ class QueueReceiptTest(unittest.IsolatedAsyncioTestCase):
         message=Obj(edit_text=AsyncMock());track.queue_receipt=message
         player=Player(queue=deque([track]))
         await sync_receipts(player)
-        self.assertNotIn('ရှာနေဆဲ',message.edit_text.call_args.args[0])
-        self.assertIn('ရှာမရသေး',message.edit_text.call_args.args[0])
+        self.assertNotIn('ရှာနေဆဲ',unescape(message.edit_text.call_args.args[0]))
+        self.assertIn('ရှာမရသေး',unescape(message.edit_text.call_args.args[0]))

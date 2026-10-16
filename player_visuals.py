@@ -89,13 +89,17 @@ def format_clock(seconds: float | None) -> str:
 
 
 def player_caption(
-    title: str, elapsed: float, duration: float | None, *, paused: bool = False, requester: str = "—"
+    title: str, elapsed: float, duration: float | None, *, paused: bool = False, requester: str = "—", requester_id=None, html_mode=False, actor="", actor_id=None
 ) -> str:
     """Static duration; Telegram cards cannot expose a seekable audio timeline."""
     from card_layout import render
     from music_ui import clean_track_title
-    return render('playing', title=clean_track_title(title), duration=format_clock(duration),
+    result=render('playing',html_mode=html_mode,requester_id=requester_id, title=clean_track_title(title), duration=format_clock(duration),
                   requester=requester, status='Paused' if paused else 'Started Streaming')
+    if html_mode and actor:
+        from card_layout import mention
+        result+='\n\n<blockquote><b>'+('Stream paused by' if paused else 'Stream resumed by')+'</b> '+mention(actor,actor_id)+'</blockquote>'
+    return result
 
 
 def lyrics_search_url(title: str) -> str:

@@ -182,3 +182,6 @@ An empty VC with a valid assistant-only participant snapshot is paused after thr
 
 
 Default artwork: `/owner` → ကဒ်အပြင်အဆင် → Default ပုံ. Send a compressed Telegram Photo up to 5 MB; the bot stores only its file_id in existing private Saved Messages settings. Preview, replace and reset are owner-only. Changes apply to future cards only when source artwork is missing. Invalid Telegram references fall back to bundled artwork. No photo download or extra Render disk cache.
+
+
+Player / queue names now use Telegram mention entities (blue clickable names); owner templates remain plain text with escaped HTML. Pause/resume edits the existing player card with a quote naming the controlling admin. Closed/disconnected VC cleanup stays silent. Active VC /play skips redundant membership RPC; audio-frame polling is 250 ms with the same eight-second timeout and source fallback safety checks. First-time source resolution and Telegram connection latency still vary.

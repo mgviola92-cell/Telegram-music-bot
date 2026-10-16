@@ -10,7 +10,7 @@ def receipt_text(track, *, playing=False, position=1):
     if getattr(track, 'metadata_failed', False) and not getattr(track, 'metadata_resolved', False):
         return '⚠️ Queue ထဲထည့်ထားတယ်။ သီချင်း Source ရှာမရသေးဘူး။'
     title = queue_track_title(track)
-    return render('playing' if playing else 'queued',title=title,
+    return render('playing' if playing else 'queued',html_mode=True,requester_id=getattr(track,'requester_id',None),title=title,
                   duration=format_clock(getattr(track,'duration_seconds',None)),
                   requester=getattr(track,'requester','—'),position=position,status='Started Streaming')
 
@@ -27,7 +27,7 @@ async def sync_receipts(player):
         if text == getattr(track, 'queue_receipt_text', None):
             continue
         try:
-            await message.edit_text(text, parse_mode=ParseMode.DISABLED)
+            await message.edit_text(text, parse_mode=ParseMode.HTML)
             track.queue_receipt_text = text
         except Exception:
             pass
@@ -54,6 +54,6 @@ async def acknowledge_queued(player, track, message):
     track.queue_receipt = message
     position=next((i for i,t in enumerate(player.queue,1) if t is track),1)
     text = receipt_text(track,position=position)
-    await message.edit_text(text, parse_mode=ParseMode.DISABLED)
+    await message.edit_text(text, parse_mode=ParseMode.HTML)
     track.queue_receipt_text = text
     schedule_receipts(player)

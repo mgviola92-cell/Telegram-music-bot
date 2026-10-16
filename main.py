@@ -87,6 +87,9 @@ class Track:
     output_speed: float = 1.0
     original_duration_seconds: float | None = None
     requester: str = "—"
+    requester_id: int | None = None
+    control_actor: str = ""
+    control_actor_id: int | None = None
 
 
 @dataclass
@@ -229,7 +232,7 @@ class AudioFramesStalled(RuntimeError):
 
 
 async def wait_for_audio_frames(calls: PyTgCalls, chat_id: int, *,
-                                timeout: float = 8, interval: float = 1) -> None:
+                                timeout: float = 8, interval: float = .25) -> None:
     """Check native outgoing frame progress, not UI elapsed wall-clock time."""
     async def poll():
         initial = await calls.time(chat_id)
@@ -1043,7 +1046,8 @@ async def main() -> None:
         song = player.current
         text = player_caption(
             song.title, elapsed_for(player), song.duration_seconds,
-            paused=player.paused, requester=song.requester,
+            paused=player.paused, requester=song.requester, requester_id=song.requester_id,
+            html_mode=True,actor=song.control_actor,actor_id=song.control_actor_id,
         )
         buttons = player_controls(
             chat_id, paused=player.paused,
@@ -1054,12 +1058,12 @@ async def main() -> None:
         try:
             if player.panel_is_photo:
                 await bot.edit_message_caption(
-                    chat_id, player.panel_id, caption=text, parse_mode=ParseMode.DISABLED,
+                    chat_id, player.panel_id, caption=text, parse_mode=ParseMode.HTML,
                     reply_markup=buttons,
                 )
             else:
                 await bot.edit_message_text(
-                    chat_id, player.panel_id, text, parse_mode=ParseMode.DISABLED,
+                    chat_id, player.panel_id, text, parse_mode=ParseMode.HTML,
                     reply_markup=buttons,
                 )
         except Exception as exc:
@@ -1094,7 +1098,8 @@ async def main() -> None:
         from default_artwork import default_photo
         title = player_caption(
             song.title, elapsed_for(player), song.duration_seconds,
-            paused=player.paused, requester=song.requester,
+            paused=player.paused, requester=song.requester, requester_id=song.requester_id,
+            html_mode=True,actor=song.control_actor,actor_id=song.control_actor_id,
         )
         if admin_muted:
             title += "\n\n🔇 VC Admin က Assistant ကို mute ထားတယ်။ Unmute / Allow to Speak ပေးပါ။"
@@ -1111,7 +1116,7 @@ async def main() -> None:
             if image and artwork_is_safe(image):
                 try:
                     panel = await asyncio.wait_for(
-                        photo_cache.send(bot, chat_id, image, image, caption=title, reply_markup=buttons, parse_mode=ParseMode.DISABLED, reply_to_message_id=getattr(progress,"reply_to_message_id",None)),
+                        photo_cache.send(bot, chat_id, image, image, caption=title, reply_markup=buttons, parse_mode=ParseMode.HTML, reply_to_message_id=getattr(progress,"reply_to_message_id",None)),
                         timeout=5,
                     )
                     is_photo = True
@@ -1120,18 +1125,18 @@ async def main() -> None:
                              type(exc).__name__)
             if panel is None and not song.video:
                 try:
-                    panel = await asyncio.wait_for(send_default_photo(photo_cache, bot, chat_id, owner_settings.data.get("default_photo"), caption=title, reply_markup=buttons, parse_mode=ParseMode.DISABLED, reply_to_message_id=getattr(progress,"reply_to_message_id",None)),timeout=5)
+                    panel = await asyncio.wait_for(send_default_photo(photo_cache, bot, chat_id, owner_settings.data.get("default_photo"), caption=title, reply_markup=buttons, parse_mode=ParseMode.HTML, reply_to_message_id=getattr(progress,"reply_to_message_id",None)),timeout=5)
                     is_photo = True
                 except Exception as exc:
                     log.info("Default artwork unavailable (%s)",type(exc).__name__)
             if panel is None:
                 if progress is not None:
                     try:
-                        panel = await progress.edit_text(title, reply_markup=buttons,parse_mode=ParseMode.DISABLED)
+                        panel = await progress.edit_text(title, reply_markup=buttons,parse_mode=ParseMode.HTML)
                     except Exception:
                         panel = None
                 if panel is None:
-                    panel = await bot.send_message(chat_id, title, reply_markup=buttons,parse_mode=ParseMode.DISABLED)
+                    panel = await bot.send_message(chat_id, title, reply_markup=buttons,parse_mode=ParseMode.HTML)
             if player.current is not song:
                 try:
                     await bot.delete_messages(chat_id, panel.id)
@@ -1502,6 +1507,8 @@ async def main() -> None:
                         song.original_duration_seconds = song.duration_seconds
                     if song.original_duration_seconds:
                         song.duration_seconds = song.original_duration_seconds / song.output_speed
+                    song.control_actor=""
+                    song.control_actor_id=None
                     player.current = song
                     player.control_menu = "main"
                     player.recent_tracks.append(title_key(song.title))
@@ -1728,6 +1735,7 @@ async def main() -> None:
 
         request_user = getattr(msg,"from_user",None)
         track.requester = (request_user.first_name or "—") if request_user else "Anonymous admin"
+        track.requester_id = getattr(request_user,"id",None)
         player = players[msg.chat.id]
         player.resolver = resolve_for_queue
         player.autoplay_prepare = lambda: start_autoplay(player)
@@ -1741,7 +1749,11 @@ async def main() -> None:
             log.exception("Cannot acknowledge /play in chat %s", msg.chat.id)
             return
         try:
-            await ensure_assistant_in_group(msg.chat)
+            # An existing local VC session already proves assistant membership.
+            # Avoid a redundant Telegram membership RPC for every queued /play.
+            if ((player.current is None and player.idle_mode is None)
+                    or msg.chat.id not in await calls.calls):
+                await ensure_assistant_in_group(msg.chat)
         except RuntimeError as exc:
             await progress.edit_text("⚠️ " + str(exc))
             return
@@ -2475,8 +2487,9 @@ async def main() -> None:
                         player.paused_seconds += time.monotonic() - player.paused_since
                     player.paused_since = 0.
                     player.paused = False
+                player.current.control_actor=msg.from_user.first_name
+                player.current.control_actor_id=msg.from_user.id
                 await update_player_panel(msg.chat.id, player)
-                await msg.reply_text("⏸ Paused." if action == "pause" else "▶️ Resumed.")
             except Exception:
                 log.exception("Could not %s chat %s", action, msg.chat.id)
                 await msg.reply_text("⚠️ VC connection ပြန်စစ်ပါ။")
@@ -2587,6 +2600,9 @@ async def main() -> None:
                     player.paused = False
                 elif action == "loop":
                     player.loop_current = not player.loop_current
+                if action in {"pause","resume"}:
+                    player.current.control_actor=cb.from_user.first_name
+                    player.current.control_actor_id=cb.from_user.id
                 await update_player_panel(chat_id, player)
             except asyncio.CancelledError:
                 return
@@ -2622,14 +2638,6 @@ async def main() -> None:
             await clear_player_panel(update.chat_id, player)
             clean_temp(player.temp_file)
             player.temp_file = None
-        try:
-            await bot.send_message(
-                update.chat_id,
-                "⚠️ Voice Chat connection ပိတ်/ပြတ်သွားတယ်။ "
-                "Group VC ကို ပြန်ဖွင့်ထားပြီး /play သုံးနိုင်တယ်။",
-            )
-        except Exception:
-            pass
 
     async def watch_voice_connections() -> None:
         """Repair a detached stream even if no StreamEnded update arrives.
@@ -2711,14 +2719,6 @@ async def main() -> None:
                     await clear_player_panel(chat_id, player)
                     clean_temp(player.temp_file)
                     player.temp_file = None
-                try:
-                    await bot.send_message(
-                        chat_id,
-                        "⚠️ VC connection ပြတ်သွားတယ်။ Group VC ဆက်ဖွင့်ထားရင် "
-                        "/play နဲ့ ပြန်ဖွင့်နိုင်တယ်။",
-                    )
-                except Exception:
-                    pass
 
     @calls.on_update(call_filters.stream_end())
     async def stream_end(_: PyTgCalls, update: StreamEnded) -> None:

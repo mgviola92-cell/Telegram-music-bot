@@ -13,7 +13,7 @@ from test_music_extensions import closure
 class SelectedSourceFallbackTests(unittest.IsolatedAsyncioTestCase):
     def environment(self,prepared,bridge,strict=False):
         ns=dict(vars(main));ns.update(PreparedAudio=Mock(return_value=prepared),lybot=bridge,
-                                     stream_only_enabled=lambda:strict,telegram_lyrics=N(interrupt=Mock()))
+                                     stream_only_enabled=lambda:strict)
         return closure('resolve_for_queue',ns),ns
 
     async def test_failed_selected_sc_uses_selected_title_on_bot_sources(self):

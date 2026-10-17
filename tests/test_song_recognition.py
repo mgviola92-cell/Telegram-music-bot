@@ -193,3 +193,13 @@ class RecognitionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sender.call_args.kwargs['file_id'], 'our-file')
         self.assertEqual(msg.reply_text.call_args.args[0], '🔎 သီချင်းရှာနေတယ်…')
         progress.delete.assert_awaited_once()
+
+class PlainAudioCaptionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_caption_stays_own_brand_when_song_link_is_known(self):
+        from unittest.mock import patch
+        from song_recognition import send_recognized_audio
+        bot=N(me=N(username='mudyar_music_bot'),send_audio=AsyncMock())
+        with patch('song_links.link_for',return_value='https://song.link/i/123') as lookup:
+            await send_recognized_audio(bot,N(chat=N(id=123),id=10),None,'Purple',168,None,file_id='own-file-id')
+        self.assertEqual(bot.send_audio.call_args.kwargs['caption'],'@mudyar_music_bot')
+        lookup.assert_not_called()

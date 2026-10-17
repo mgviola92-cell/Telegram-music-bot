@@ -893,7 +893,6 @@ async def main() -> None:
     metadata_slots = asyncio.Semaphore(2)
 
     async def resolve_for_queue(song, prefer_stream):
-        telegram_lyrics.interrupt()
         strict = stream_only_enabled()
         if song.selected is not None:
             if strict:
@@ -954,9 +953,7 @@ async def main() -> None:
         player=players.get(chat)
         if not player or not player.current or player.panel_id!=panel:return None
         return queue_track_title(player.current),player.current.duration_seconds
-    from lyric_sources import TelegramLyrics
-    telegram_lyrics=TelegramLyrics(recognition_source,lambda:any(p.loading_task is not None and not p.loading_task.done() for p in players.values()))
-    lyrics_ui=LyricsUI(bot,current_lyrics,telegram_lyrics)
+    lyrics_ui=LyricsUI(bot,current_lyrics)
     lyrics_ui.register()
     private_songs=PrivateSongs(bot,resolve_private_song,players,clean_temp,search_private_songs,lyrics_ui.button)
     private_songs.register()
@@ -1938,7 +1935,6 @@ async def main() -> None:
                 title, own_file_id, audio_duration = cached_audio
                 log.info("Recognition clip cache hit")
             else:
-                telegram_lyrics.interrupt()
                 title, candidate = await recognizer.recognize(msg.reply_to_message, with_audio=True)
                 await progress.edit_text("🎵 " + title + "\n⏳ သီချင်းဖိုင် ယူနေတယ်…", parse_mode=ParseMode.DISABLED)
                 if candidate is None:

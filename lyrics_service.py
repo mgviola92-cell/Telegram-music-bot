@@ -38,90 +38,49 @@ def choose_record(rows,title,duration=None):
     return max(ranked,key=lambda r:r[0])[1:] if ranked else None
 
 class LyricsLookup:
-    def __init__(self,telegram=None):self.cache=OrderedDict();self.slots=asyncio.Semaphore(2);self.jobs={};self.telegram=telegram
+    def __init__(self):self.cache=OrderedDict();self.slots=asyncio.Semaphore(2)
     async def find(self,title,duration=None):
         title=clean_track_title(title)[:150];key=(title.casefold(),round(duration or 0))
         cached=self.cache.get(key)
         if cached and cached[0]>time.monotonic():self.cache.move_to_end(key);return cached[1]
-        # The same track across groups shares one bounded search.
-        task=self.jobs.get(key)
-        if task is None:
-            if len(self.jobs)>=2:return None
-            task=asyncio.create_task(self.race(title,duration));self.jobs[key]=task
-            task.add_done_callback(lambda done:self.jobs.pop(key,None))
-        result=await asyncio.shield(task)
-        self.cache[key]=(time.monotonic()+(3600 if result else 60),result)
-        while len(self.cache)>32:self.cache.popitem(last=False)
-        return result
-    async def race(self,title,duration):
-        from lyric_sources import LyricsResult
-        tasks=[asyncio.create_task(self.lrclib(title,duration))]
-        if self.telegram:tasks.append(asyncio.create_task(self.telegram.find(title,duration)))
-        try:
-            async with asyncio.timeout(9):
-                pending=set(tasks)
-                while pending:
-                    done,pending=await asyncio.wait(pending,return_when=asyncio.FIRST_COMPLETED)
-                    for task in done:
-                        if task.cancelled():continue
-                        try:result=task.result()
-                        except Exception as exc:
-                            import logging
-                            logging.getLogger('telegram_music').info('Lyrics provider unavailable (%s)',type(exc).__name__)
-                            continue
-                        if result:
-                            return result if isinstance(result,LyricsResult) else LyricsResult(*result,'LRCLIB')
-        except TimeoutError:pass
-        finally:
-            for task in tasks:
-                if not task.done():task.cancel()
-            await asyncio.gather(*tasks,return_exceptions=True)
-        return None
-    async def lrclib(self,title,duration=None):
         async with self.slots:
-            async with ClientSession(timeout=ClientTimeout(total=7),headers={'User-Agent':'MudyarMusic/1.0 (Telegram lyrics lookup)','Accept':'application/json'}) as client:
+            async with ClientSession(timeout=ClientTimeout(total=8),headers={'User-Agent':'MudyarMusic/1.0 (Telegram lyrics lookup)','Accept':'application/json'}) as client:
                 async with client.get('https://lrclib.net/api/search',params={'q':query_text(title)},allow_redirects=False) as response:
                     if response.status!=200:raise ValueError('Lyrics service unavailable')
                     payload=bytearray()
-                    async for chunk in response.content.iter_chunked(16384):
+                    async for chunk in response.content.iter_chunked(65536):
                         payload.extend(chunk)
-                        if len(payload)>256*1024:raise ValueError('Lyrics response too large')
-                    records=json.loads(payload)
-                    return choose_record(records,title,duration)
+                        if len(payload)>1024*1024:raise ValueError('Lyrics response too large')
+                    try:records=json.loads(payload)
+                    except (ValueError,UnicodeError):
+                        import logging
+                        logging.getLogger('telegram_music').info('Lyrics response invalid content_type=%s bytes=%s',response.content_type,len(payload))
+                        raise
+                    result=choose_record(records,title,duration)
+        self.cache[key]=(time.monotonic()+(3600 if result else 120),result)
+        while len(self.cache)>32:self.cache.popitem(last=False)
+        return result
 
 class LyricsUI:
-    def __init__(self,bot,current,telegram=None):
-        self.bot,self.current=bot,current;self.lookup=LyricsLookup(telegram)
+    def __init__(self,bot,current):
+        self.bot,self.current=bot,current;self.lookup=LyricsLookup()
         self.links=OrderedDict();self.views=OrderedDict();self.recent=OrderedDict();self.busy=set()
     async def probe(self):
         import logging
         log=logging.getLogger('telegram_music')
         try:
-            result=await self.lookup.lrclib('Perfect Ed Sheeran',263)
+            result=await self.lookup.find('Perfect Ed Sheeran',263)
             if not result:raise ValueError('No matching record')
             log.info('Lyrics live probe PASS characters=%s',len(result[0]))
         except Exception as exc:log.info('Lyrics live probe unavailable (%s)',type(exc).__name__)
-        telegram=self.lookup.telegram
-        if telegram:
-            try:
-                result=await telegram.find('Purple Wink pGb',168,timeout=24)
-                log.info('Lyrics Telegram live probe result=%s characters=%s','PASS' if result else 'no-text',len(result[0]) if result else 0)
-            except Exception as exc:log.info('Lyrics Telegram live probe unavailable (%s)',type(exc).__name__)
-
 
     def button(self,title,duration=None):
         token=secrets.token_hex(8);self.links[token]=(time.monotonic()+3600,title,duration)
         while len(self.links)>256:self.links.popitem(last=False)
         return B('🎤 Lyrics',callback_data='lyr:get:'+token)
-    @staticmethod
-    def search_buttons(title):
-        from urllib.parse import quote_plus
-        def url(site):return 'https://www.google.com/search?q='+quote_plus('site:'+site+' '+title+' lyrics')
-        return K([[B('🔎 စာသားရှာမယ်',url=lyrics_search_url(title))],
-                  [B('Smule',url=url('smule.com')),B('Genius',url=url('genius.com')),B('Musixmatch',url=url('musixmatch.com'))]])
     async def show(self,row,token,page):
         chunks=row['pages'];page=max(0,min(page,len(chunks)-1))
-        text='🎤 '+row['title'][:130]+f"\n{page+1}/{len(chunks)} · {row.get('provider','LRCLIB')}\n\n"+chunks[page]
+        text='🎤 '+row['title'][:130]+f'\n{page+1}/{len(chunks)} · LRCLIB\n\n'+chunks[page]
         nav=[]
         if page:nav.append(B('‹ အရှေ့',callback_data=f'lyr:page:{token}:{page-1}'))
         if page+1<len(chunks):nav.append(B('နောက် ›',callback_data=f'lyr:page:{token}:{page+1}'))
@@ -167,16 +126,16 @@ class LyricsUI:
                 panel=await cb.message.reply_text('🎤 သီချင်းစာသား ရှာနေတယ်…')
                 result=await asyncio.wait_for(self.lookup.find(title,duration),10)
                 if not result:
-                    await panel.edit_text('ဒီသီချင်းစာသား မတွေ့သေးဘူး။',reply_markup=self.search_buttons(title));return
+                    await panel.edit_text('ဒီသီချင်းစာသား မတွေ့သေးဘူး။',reply_markup=K([[B('🔎 စာသားရှာမယ်',url=lyrics_search_url(title))]]));return
                 lyrics,matched=result
                 token=secrets.token_hex(8)
                 # <=1400 Unicode code points keeps even supplementary text below Telegram's UTF-16 limit.
-                row={'chat':chat,'user':uid,'source':cb.message.id,'request_title':title,'title':matched,'provider':getattr(result,'source','LRCLIB'),'pages':[lyrics[i:i+1400] for i in range(0,len(lyrics),1400)],'panel':panel,'until':time.monotonic()+600}
+                row={'chat':chat,'user':uid,'source':cb.message.id,'request_title':title,'title':matched,'pages':[lyrics[i:i+1400] for i in range(0,len(lyrics),1400)],'panel':panel,'until':time.monotonic()+600}
                 self.views=OrderedDict((t,r) for t,r in self.views.items() if r['until']>time.monotonic())
                 while len(self.views)>=32:self.views.popitem(last=False)
                 self.views[token]=row;await self.show(row,token,0)
             except Exception:
                 if panel:
-                    try:await panel.edit_text('စာသားဝန်ဆောင်မှု လက်ရှိ မရသေးဘူး။',reply_markup=self.search_buttons(title))
+                    try:await panel.edit_text('စာသားဝန်ဆောင်မှု လက်ရှိ မရသေးဘူး။',reply_markup=K([[B('🔎 စာသားရှာမယ်',url=lyrics_search_url(title))]]))
                     except Exception:pass
             finally:self.busy.discard(uid)

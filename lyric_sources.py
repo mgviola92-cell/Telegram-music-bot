@@ -61,21 +61,34 @@ class TelegramLyrics:
                         LOG.info('Lyrics Telegram no callback button source=%s',source.username);return None
                     before=[m.id async for m in source.client.get_chat_history(source.peer.id,limit=5)]
                     cutoff=max(before+[message.id])
-                    answer=await select_song(source.client,fresh,label)
-                    # Callback alerts can contain lyrics, too.
-                    text=lyric_text(type('Answer',(),{'text':getattr(answer,'message',None)})())
-                    if text:return LyricsResult(text,clean_track_title(candidate.label),'Shazam')
-                    while True:
-                        edited=await source.client.get_messages(source.peer.id,message.id)
-                        text=lyric_text(edited)
-                        if text:return LyricsResult(text,clean_track_title(candidate.label),'Shazam')
-                        async for reply in source.client.get_chat_history(source.peer.id,limit=6):
-                            if reply.id<=cutoff or getattr(reply,'outgoing',False):continue
-                            reply_id=getattr(reply,'reply_to_message_id',None)
-                            if reply_id and reply_id!=message.id:continue
-                            text=lyric_text(reply)
+                    # Some bots edit/send lyrics but never answer the callback RPC.
+                    # Poll concurrently, as the audio-source selector already does.
+                    callback=asyncio.create_task(select_song(source.client,fresh,label))
+                    seen=set()
+                    try:
+                        while True:
+                            if callback.done() and not callback.cancelled():
+                                try:
+                                    answer=callback.result()
+                                    text=lyric_text(type('Answer',(),{'text':getattr(answer,'message',None)})())
+                                    if text:return LyricsResult(text,clean_track_title(candidate.label),'Shazam')
+                                except Exception:pass
+                            edited=await source.client.get_messages(source.peer.id,message.id)
+                            text=lyric_text(edited)
                             if text:return LyricsResult(text,clean_track_title(candidate.label),'Shazam')
-                        await asyncio.sleep(.6)
+                            async for reply in source.client.get_chat_history(source.peer.id,limit=6):
+                                if reply.id<=cutoff or getattr(reply,'outgoing',False):continue
+                                reply_id=getattr(reply,'reply_to_message_id',None)
+                                if reply_id and reply_id!=message.id:continue
+                                text=lyric_text(reply)
+                                if text:return LyricsResult(text,clean_track_title(candidate.label),'Shazam')
+                                if reply.id not in seen:
+                                    seen.add(reply.id)
+                                    LOG.info('Lyrics Telegram response text_chars=%s caption_chars=%s',len(str(getattr(reply,'text','') or '')),len(str(getattr(reply,'caption','') or '')))
+                            await asyncio.sleep(.6)
+                    finally:
+                        if not callback.done():callback.cancel()
+                        await asyncio.gather(callback,return_exceptions=True)
                 finally:source.lock.release()
         except asyncio.CancelledError:raise
         except Exception as exc:

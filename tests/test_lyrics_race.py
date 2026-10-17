@@ -68,3 +68,21 @@ class ReuseMetadataTests(unittest.IsolatedAsyncioTestCase):
                  client=N(get_messages=AsyncMock(return_value=N(reply_markup=None))))
         result=await TelegramLyrics(source).find('Purple Wink pGb',168)
         self.assertIsNone(result);source.find.assert_not_awaited();self.assertFalse(source.lock.locked())
+
+class CallbackPollingTests(unittest.IsolatedAsyncioTestCase):
+    async def test_text_arrives_even_when_bot_never_answers_callback_rpc(self):
+        message=N(id=10,reply_markup=N(inline_keyboard=[[N(text='Lyrics',callback_data='lyr')]]))
+        text='another actual lyric line\n'*6
+        calls=[];cancelled=asyncio.Event()
+        async def history(*a,**k):
+            calls.append(1)
+            if len(calls)==1:yield N(id=10)
+            else:yield N(id=11,text=text,outgoing=False,reply_to_message_id=10)
+        async def callback(*a):
+            try:await asyncio.sleep(10)
+            finally:cancelled.set()
+        source=N(username='VoiceShazamBot',peer=N(id=42),lock=asyncio.Lock(),find=AsyncMock(return_value=N(message=message,label='Song',duration=None)),
+                 client=N(get_messages=AsyncMock(return_value=message),get_chat_history=history))
+        with patch('lyric_sources.select_song',callback):
+            result=await TelegramLyrics(source).find('Song')
+        self.assertEqual(result[0],text.strip());self.assertFalse(source.lock.locked())

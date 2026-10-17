@@ -185,3 +185,7 @@ Default artwork: `/owner` → ကဒ်အပြင်အဆင် → Default �
 
 
 Player / queue names now use Telegram mention entities (blue clickable names); owner templates remain plain text with escaped HTML. Pause/resume edits the existing player card with a quote naming the controlling admin. Closed/disconnected VC cleanup stays silent. Active VC /play skips redundant membership RPC; audio-frame polling is 250 ms with the same eight-second timeout and source fallback safety checks. First-time source resolution and Telegram connection latency still vary.
+
+
+## Burmese home/status card
+`/start` shows the configured default artwork, current brand and a compact Burmese runtime status. Help and refresh edit the same card; `/help` and `/cmd` retain the full existing command guide. `/owner` retains private controls, and its status page includes the same runtime measurements. CPU is sampled on demand since the previous sample, normalized to the Linux cgroup CPU quota when available (otherwise explicitly one-core basis); memory uses cgroup usage/limit or process RSS. Disk is the filesystem containing temporary media, not Render's billed storage quota. Uptime resets at restart. No background status polling, new package or external API; results are cached for five seconds. Public panels are bounded to 128 / one hour, requester-only, and refresh is rate-limited. No provider bandwidth quota is fabricated or exposed.

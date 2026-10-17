@@ -1601,40 +1601,13 @@ async def main() -> None:
     async def observe_music_group(_: Client,msg: Message) -> None:
         owner_settings.observe_group(msg.chat)
 
+    from music_home import MusicHome
+    home=MusicHome(bot,owner_settings,players,photo_cache)
+    home.register()
+
     @bot.on_message(filters.command(["start", "help", "cmd"]))
     async def help_command(_: Client, msg: Message) -> None:
-        identity = await bot.get_me()
-        add_button = InlineKeyboardMarkup([[
-            InlineKeyboardButton(
-                "➕ Add မုဒြာ to Group",
-                url=f"https://t.me/{identity.username}?startgroup=true",
-            )
-        ]])
-        await msg.reply_text(
-            "🎧 မုဒြာ Music Bot — VC Player\n\n"
-            "Group VC ဖွင့်ပြီး /play Faded လို့ သီချင်းနာမည် ရိုက်နိုင်တယ်။\n"
-            "Audio File ကို Reply လုပ်ပြီး /play လည်းရတယ်။\n"
-            "Private chat မှာ သီချင်းနာမည် ရိုက်ပြီး စာရင်းထဲက ရွေးရင် MP3 ဖိုင် ပို့ပေးမယ်။\n"
-            "/findsong — Video / Voice / Audio ကို reply လုပ်ပြီး သီချင်းရှာပါ။\n"
-            "Video: ကိုယ်ပိုင် MP4 ကို Reply လုပ်ပြီး /vplay သုံးပါ။\n"
-            "Music: ရင်းမြစ်များစွာမှာ တစ်ပြိုင်တည်းရှာမယ်။\n"
-            "YouTube Link: သီချင်းနာမည်ယူပြီး အခြားရင်းမြစ်မှာ ရှာဖွင့်မယ်။ Version ကွဲနိုင်တယ်။\n"
-            "Private Group: Music Bot ကို Admin + Invite Users ပေးထားပါ။\n"
-            "/play (/p) /search /vplay /queue /now /skip (/s)\n"
-            "/pause /resume /stop /clear (/c)\n"
-            "အသံညှိရန် သီချင်းကဒ်ထဲက Effects / Quality / Normalize ခလုတ်တွေ သုံးပါ။\n"
-            "/autoplay on|off · /toptracks /stats\n"
-            "/shuffle /remove 1 /clear /loop — Admin Controls\n"
-            "/radio — Local / International radio\n"
-            "/welcome — မြန်မာ VC/Group ကြိုဆိုအသံ\n"
-            "/join — သီချင်းမပါဘဲ VC ထဲဝင်စောင့်မယ်\n"
-            "/လူတောင်းပွဲ — VC လူတောင်းပွဲ ကြိုဆိုပုံစံ\n"
-            "/idle on|off — Queue ကုန်ရင် VC ထဲဆက်နေမလား\n"
-            "/stream on|off — Direct HTTPS audio\n"
-            "/ping — bot online ဖြစ်မဖြစ် စစ်မယ်။\n\n"
-            "Direct HTTPS audio link တွေအတွက် server-side host allowlist လိုတယ်။",
-            reply_markup=add_button,
-        )
+        await home.show(msg,help_page=(msg.command or ['start'])[0] in {'help','cmd'})
 
     @bot.on_message(
         filters.command(["play", "vplay", "ping", "stop", "queue", "radio", "idle", "stream"]) &

@@ -121,6 +121,10 @@ class MusicOwnerUI:
         async def owner_command(_,msg):
             user=msg.from_user.id if msg.from_user else None
             command=(msg.command or [''])[0]
+            if command=='start':
+                self.pending.pop(user,None);self.record_pending.pop(user,None)
+                if self.store.authorized(user):self.broadcast.waiting=False
+                return
             if command=='owner' and not self.store.ready and time.monotonic()-self.last_load>60:
                 self.last_load=time.monotonic()
                 await self.store.load()
@@ -242,8 +246,10 @@ class MusicOwnerUI:
                 elif action=='status':
                     active=sum(p.current is not None or p.idle_mode is not None for p in self.players.values())
                     groups=len(set(self.store.data['groups'])|set(self.store.observed))
+                    from runtime_status import STATUS
                     text=f'📊 Music Bot\nအသံဝန်ဆောင်မှု: {"Ready" if self.welcome.ready else "Unavailable"}\nActive VC: {active}\nမှတ်တမ်းရ Group: {groups}\nစိတ်ကြိုက်စာသား: {len(self.store.data["texts"])} / 4'
-                    await cb.message.edit_text(text,reply_markup=K([[B('↩ Owner Menu',callback_data='own:home')]]))
+                    text+='\n\n'+STATUS.text()
+                    await cb.message.edit_text(text,reply_markup=K([[B('↩ Owner Menu',callback_data='own:home')]]),parse_mode=ParseMode.DISABLED)
                 elif action=='groups':
                     page=max(0,int(key or 0))
                     groups=dict(self.store.data['groups']);groups.update(self.store.observed)

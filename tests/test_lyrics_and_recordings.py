@@ -99,7 +99,7 @@ class LyricsResponseTests(unittest.IsolatedAsyncioTestCase):
             async def __aenter__(self):return self
             async def __aexit__(self,*args):pass
             def get(self,*args,**kwargs):return Response()
-        with patch('lyrics_service.ClientSession',Session):return await LyricsLookup().find('Perfect Ed Sheeran',263)
+        with patch('lyrics_service.ClientSession',Session):return await LyricsLookup().lrclib('Perfect Ed Sheeran',263)
     async def test_chunked_json_is_read_completely_before_parsing(self):
         payload=json.dumps([{'trackName':'Perfect','artistName':'Ed Sheeran','duration':263,'plainLyrics':'test text'}]).encode()
         result=await self.fetch([payload[:13],payload[13:29],payload[29:]])

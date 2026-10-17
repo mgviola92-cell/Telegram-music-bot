@@ -1,0 +1,80 @@
+"""Low-priority Telegram lyrics: metadata and text only, never audio downloads."""
+import asyncio
+import logging
+import re
+import time
+from bot_source_probe import select_song
+from music_ui import clean_track_title
+
+LOG=logging.getLogger('telegram_music')
+
+class LyricsResult(tuple):
+    def __new__(cls,text,title,source):
+        result=super().__new__(cls,(text,title));result.source=source;return result
+
+def lyric_button(message):
+    for row in getattr(getattr(message,'reply_markup',None),'inline_keyboard',[]) or []:
+        for button in row:
+            label=str(getattr(button,'text','')).casefold()
+            if ('lyrics' in label or 'စာသား' in label) and getattr(button,'callback_data',None):return button.text
+    return None
+
+def lyric_text(message):
+    # Accept actual multi-line text, never a song caption, service prompt or URL.
+    text=str(getattr(message,'text',None) or '').strip()
+    if not 80<=len(text)<=16000 or len(text.splitlines())<4:return None
+    lowered=text.casefold()
+    if any(x in lowered for x in ('lyrics not found','no lyrics','subscribe','http://','https://','searching','စာသားမတွေ့')):return None
+    return text
+
+class TelegramLyrics:
+    def __init__(self,source,busy=lambda:False):
+        self.source,self.busy=source,busy;self.tasks=set();self.pause_until=0;self.cooldown=0
+    def interrupt(self):
+        self.pause_until=time.monotonic()+15
+        for task in tuple(self.tasks):task.cancel()
+    async def find(self,title,duration=None):
+        source=self.source
+        if (source is None or self.tasks or self.busy() or source.lock.locked()
+                or time.monotonic()<max(self.pause_until,self.cooldown)):return None
+        task=asyncio.current_task();self.tasks.add(task)
+        try:
+            async with asyncio.timeout(8):
+                candidate=await source.find(title)
+                from lyrics_service import words
+                wanted=words(title);actual=words(candidate.label)
+                if not wanted or len(wanted&actual)/len(wanted)<.8:return None
+                if duration and candidate.duration and abs(duration-candidate.duration)>max(12,duration*.1):return None
+                # Another music request may have acquired the source after metadata search.
+                if self.busy() or source.lock.locked():return None
+                await source.lock.acquire()
+                try:
+                    message=candidate.message
+                    fresh=await source.client.get_messages(source.peer.id,message.id)
+                    label=lyric_button(fresh)
+                    if not label:
+                        LOG.info('Lyrics Telegram no callback button source=%s',source.username);return None
+                    before=[m.id async for m in source.client.get_chat_history(source.peer.id,limit=5)]
+                    cutoff=max(before+[message.id])
+                    answer=await select_song(source.client,fresh,label)
+                    # Callback alerts can contain lyrics, too.
+                    text=lyric_text(type('Answer',(),{'text':getattr(answer,'message',None)})())
+                    if text:return LyricsResult(text,clean_track_title(candidate.label),'Shazam')
+                    while True:
+                        edited=await source.client.get_messages(source.peer.id,message.id)
+                        text=lyric_text(edited)
+                        if text:return LyricsResult(text,clean_track_title(candidate.label),'Shazam')
+                        async for reply in source.client.get_chat_history(source.peer.id,limit=6):
+                            if reply.id<=cutoff or getattr(reply,'outgoing',False):continue
+                            reply_id=getattr(reply,'reply_to_message_id',None)
+                            if reply_id and reply_id!=message.id:continue
+                            text=lyric_text(reply)
+                            if text:return LyricsResult(text,clean_track_title(candidate.label),'Shazam')
+                        await asyncio.sleep(.6)
+                finally:source.lock.release()
+        except asyncio.CancelledError:raise
+        except Exception as exc:
+            LOG.info('Lyrics Telegram unavailable source=%s reason=%s',source.username,type(exc).__name__)
+            self.cooldown=time.monotonic()+60
+            return None
+        finally:self.tasks.discard(task)

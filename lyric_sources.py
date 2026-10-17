@@ -33,14 +33,19 @@ class TelegramLyrics:
     def interrupt(self):
         self.pause_until=time.monotonic()+15
         for task in tuple(self.tasks):task.cancel()
-    async def find(self,title,duration=None):
+    async def find(self,title,duration=None,*,timeout=8):
         source=self.source
         if (source is None or self.tasks or self.busy() or source.lock.locked()
                 or time.monotonic()<max(self.pause_until,self.cooldown)):return None
         task=asyncio.current_task();self.tasks.add(task)
         try:
-            async with asyncio.timeout(8):
-                candidate=await source.find(title)
+            async with asyncio.timeout(min(24,max(1,timeout))):
+                from lyrics_service import words
+                wanted=words(title)
+                candidate=next((row[0] for row in list(getattr(source,'candidates',{}).values())
+                    if row[1]>time.monotonic() and words(clean_track_title(row[0].label))==wanted),None)
+                if candidate is None:candidate=await source.find(title)
+                LOG.info('Lyrics Telegram metadata ready source=%s',source.username)
                 from lyrics_service import words
                 wanted=words(title);actual=words(candidate.label)
                 if not wanted or len(wanted&actual)/len(wanted)<.8:return None

@@ -97,14 +97,14 @@ class LyricsUI:
         import logging
         log=logging.getLogger('telegram_music')
         try:
-            result=await self.lookup.find('Perfect Ed Sheeran',263)
+            result=await self.lookup.lrclib('Perfect Ed Sheeran',263)
             if not result:raise ValueError('No matching record')
             log.info('Lyrics live probe PASS characters=%s',len(result[0]))
         except Exception as exc:log.info('Lyrics live probe unavailable (%s)',type(exc).__name__)
         telegram=self.lookup.telegram
         if telegram:
             try:
-                result=await telegram.find('Purple Wink pGb',168)
+                result=await telegram.find('Purple Wink pGb',168,timeout=24)
                 log.info('Lyrics Telegram live probe result=%s characters=%s','PASS' if result else 'no-text',len(result[0]) if result else 0)
             except Exception as exc:log.info('Lyrics Telegram live probe unavailable (%s)',type(exc).__name__)
 

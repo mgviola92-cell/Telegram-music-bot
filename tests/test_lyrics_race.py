@@ -58,3 +58,13 @@ class TelegramTests(unittest.IsolatedAsyncioTestCase):
     def test_prompts_and_links_are_not_lyrics(self):
         for text in ['searching\n'*20,'https://example.com\n'*10,'lyrics not found\n'*10]:self.assertIsNone(lyric_text(N(text=text)))
         self.assertIsNone(lyric_button(N(reply_markup=N(inline_keyboard=[[N(text='Lyrics',url='https://example.com')]]))))
+
+class ReuseMetadataTests(unittest.IsolatedAsyncioTestCase):
+    async def test_existing_song_metadata_avoids_second_bot_search(self):
+        import time
+        candidate=N(label='Purple – Wink & pGb · VoiceShazamBot',duration=168,message=N(id=10))
+        source=N(username='VoiceShazamBot',peer=N(id=42),lock=asyncio.Lock(),find=AsyncMock(),
+                 candidates={'original query':(candidate,time.monotonic()+30)},
+                 client=N(get_messages=AsyncMock(return_value=N(reply_markup=None))))
+        result=await TelegramLyrics(source).find('Purple Wink pGb',168)
+        self.assertIsNone(result);source.find.assert_not_awaited();self.assertFalse(source.lock.locked())

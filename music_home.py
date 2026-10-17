@@ -22,7 +22,8 @@ class MusicHome:
         return ('<b>'+escape(render('brand'))+'</b>\n\n'
                 'မင်္ဂလာပါ '+name+'။\n'
                 'သီချင်းနားထောင်ဖို့ မုဒြာကနေ ကြိုဆိုပါတယ်။\n\n'
-                '<b>လက်ရှိအခြေအနေ</b>\n'+escape(STATUS.text()+'\n'+BANDWIDTH.text())+'\n'
+                '<b>လက်ရှိအခြေအနေ</b>\n'+escape(STATUS.text()+'\n'+BANDWIDTH.text())+'\n\n'
+                '<blockquote>'+escape(BANDWIDTH.reset_notice())+'</blockquote>\n'
                 f'▸ ချိတ်ဆက်ထားသော VC : {active}\n\n'
                 'သီချင်းနာမည် ရိုက်ပြီး ရှာနိုင်တယ်။\n'
                 'Group အသံခန်းမှာ /play နဲ့ ဖွင့်နိုင်တယ်။')

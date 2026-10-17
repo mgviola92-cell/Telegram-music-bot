@@ -53,6 +53,16 @@ class BandwidthStatus:
                             chunks.append(chunk)
                         self.row=parse_usage(json.loads(b''.join(chunks)))
             except (Exception,):return
+    def reset_notice(self,now=None):
+        # Calendar arithmetic only: no requests, task, timer or file writes.
+        now=(now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+        next_month=(now.replace(day=28)+timedelta(days=4)).replace(day=1,hour=0,minute=0,second=0,microsecond=0)
+        days=max(0,math.ceil((next_month-now).total_seconds()/86400))
+        months=('ဇန်နဝါရီ','ဖေဖော်ဝါရီ','မတ်','ဧပြီ','မေ','ဇွန်','ဇူလိုင်','ဩဂုတ်','စက်တင်ဘာ','အောက်တိုဘာ','နိုဝင်ဘာ','ဒီဇင်ဘာ')
+        return ('Bandwidth ပြန်စမည့်ရက်\n'
+                f'{months[next_month.month-1]} ၁၊ {next_month.year}\n'
+                f'ပြန်စဖို့ {days} ရက်ခန့် ကျန်သေးတယ်။')
+
     def text(self):
         row=self.row or self.snapshot()
         if not row:return '▸ Bandwidth : Render data မချိတ်ရသေး'

@@ -16,6 +16,18 @@ def receipt_text(track, *, playing=False, position=1):
 
 
 async def sync_receipts(player):
+    from queue_guard import collapse_resolved,duplicate_text
+    removed=collapse_resolved(player)
+    for track,previous in removed:
+        message=getattr(track,'queue_receipt',None)
+        if message:
+            try:await message.edit_text(duplicate_text(player,previous),parse_mode=ParseMode.HTML)
+            except Exception:pass
+        task=player.metadata_tasks.pop(id(track),None)
+        if task and not task.done():task.cancel()
+    if removed:
+        from main import prepare_next_song
+        prepare_next_song(player)
     entries = list(player.queue)
     if player.current is not None:
         entries.append(player.current)

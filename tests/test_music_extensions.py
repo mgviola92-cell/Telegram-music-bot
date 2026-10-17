@@ -338,7 +338,7 @@ class MaintenanceAndProbeTests(unittest.IsolatedAsyncioTestCase):
             cached=Path(folder)/'cached.mp3';playing=Path(folder)/'playing.mp3'
             cached.write_bytes(b'cached');playing.write_bytes(b'playing')
             rows={'key':(cached,'Title',180,time.monotonic()+100)}
-            with patch.object(song_cache,'_ITEMS',rows), patch('song_cache.shutil.disk_usage',return_value=N(total=100,used=85)):
+            with patch.object(song_cache,'_ITEMS',rows), patch('song_cache.shutil.disk_usage',return_value=N(total=100,used=85,free=15)):
                 song_cache.maintain_cache()
             self.assertFalse(cached.exists())
             self.assertTrue(playing.exists())

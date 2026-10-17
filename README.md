@@ -36,7 +36,7 @@ Required Render environment variables:
 
 Optional variables:
 
-- `MAX_ACTIVE_GROUPS`: default 4 simultaneous voice streams, bounded at 8 in code. The number of groups that can add the bot is not limited by this setting.
+- `MAX_ACTIVE_GROUPS`: default 6 simultaneous voice streams, bounded at 8 in code. The number of groups that can add the bot is not limited by this setting.
 - `ALLOWED_STREAM_HOSTS`: comma-separated allowlist of exact trusted HTTPS audio hostnames; empty by default.
 - `PORT`: set automatically by Render; the code listens on 0.0.0.0.
 
@@ -76,7 +76,7 @@ maintenance, resource limits, and restarts can still disconnect the assistant.
 - Video is CPU-intensive; Render Free has extremely limited CPU (observed service limit 0.15 CPU) and 512 MB RAM. Four concurrent calls is a trial cap, **not** a guarantee of smooth audio; lowering the cap may be necessary.
 - Telegram file replies use HTTPS Bot API first with MTProto fallback. Downloaded Telegram, SoundCloud and open-license Archive files are temporary. Only share music you have permission to play.
 - No automatic deploy: commits are deployed manually after GitHub workflow checks, and then VC is tested with users.
-- The default `MAX_ACTIVE_GROUPS=4` is a trial cap, not evidence of stable concurrent streaming. Idle calls count against that cap; a new song request evicts the oldest idle group before denying service. Groups may install the bot without this concurrent-VC limit.
+- The default `MAX_ACTIVE_GROUPS=6` is a trial cap, not evidence of stable concurrent streaming. Idle calls count against that cap; a new song request evicts the oldest idle group before denying service. Groups may install the bot without this concurrent-VC limit.
 
 ## Reference review and implementation boundaries (October 2026)
 
@@ -259,3 +259,11 @@ The current song card includes Normalize, Quality, Effects and Top Tracks button
 
 
 Selected-result fallback: `/search` first tries the selected recording. If that source is unavailable, it searches configured bot sources using the selected title/artist, not the original broad query. A failed selected bot transfer tries the remaining providers and normal source resolution for that same title. Strict stream-only mode still forbids Telegram file fallback. Confirmed DRM/subscriber restrictions are skipped for 30 minutes and filtered from subsequent search results; metadata-only listings cannot prove every recording is playable. Source failures use generic audio/source messages, never the legacy named-track flag as evidence of YouTube verification.
+
+### Six-VC trial and shared requests
+
+- The deployment explicitly sets `MAX_ACTIVE_GROUPS=6`; this is a trial limit, not a six-call performance guarantee.
+- Identical concurrent resolutions share one job; every local playback receives its own disposable file. The cache holds at most six tracks, 36 MiB total, for 15 minutes. Playing and prefetched copies are additional temporary files. Low free disk space clears cache copies only.
+- Queue admission rejects duplicate requests, including resolved metadata matches. Queue management uses stable item tokens; requesters may remove their own items and group admins any queued item.
+- Public song links come only from existing source metadata. No extra song.link lookup is added.
+- Status accepts a timestamped `MUSIC_BANDWIDTH_SNAPSHOT_MB` / `MUSIC_BANDWIDTH_SNAPSHOT_AT` service snapshot. Optional `RENDER_METRICS_API_KEY` and `MUSIC_RENDER_SERVICE_ID` enable on-demand refresh at most once per 15 minutes. The key belongs only in Render secrets. `MUSIC_BANDWIDTH_LIMIT_GB` is a comparison allowance, not verified workspace billing or remaining quota.

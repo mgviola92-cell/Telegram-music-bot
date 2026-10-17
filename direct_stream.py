@@ -143,6 +143,8 @@ def resolve_soundcloud_https(
             "SoundCloud remote audio resolved in %.2fs (public HTTPS source)",
             time.monotonic() - started,
         )
+        from song_links import remember_link
+        remember_link(title,webpage)
         return url, f"{title} · SoundCloud (live)", duration
     LOG.info("Direct stream rejected: no approved HTTPS audio URL (protocol=%s)",
              str(info.get("protocol") or "unknown")[:40])

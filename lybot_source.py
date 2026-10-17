@@ -55,6 +55,8 @@ class AudioCandidate:
     def __init__(self, source, query, message, label, duration):
         self.source, self.query, self.message = source, query, message
         self.label, self.duration = label, duration
+        from song_links import remember_link,message_link
+        remember_link(label,message_link(message))
 
 
 def matches_query(media, query):

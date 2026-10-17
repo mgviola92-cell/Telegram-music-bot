@@ -56,6 +56,10 @@ def render(key, *, html_mode=False, requester_id=None, **values):
         if field is not None:
             value=clip(context[field])
             if field=='requester':result.append(mention(value,requester_id))
+            elif field=='title':
+                from song_links import link_for,safe_link
+                url=link_for(values.get('title',''))
+                result.append('<a href="'+escape(url,quote=True)+'">'+escape(value)+'</a>' if safe_link(url) else escape(value))
             elif field in {'brand','status'}:result.append('<b>'+escape(value)+'</b>')
             else:result.append(escape(value))
     return ''.join(result)

@@ -57,7 +57,7 @@ def queue_display(current: str | None, titles: list[str], loop: bool = False) ->
 
 def player_controls(chat_id: int, *, paused: bool = False, loop: bool = False,
                     title: str = "", normalize: bool = False, quality: str = "high",
-                    effect: str = "normal", menu: str = "main") -> InlineKeyboardMarkup:
+                    effect: str = "normal", menu: str = "main", queue_items=None) -> InlineKeyboardMarkup:
     """All controls stay on the current player card; mutations are admin-only."""
     def button(label, action):
         return InlineKeyboardButton(label, callback_data=f"mud:{action}:{chat_id}")
@@ -65,8 +65,13 @@ def player_controls(chat_id: int, *, paused: bool = False, loop: bool = False,
         [button("▶️ Resume" if paused else "⏸ Pause", "resume" if paused else "pause"),
          button("⏭ Skip", "skip"), button("⏹ Stop", "stop")],
         [button("🔁 Loop ON" if loop else "🔁 Loop OFF", "loop"), button("📜 Queue", "queue")],
+        [button("စာရင်းပြင်မယ်", "qmanage")],
     ]
-    if menu == "quality":
+    if menu=='queue':
+        for i,track in enumerate(queue_items or [],1):
+            rows.append([button(f'× {i}. '+queue_track_title(track)[:42],'qdel'+track.queue_token)])
+        if not queue_items:rows.append([button('စောင့်ဆိုင်းစာရင်း အလွတ်','qmanage')])
+    elif menu == "quality":
         rows.append([button(("✓ " if quality == value else "") + label, "q"+value)
                      for label,value in (("High","high"),("Medium","medium"),("Low","low"))])
     elif menu == "effects":

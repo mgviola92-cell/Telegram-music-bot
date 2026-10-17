@@ -1,4 +1,5 @@
 """Bounded audio-sample recognition via the existing third-party source."""
+from urllib.parse import urlsplit
 import asyncio
 import re
 import tempfile
@@ -188,9 +189,14 @@ async def send_recognized_audio(bot, message, path, title, duration, markup, *, 
             stage = time.monotonic()
             identity = getattr(bot, "me", None) or await bot.get_me()
             username = str(identity.username or '').lstrip('@')
-            caption = '@' + username if username else str(identity.first_name or 'မုဒြာ Music')
+            from html import escape
+            from song_links import link_for,safe_link
+            from pyrogram.enums import ParseMode
+            caption = escape('@' + username if username else str(identity.first_name or 'မုဒြာ Music'))
+            link=link_for(title)
+            if safe_link(link):caption+=' · <a href="'+escape(link,quote=True)+'">'+('song.link' if urlsplit(link).hostname in {'song.link','odesli.co'} else 'သီချင်းလင့်ခ်')+'</a>'
             result = await bot.send_audio(message.chat.id, upload, title=title[:120],
-                                        duration=int(duration or 0), caption=caption,
+                                        duration=int(duration or 0), caption=caption,parse_mode=ParseMode.HTML,
                                         reply_to_message_id=message.id, reply_markup=markup)
             LOG.info("Recognition audio sent after %.2fs (Telegram reuse=%s)", time.monotonic() - stage, bool(file_id))
             return result

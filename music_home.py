@@ -8,6 +8,7 @@ from pyrogram.enums import ParseMode
 from pyrogram.types import InlineKeyboardButton as B,InlineKeyboardMarkup as K
 from card_layout import render,mention
 from runtime_status import STATUS
+from bandwidth_status import BANDWIDTH
 from music_help import HELP_TEXT
 from telegram_photo_cache import send_default_photo
 
@@ -21,7 +22,7 @@ class MusicHome:
         return ('<b>'+escape(render('brand'))+'</b>\n\n'
                 'မင်္ဂလာပါ '+name+'။\n'
                 'သီချင်းနားထောင်ဖို့ မုဒြာကနေ ကြိုဆိုပါတယ်။\n\n'
-                '<b>လက်ရှိအခြေအနေ</b>\n'+escape(STATUS.text())+'\n'
+                '<b>လက်ရှိအခြေအနေ</b>\n'+escape(STATUS.text()+'\n'+BANDWIDTH.text())+'\n'
                 f'▸ ချိတ်ဆက်ထားသော VC : {active}\n\n'
                 'သီချင်းနာမည် ရိုက်ပြီး ရှာနိုင်တယ်။\n'
                 'Group အသံခန်းမှာ /play နဲ့ ဖွင့်နိုင်တယ်။')
@@ -36,6 +37,7 @@ class MusicHome:
         if now-self.recent.get(key,-1000)<5:return
         self.recent[key]=now
         while len(self.recent)>128:self.recent.popitem(last=False)
+        await BANDWIDTH.refresh()
         me=await self.bot.get_me()
         text=escape(HELP_TEXT) if help_page else self.text(msg.from_user)
         buttons=self.keyboard(me.username,help_page)
@@ -61,6 +63,7 @@ class MusicHome:
             await cb.answer()
             self.panels[key]=(*row[:4],now,row[5])
             help_page=cb.data=='home:help'
+            if not help_page:await BANDWIDTH.refresh()
             text=escape(HELP_TEXT) if help_page else self.text(row[5])
             try:
                 # Telegram photo captions have a smaller limit than text messages.

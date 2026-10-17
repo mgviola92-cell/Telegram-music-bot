@@ -86,6 +86,7 @@ class Track:
     autoplay: bool = False
     output_speed: float = 1.0
     original_duration_seconds: float | None = None
+    queue_token: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
     requester: str = "—"
     requester_id: int | None = None
     control_actor: str = ""
@@ -96,6 +97,7 @@ class Track:
 class Player:
     queue: deque = field(default_factory=deque)
     current: Track | None = None
+    loading_track: Track | None = None
     temp_file: str | None = None
     started_at: float = 0.0
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
@@ -804,6 +806,8 @@ def download_song(
             if provider == "YouTube":
                 youtube_guard.record_success()
             label = f"{title} · {provider}"
+            from song_links import remember_link
+            remember_link(label,result.get("webpage_url") or target)
             if provider == "SoundCloud":
                 save_artwork(query, result.get("thumbnail"))
             seconds = float(duration) if duration is not None else None
@@ -846,7 +850,7 @@ async def main() -> None:
         if value.strip()
     }
     # Conservative Render Free cap: more than 2 is allowed, but not unlimited.
-    max_groups = max(1, min(8, int(os.getenv("MAX_ACTIVE_GROUPS", "4"))))
+    max_groups = max(1, min(8, int(os.getenv("MAX_ACTIVE_GROUPS", "6"))))
     players: dict[int, Player] = defaultdict(Player)
     ready = False
     fresh_voice_chats: set[int] = set()
@@ -917,6 +921,10 @@ async def main() -> None:
                 raise
             log.info("Selected SoundCloud audio unavailable (%s); matching selected title on bot sources", type(exc).__name__)
             return await lybot.resolve(queue_track_title(song))
+
+    from shared_audio import SharedAudio
+    shared_audio=SharedAudio(resolve_for_queue,clean_temp)
+    resolve_for_queue=shared_audio.resolve
 
     async def resolve_private_song(query):
         if not isinstance(query,str):
@@ -1053,7 +1061,7 @@ async def main() -> None:
             chat_id, paused=player.paused,
             loop=player.loop_current, title=song.title,
             normalize=player.audio_settings.normalize, quality=player.audio_settings.quality,
-            effect=player.audio_settings.effect, menu=player.control_menu,
+            effect=player.audio_settings.effect, menu=player.control_menu, queue_items=list(player.queue),
         )
         try:
             if player.panel_is_photo:
@@ -1107,7 +1115,7 @@ async def main() -> None:
             chat_id, paused=player.paused, loop=player.loop_current,
             title=song.title, normalize=player.audio_settings.normalize,
             quality=player.audio_settings.quality, effect=player.audio_settings.effect,
-            menu=player.control_menu,
+            menu=player.control_menu, queue_items=list(player.queue),
         )
         previous = player.panel_id
         panel = None
@@ -1351,6 +1359,7 @@ async def main() -> None:
                 cancel_signal = threading.Event()
                 player.cancel_download = cancel_signal
                 song: Track = player.queue.popleft()
+                player.loading_track = song
                 settings = player.audio_settings
                 resolve_started = time.monotonic()
                 local_file = None
@@ -1359,7 +1368,7 @@ async def main() -> None:
                     if song.youtube:
                         use_lybot = (lybot is not None and not song.video
                                      and not stream_only_enabled() and not is_youtube_url(source))
-                        if use_lybot and player.resolver is not None:
+                        if player.resolver is not None:
                             prepared = player.prepared
                             player.prepared = None
                             if (prepared is None or prepared.track is not song
@@ -1594,6 +1603,7 @@ async def main() -> None:
             await clear_player_panel(chat_id, player)
         finally:
             if player.loading_task is task:
+                player.loading_track = None
                 player.loading_task = None
                 player.cancel_download = None
 
@@ -1735,13 +1745,22 @@ async def main() -> None:
             await progress.edit_text("⚠️ Assistant Auto Join မရသေးဘူး။ Admin / Invite Settings စစ်ပါ။")
             return
         await progress.edit_text("🔎 သီချင်းရှာပြီး VC ဖွင့်ဖို့ ပြင်ဆင်နေတယ်...")
+        from queue_guard import duplicate,duplicate_text
+        existing=duplicate(player,track)
+        if existing:
+            await progress.edit_text(duplicate_text(player,existing),parse_mode=ParseMode.HTML)
+            return
         # Do not make another /play wait for a long download to release
         # the chat lock; safely append while an existing loader owns it.
         if player.loading_task is not None and not player.loading_task.done():
             if len(player.queue) >= MAX_QUEUE:
                 await progress.edit_text("⚠️ Queue ပြည့်နေပြီ (10 tracks)။")
                 return
-            player.queue.append(track)
+            from queue_guard import admit,duplicate_text
+            existing=admit(player,track)
+            if existing:
+                await progress.edit_text(duplicate_text(player,existing),parse_mode=ParseMode.HTML)
+                return
             prepare_next_song(player)
             describe_queued(player, track)
             await acknowledge_queued(player, track, progress)
@@ -1780,7 +1799,11 @@ async def main() -> None:
                 )
                 return
 
-            player.queue.append(track)
+            from queue_guard import admit,duplicate_text
+            existing=admit(player,track)
+            if existing:
+                await progress.edit_text(duplicate_text(player,existing),parse_mode=ParseMode.HTML)
+                return
             if player.current is not None:
                 prepare_next_song(player)
                 describe_queued(player, track)
@@ -2467,7 +2490,7 @@ async def main() -> None:
                 log.exception("Could not %s chat %s", action, msg.chat.id)
                 await msg.reply_text("⚠️ VC connection ပြန်စစ်ပါ။")
 
-    @bot.on_callback_query(filters.regex(r"^mud:(pause|resume|skip|stop|loop|queue|normalize|quality|effects|top|back|topall|topgroup|qhigh|qmedium|qlow|fx[a-z]+):"))
+    @bot.on_callback_query(filters.regex(r"^mud:(qmanage|qdel[a-f0-9]{12}|pause|resume|skip|stop|loop|queue|normalize|quality|effects|top|back|topall|topgroup|qhigh|qmedium|qlow|fx[a-z]+):"))
     async def panel_callback(_: Client, cb: CallbackQuery) -> None:
         """One panel per chat; stale buttons cannot control future tracks."""
         try:
@@ -2499,6 +2522,29 @@ async def main() -> None:
             player.control_menu = "top" if action == "top" else "main"
             await cb.answer()
             await update_player_panel(chat_id, player)
+            return
+        if action=='qmanage':
+            player.control_menu='queue'
+            await cb.answer()
+            await update_player_panel(chat_id,player)
+            return
+        if action.startswith('qdel'):
+            token=action[4:]
+            track=next((t for t in player.queue if t.queue_token==token),None)
+            if track is None:
+                await cb.answer('ဒီသီချင်းက စာရင်းမှာ မရှိတော့ဘူး။',show_alert=True);return
+            uid=cb.from_user.id if cb.from_user else None
+            if uid!=track.requester_id and not await is_chat_admin(chat_id,uid):
+                await cb.answer('ကိုယ်တောင်းထားတဲ့သီချင်းကိုပဲ ဖြုတ်နိုင်တယ်။',show_alert=True);return
+            # Recheck after the admin RPC; a prior click/skip may have removed it.
+            if not any(t is track for t in player.queue):
+                await cb.answer('စာရင်းက ပြောင်းသွားပြီ။',show_alert=True);return
+            player.queue=deque(t for t in player.queue if t is not track)
+            task=player.metadata_tasks.pop(id(track),None)
+            if task and not task.done():task.cancel()
+            prepare_next_song(player)
+            await cb.answer('စာရင်းကနေ ဖယ်ပြီးပြီ။')
+            await update_player_panel(chat_id,player)
             return
         if not await is_chat_admin(chat_id, cb.from_user.id if cb.from_user else None):
             await cb.answer("🛡 Group Admin တွေကပဲ Control နှိပ်နိုင်တယ်။", show_alert=True)

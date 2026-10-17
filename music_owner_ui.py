@@ -248,7 +248,9 @@ class MusicOwnerUI:
                     groups=len(set(self.store.data['groups'])|set(self.store.observed))
                     from runtime_status import STATUS
                     text=f'📊 Music Bot\nအသံဝန်ဆောင်မှု: {"Ready" if self.welcome.ready else "Unavailable"}\nActive VC: {active}\nမှတ်တမ်းရ Group: {groups}\nစိတ်ကြိုက်စာသား: {len(self.store.data["texts"])} / 4'
-                    text+='\n\n'+STATUS.text()
+                    from bandwidth_status import BANDWIDTH
+                    await BANDWIDTH.refresh()
+                    text+='\n\n'+STATUS.text()+'\n'+BANDWIDTH.text()
                     await cb.message.edit_text(text,reply_markup=K([[B('↩ Owner Menu',callback_data='own:home')]]),parse_mode=ParseMode.DISABLED)
                 elif action=='groups':
                     page=max(0,int(key or 0))

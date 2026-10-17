@@ -17,7 +17,7 @@ _CACHE_DIR = Path(tempfile.mkdtemp(prefix="mudyar_audio_cache_"))
 _LOCK = threading.RLock()
 _ITEMS: dict[str, tuple[Path, str, float | None, float]] = {}
 _TTL_SECONDS = 15 * 60
-_MAX_ITEMS = 2
+_MAX_ITEMS = 6
 _MAX_TOTAL_BYTES = 36 * 1024 * 1024
 _MAX_ONE_FILE_BYTES = 24 * 1024 * 1024
 
@@ -88,7 +88,7 @@ def maintain_cache():
     with _LOCK:
         _prune()
         usage = shutil.disk_usage(_CACHE_DIR)
-        if usage.total and usage.used / usage.total >= .8:
+        if usage.free < 64 * 1024 * 1024:
             for key, (path, *_rest) in list(_ITEMS.items()):
                 path.unlink(missing_ok=True)
                 _ITEMS.pop(key, None)

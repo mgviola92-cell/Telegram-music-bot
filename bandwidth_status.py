@@ -45,7 +45,7 @@ class BandwidthStatus:
             try:
                 async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=5)) as session:
                     async with session.get('https://api.render.com/v1/metrics/bandwidth',headers={'Authorization':'Bearer '+key},
-                          params={'resource':service,'startTime':start.isoformat(),'endTime':now.isoformat()},allow_redirects=False) as response:
+                          params={'service':service,'startTime':start.strftime('%Y-%m-%dT%H:%M:%SZ'),'endTime':now.strftime('%Y-%m-%dT%H:%M:%SZ')},allow_redirects=False) as response:
                         if response.status!=200:
                             logging.getLogger('telegram_music').info('Bandwidth metrics unavailable HTTP %s',response.status)
                             return

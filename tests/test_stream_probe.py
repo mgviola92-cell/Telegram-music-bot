@@ -46,6 +46,10 @@ class ProbeDecodeTest(unittest.IsolatedAsyncioTestCase):
                 with patch('network_audio.allowed_audio_cdn', return_value=True):
                     stream = DirectAudioStream(f'http://127.0.0.1:{port}/test.m3u8')
                 stream._direct_headers.update({'User-Agent': 'Test Client', 'Accept': '*/*'})
+                # The ahead-of-time path must also decode the same HLS source.
+                from playback_prepare import CheckedAudioStream
+                stream = CheckedAudioStream(stream)
+                await stream.check_stream()
                 await stream.check_stream()
                 command = shlex.split(stream.microphone.path)
                 self.assertEqual(command[command.index('-reconnect_at_eof') + 1], '0')

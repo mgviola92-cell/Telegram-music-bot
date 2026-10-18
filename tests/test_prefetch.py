@@ -3,7 +3,8 @@ import asyncio
 import threading
 import unittest
 from collections import deque
-from unittest.mock import patch
+from unittest.mock import patch, AsyncMock
+from types import SimpleNamespace
 
 from main import (
     Player, Track, discard_prepared, prepare_next_song,
@@ -12,6 +13,13 @@ from prefetch import PreparedAudio
 
 
 class QueuePrefetchTest(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        # Resolver tests use fake filenames/URLs; never probe those on the network.
+        factory = patch('main.audio_stream', side_effect=lambda *a, **k:
+                        SimpleNamespace(check_stream=AsyncMock(), microphone=None))
+        factory.start()
+        self.addCleanup(factory.stop)
+
     async def test_preloads_only_first_next_song(self):
         seen = []
         calls = []
@@ -89,6 +97,8 @@ class QueuePrefetchTest(unittest.IsolatedAsyncioTestCase):
             prepare_next_song(player)
             self.assertIsNone(player.prepared)
             self.assertTrue(previous.discarded)
+            await previous.stream_task
+            await asyncio.sleep(0)
             self.assertEqual(cleanup, ["one.mp3"])
 
     async def test_direct_mode_prefetch_returns_url_without_local_download(self):

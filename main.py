@@ -34,6 +34,7 @@ from lyrics_service import LyricsUI
 from youtube_health import youtube_guard
 from archive_source import get_archive_audio
 from prefetch import PreparedAudio, AsyncPreparedAudio
+from playback_prepare import warm_voice
 from stream_probe import probe_audio_url
 from network_audio import DirectAudioStream
 from audio_options import AudioSettings, ProcessedAudioStream, EFFECTS, EFFECT_LABELS
@@ -121,6 +122,7 @@ class Player:
     idle_early_ends: int = 0
     prepared: PreparedAudio | None = None
     skip_pending: bool = False
+    voice_warmer: object | None = None
     # UI timestamp excludes actual paused time.
     paused_since: float = 0.0
     paused_seconds: float = 0.0
@@ -205,11 +207,15 @@ async def _play_with_reconnect(calls: PyTgCalls, chat_id: int, stream: MediaStre
     Do not create missing group calls; a group admin must start the VC.
     """
     try:
+        started = time.monotonic()
         await asyncio.wait_for(
             calls.play(chat_id, stream, GroupCallConfig(auto_start=False)),
             timeout=40,
         )
+        log.info("VC stream setup chat %s after %.2fs", chat_id, time.monotonic()-started)
+        started = time.monotonic()
         await ensure_native_sender(calls, chat_id)
+        log.info("VC sender check chat %s after %.2fs", chat_id, time.monotonic()-started)
     except asyncio.CancelledError:
         raise
     except Exception as exc:
@@ -347,6 +353,7 @@ def prepare_next_song(player: Player) -> None:
                 upcoming, download_song, clean_temp, prefer_stream=player.stream_enabled,
             )
         player.prepared.on_metadata = player.queue_changed
+        player.prepared.prime_stream(audio_stream, player.audio_settings)
         log.info("Prefetch began for next queued audio")
 
 
@@ -1332,7 +1339,11 @@ async def main() -> None:
         player.loading_task = task
         cancel_signal = threading.Event()
         player.cancel_download = cancel_signal
+        warm_task = None
         try:
+            if (player.current is None and player.idle_mode is None and player.queue
+                    and player.voice_warmer is not None):
+                warm_task = asyncio.create_task(player.voice_warmer())
             if (not player.queue and player.current is not None and player.autoplay_enabled
                     and not (repeat and player.loop_current)):
                 start_autoplay(player)
@@ -1363,6 +1374,7 @@ async def main() -> None:
                 settings = player.audio_settings
                 resolve_started = time.monotonic()
                 local_file = None
+                prepared = None
                 try:
                     source = song.source
                     if song.youtube:
@@ -1459,6 +1471,9 @@ async def main() -> None:
 
                     if cancel_signal.is_set():
                         raise asyncio.CancelledError()
+                    if warm_task is not None:
+                        await warm_task
+                        warm_task = None
                     if chat_id not in fresh_voice_chats:
                         try:
                             await asyncio.wait_for(clear_stale_voice(assistant, chat_id, identity.id), timeout=8)
@@ -1476,8 +1491,11 @@ async def main() -> None:
                                 source, AudioQuality.MEDIUM, VideoQuality.SD_360p,
                             )
                         else:
-                            stream = (audio_stream(source) if settings == AudioSettings() else
-                                      audio_stream(source, settings=settings))
+                            stream = (await prepared.consume_stream(source, settings)
+                                      if prepared is not None else None)
+                            if stream is None:
+                                stream = (audio_stream(source) if settings == AudioSettings() else
+                                          audio_stream(source, settings=settings))
                         await play_with_reconnect(calls, chat_id, stream)
                         if not song.video:
                             await wait_for_audio_frames(calls, chat_id)
@@ -1602,6 +1620,9 @@ async def main() -> None:
             player.paused = False
             await clear_player_panel(chat_id, player)
         finally:
+            if warm_task is not None:
+                warm_task.cancel()
+                await asyncio.gather(warm_task, return_exceptions=True)
             if player.loading_task is task:
                 player.loading_track = None
                 player.loading_task = None
@@ -1721,6 +1742,8 @@ async def main() -> None:
         track.requester_id = getattr(request_user,"id",None)
         player = players[msg.chat.id]
         player.resolver = resolve_for_queue
+        player.voice_warmer = lambda chat_id=msg.chat.id: warm_voice(
+            calls, assistant, chat_id, identity.id, fresh_voice_chats)
         player.autoplay_prepare = lambda: start_autoplay(player)
         drop_autoplay(player)
         player.queue_changed = lambda: schedule_receipts(player)
@@ -2399,6 +2422,12 @@ async def main() -> None:
             async with player.lock:
                 # A natural song-end may have already changed the track.
                 if player.current is expected_track:
+                    # Cut the old audio before preparing/replacing its decoder.
+                    # ensure_native_sender resumes capture after the new source.
+                    try:
+                        await asyncio.wait_for(calls.pause(chat_id), timeout=2)
+                    except Exception as exc:
+                        log.info("Skip pause unavailable (%s)", type(exc).__name__)
                     await advance(chat_id)
                 log.info("Skip transition completed in chat %s after %.2fs",
                          chat_id, time.monotonic() - start)

@@ -29,6 +29,38 @@ class PreparedAudio:
         self.task = asyncio.create_task(asyncio.to_thread(downloader, *args))
         self.task.add_done_callback(self._on_done)
 
+    def prime_stream(self, factory, settings):
+        """Move the one required audio probe off the Skip critical path."""
+        if getattr(self, 'stream_task', None) is not None:
+            return
+        async def prime():
+            try:
+                result = await asyncio.shield(self.task)
+                if self.discarded:
+                    return None
+                from playback_prepare import CheckedAudioStream, decoder_slots
+                slots = decoder_slots()
+                if slots.locked():
+                    return None  # Never queue a speculative probe behind other groups.
+                stream = CheckedAudioStream(factory(result[0], settings=settings))
+                async with slots:
+                    await stream.check_stream()
+                LOG.info('Next queued audio decoder prepared')
+                return result[0], settings, stream
+            except Exception as exc:
+                LOG.info('Next decoder preparation unavailable (%s)', type(exc).__name__)
+                return None
+        self.stream_task = asyncio.create_task(prime())
+
+    async def consume_stream(self, source, settings):
+        task = getattr(self, 'stream_task', None)
+        if task is None:
+            return None
+        result = await asyncio.shield(task)
+        if result is not None and result[0] == source and result[1] == settings:
+            return result[2]
+        return None
+
     def _on_done(self, task: asyncio.Task) -> None:
         try:
             result = task.result()
@@ -50,6 +82,13 @@ class PreparedAudio:
             if notify is not None:
                 notify()
         if self.discarded and not self.consumed and not self.cleaned and result:
+            probe = getattr(self, 'stream_task', None)
+            if probe is not None and not probe.done():
+                # Keep local input alive until its bounded FFprobe finishes.
+                if not getattr(self, '_cleanup_waiting', False):
+                    self._cleanup_waiting = True
+                    probe.add_done_callback(lambda _: self._on_done(task))
+                return
             self.cleaned = True
             self.cleanup(result[0])
 

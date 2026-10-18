@@ -19,7 +19,8 @@ def identities(track):
     return keys
 
 def duplicate(player,track):
-    entries=[player.current,getattr(player,'loading_track',None)]+list(player.queue)
+    # A playing/loading track is not a pending queue entry. Allow one replay.
+    entries=list(player.queue)
     wanted=identities(track)
     for other in entries:
         if other is not None and other is not track and wanted & identities(other):return other
@@ -39,7 +40,8 @@ def duplicate_text(player,track):
 
 
 def collapse_resolved(player):
-    known=[t for t in [player.current,getattr(player,'loading_track',None)] if t is not None]
+    # Compare pending entries with each other, never against current playback.
+    known=[]
     removed=[];kept=[]
     for track in player.queue:
         previous=next((t for t in known if identities(t)&identities(track)),None)

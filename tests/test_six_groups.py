@@ -19,9 +19,27 @@ class QueueTests(unittest.TestCase):
         self.assertIs(admit(p,Track('perfect',' perfect ')),a)
         self.assertEqual(len(p.queue),1)
         p.queue.clear();p.loading_track=a
-        self.assertIs(admit(p,Track('Perfect','Perfect')),a)
+        self.assertIsNone(admit(p,Track('Perfect','Perfect')))
+        self.assertIsNotNone(admit(p,Track('Perfect','Perfect')))
         self.assertIsNone(admit(p,Track('Perfect sped up','Perfect sped up')))
         self.assertIn('tg://user?id=42',duplicate_text(p,a))
+    def test_current_song_can_be_queued_once_for_replay(self):
+        current=Track('Purple','purple wink',metadata_resolved=True,requester_id=1)
+        replay=Track('Purple','purple wink',metadata_resolved=True,requester_id=2)
+        p=Player(current=current)
+        self.assertIsNone(admit(p,replay))
+        self.assertEqual(collapse_resolved(p),[])
+        self.assertEqual(list(p.queue),[replay])
+        self.assertIs(admit(p,Track('Purple','purple wink')),replay)
+        self.assertIn('tg://user?id=2',duplicate_text(p,replay))
+    def test_resolved_replay_survives_but_later_queue_duplicate_collapses(self):
+        current=Track('Purple','current source',metadata_resolved=True)
+        first=Track('Purple','search one',metadata_resolved=True)
+        second=Track('Purple','search two',metadata_resolved=True)
+        p=Player(current=current,queue=deque([first,second]))
+        self.assertEqual(collapse_resolved(p),[(second,first)])
+        self.assertEqual(list(p.queue),[first])
+        self.assertIs(p.current,current)
     def test_metadata_duplicates_keep_first_requester(self):
         a=Track('Purple','one',metadata_resolved=True);b=Track('Purple','two',metadata_resolved=True)
         p=Player(queue=deque([a,b]));self.assertEqual(collapse_resolved(p),[(b,a)])

@@ -2,6 +2,7 @@
 import asyncio
 import json
 import math
+import logging
 import os
 import time
 from datetime import datetime,timezone,timedelta
@@ -45,14 +46,19 @@ class BandwidthStatus:
                 async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=5)) as session:
                     async with session.get('https://api.render.com/v1/metrics/bandwidth',headers={'Authorization':'Bearer '+key},
                           params={'resource':service,'startTime':start.isoformat(),'endTime':now.isoformat()},allow_redirects=False) as response:
-                        if response.status!=200:return
+                        if response.status!=200:
+                            logging.getLogger('telegram_music').info('Bandwidth metrics unavailable HTTP %s',response.status)
+                            return
                         chunks=[];size=0
                         async for chunk in response.content.iter_chunked(16384):
                             size+=len(chunk)
                             if size>1024*1024:return
                             chunks.append(chunk)
                         self.row=parse_usage(json.loads(b''.join(chunks)))
-            except (Exception,):return
+                        logging.getLogger('telegram_music').info('Bandwidth metrics refreshed: %.1f MB latest=%s',self.row[0]/1e6,self.row[1].isoformat())
+            except Exception as exc:
+                logging.getLogger('telegram_music').info('Bandwidth metrics unavailable (%s)',type(exc).__name__)
+                return
     def reset_notice(self,now=None):
         # Calendar arithmetic only: no requests, task, timer or file writes.
         now=(now or datetime.now(timezone.utc)).astimezone(timezone.utc)

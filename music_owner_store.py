@@ -100,9 +100,22 @@ def parse_state(raw):
     cards=d.get('cards',{})
     if not isinstance(cards,dict) or len(cards)>3:raise ValueError('Invalid cards')
     for key,value in cards.items():validate_card(key,value)
+    export_users=d.get('effect_export_users',[])
+    if (not isinstance(export_users,list) or len(export_users)>100
+            or any(type(uid) is not int or not 0<uid<2**63 for uid in export_users)
+            or len(set(export_users))!=len(export_users)):
+        raise ValueError('Invalid export permissions')
+    exports=d.get('effect_exports',{})
+    if not isinstance(exports,dict) or len(exports)>24:raise ValueError('Invalid export cache')
+    for key,row in exports.items():
+        if (not isinstance(key,str) or not re.fullmatch(r'[a-f0-9]{64}',key)
+                or not isinstance(row,dict) or not isinstance(row.get('file_id'),str)
+                or not 1<=len(row['file_id'])<=2000 or not isinstance(row.get('title'),str)
+                or len(row['title'])>120 or type(row.get('duration')) not in {int,float}
+                or not 0<row['duration']<=720):raise ValueError('Invalid export file')
     revision=d.get('revision',0)
     if type(revision) is not int or revision<0:raise ValueError('Invalid revision')
-    return {'v':1,'owner':owner,'texts':texts,'groups':groups,'voice':d.get('voice','male'),'revision':revision,'audio':audio,'audio_modes':modes,'broadcast':broadcast,'cards':cards,'default_photo':photo}
+    return {'v':1,'owner':owner,'texts':texts,'groups':groups,'voice':d.get('voice','male'),'revision':revision,'audio':audio,'audio_modes':modes,'broadcast':broadcast,'cards':cards,'default_photo':photo,'effect_export_users':export_users,'effect_exports':exports}
 
 
 class MusicOwnerStore:
@@ -195,6 +208,34 @@ class MusicOwnerStore:
             await self._persist(data)
             self.setup_code=''  # One-time claim: persisted owner identity is now authoritative.
             return True
+
+    def can_export(self,user):
+        return (self.ready and type(user) is int and bool(self.data.get('owner'))
+                and (self.authorized(user) or user in self.data.get('effect_export_users',[])))
+
+    async def set_export_user(self,owner,user,allowed):
+        if type(user) is not int or not 0<user<2**63:raise ValueError('မှန်ကန်တဲ့ Telegram User ID ထည့်ပါ။')
+        async with self.lock:
+            if not self.authorized(owner):raise PermissionError('Owner only')
+            data=copy.deepcopy(self.data)
+            users=set(data.get('effect_export_users',[]))
+            if user==owner:raise ValueError('Owner က အမြဲသုံးခွင့်ရှိတယ်။')
+            if allowed:users.add(user)
+            else:users.discard(user)
+            if len(users)>100:raise ValueError('User ID ၁၀၀ အထိပဲ ထည့်နိုင်တယ်။')
+            data['effect_export_users']=sorted(users)
+            await self._persist(data)
+
+    async def cache_export(self,key,row):
+        async with self.lock:
+            if not self.ready or not self.data.get('owner'):raise PermissionError('Owner settings unavailable')
+            data=copy.deepcopy(self.data)
+            cache=data.setdefault('effect_exports',{})
+            cache.pop(key,None)
+            if row is not None:
+                cache[key]=dict(row)
+                while len(cache)>24:cache.pop(next(iter(cache)))
+            await self._persist(data)
 
     async def set_text(self,user,key,text):
         text=validate_text(key,text)

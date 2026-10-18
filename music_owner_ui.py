@@ -27,6 +27,12 @@ class MusicOwnerUI:
 
     def menu(self,page='home'):
         def b(label,action):return B(label,callback_data='own:'+action)
+        if page=='exports':
+            users=self.store.data.get('effect_export_users',[])
+            text='Effect MP3 · 96 kbps\n\nOwner က အမြဲသုံးခွင့်ရှိတယ်။\nခွင့်ပြုထားသူ ID များ: '+str(len(users))
+            text+='\n'+('\n'.join(str(uid) for uid in users) or 'မထည့်ရသေးဘူး။')
+            text+='\n\nခွင့်ရှိသူက Music Card ခလုတ်နှိပ်ရင် ဖိုင်ကို အဲဒီ Group ထဲပို့မယ်။ Group ထဲရောက်တဲ့ဖိုင်ကို အားလုံး download လုပ်နိုင်တယ်။'
+            return text,K([[b('ID ထည့်မယ်','export-add'),b('ID ဖြုတ်မယ်','export-remove')],[b('‹ Owner Menu','home')]])
         if page=='cards':
             text='ကဒ်အပြင်အဆင် · Group အားလုံးအတွက်\n\nပြင်ချင်တာ ရွေးပါ။'
             return text,K([[b(label,'card:'+key)] for key,label in CARD_LABELS.items()]+[[b('Default ပုံ','photo')],[b('‹ Owner Menu','home')]])
@@ -65,6 +71,7 @@ class MusicOwnerUI:
                 [b('📝 ကြိုဆိုစာ အတို / အရှည်','texts')],
                 [b('🎙 Default အသံ','voices')],
                 [B('📣 Broadcast',callback_data='bc:home')],
+                [b('Effect MP3 ခွင့်ပြုသူများ','exports')],
                 [b('📊 Bot Status','status'),b('👥 Group စာရင်း','groups:0')]]))
 
     async def show(self,msg,page='home',edit=False):
@@ -165,8 +172,12 @@ class MusicOwnerUI:
             action=parts[0]
             key=parts[1] if len(parts)>1 else ''
             try:
-                if action in {'home','texts','voices','cards','photo'}:
+                if action in {'home','texts','voices','cards','photo','exports'}:
                     await self.show(cb.message,action,True)
+                elif action in {'export-add','export-remove'}:
+                    self.pending[user]=(action,time.monotonic()+300,cb.message)
+                    await cb.message.edit_text('Telegram User ID တစ်ခုကို နံပါတ်အဖြစ် ပို့ပါ။\n/cancel ဖြင့် ထွက်နိုင်တယ်။',
+                        reply_markup=K([[B('‹ ပြန်သွားမယ်',callback_data='own:exports')]]),parse_mode=ParseMode.DISABLED)
                 elif action=='photo-upload':
                     self.record_pending[user]=('card-photo',time.monotonic()+300,cb.message)
                     await cb.message.edit_text('Default ပုံကို Photo အဖြစ် ဒီ private chat ထဲ ပို့ပါ။ 5 MB အထိ။\n/cancel နှင့် ထွက်နိုင်တယ်။',
@@ -279,6 +290,18 @@ class MusicOwnerUI:
             if time.monotonic()>until:
                 self.pending.pop(user,None)
                 await msg.reply_text('Edit သက်တမ်းကုန်ပြီ။ /owner ပြန်ခေါ်ပါ။')
+                msg.stop_propagation();return
+            if key in {'export-add','export-remove'}:
+                self.busy=True
+                try:
+                    if not msg.text.strip().isascii() or not msg.text.strip().isdigit():
+                        raise ValueError('Telegram User ID ကို နံပါတ်အဖြစ်ပဲ ထည့်ပါ။')
+                    await self.store.set_export_user(user,int(msg.text.strip()),key=='export-add')
+                    self.pending.pop(user,None)
+                    await self.show(panel,'exports',True)
+                except ValueError as exc:await msg.reply_text(str(exc))
+                except Exception:await msg.reply_text('မသိမ်းရသေးဘူး။ /owner နှင့် ပြန်စမ်းပါ။')
+                finally:self.busy=False
                 msg.stop_propagation();return
             if key.startswith('card-'):
                 self.busy=True

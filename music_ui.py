@@ -86,7 +86,8 @@ def player_controls(chat_id: int, *, paused: bool = False, loop: bool = False,
             [button("🔊 Normalize " + ("ON" if normalize else "OFF"), "normalize"),
              button("🎚 Quality · " + quality.title(), "quality")],
             [button("🎛 Effects" + (" · " + EFFECT_LABELS.get(effect,effect.title()) if effect != "normal" else ""), "effects"),
-             button("🏆 Top Tracks", "top")]])
+             button("🏆 Top Tracks", "top")],
+            [button("Effect MP3 · 96k", "export")]])
     if menu != "main":
         rows.append([button("‹ Back", "back")])
     rows.append([InlineKeyboardButton("🎤 Lyrics", callback_data="lyrics:current")])

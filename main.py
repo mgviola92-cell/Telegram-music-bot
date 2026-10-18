@@ -46,6 +46,7 @@ from bot_source_probe import run_bot_source_probe
 from lybot_source import LyBotSource, BotSourceUnavailable, resolve_with_fallback, run_live_probe, run_candidate_probes, APPROVED_BOTS, search_text
 from voice_transport import clear_stale_voice, ensure_native_sender, AudioTransportUnavailable
 from source_race import ParallelSources
+from effect_exports import EffectExports
 from track_metadata import remember_metadata, lookup_metadata
 from queue_receipts import acknowledge_queued, schedule_receipts
 from song_recognition import SongRecognizer, recognition_media, send_recognized_audio, DeliveredAudioCache
@@ -888,6 +889,7 @@ async def main() -> None:
     welcome = WelcomeAudio(owner_settings,bot=bot)
     owner_ui = MusicOwnerUI(bot,owner_settings,welcome,players)
     owner_ui.register()
+    effect_exports = EffectExports(bot,owner_settings,players)
     calls.welcome_audio = welcome
     source_names = [name.strip() for name in os.getenv("MUSIC_BOT_SOURCES", "LyBot,Song_Vkm_bot,VoiceShazamBot").split(",")
                     if name.strip() in APPROVED_BOTS]
@@ -2522,7 +2524,7 @@ async def main() -> None:
                 log.exception("Could not %s chat %s", action, msg.chat.id)
                 await msg.reply_text("⚠️ VC connection ပြန်စစ်ပါ။")
 
-    @bot.on_callback_query(filters.regex(r"^mud:(qmanage|qdel[a-f0-9]{12}|pause|resume|skip|stop|loop|queue|normalize|quality|effects|top|back|topall|topgroup|qhigh|qmedium|qlow|fx[a-z]+):"))
+    @bot.on_callback_query(filters.regex(r"^mud:(export|qmanage|qdel[a-f0-9]{12}|pause|resume|skip|stop|loop|queue|normalize|quality|effects|top|back|topall|topgroup|qhigh|qmedium|qlow|fx[a-z]+):"))
     async def panel_callback(_: Client, cb: CallbackQuery) -> None:
         """One panel per chat; stale buttons cannot control future tracks."""
         try:
@@ -2537,6 +2539,9 @@ async def main() -> None:
         player = players[chat_id]
         if player.panel_id != cb.message.id or player.current is None:
             await cb.answer("ဒီ Player Card သက်တမ်းကုန်ပြီ။ /now သုံးပါ။", show_alert=True)
+            return
+        if action == "export":
+            await effect_exports.request(cb,player)
             return
         if action == "queue":
             await cb.answer(queue_popup(queue_track_title(player.current),
@@ -2854,6 +2859,7 @@ async def main() -> None:
 
     def protected_media_paths():
         paths = [p.temp_file for p in players.values()]
+        paths.extend(effect_exports.protected_paths())
         for player in players.values():
             prepared = player.prepared
             if prepared and prepared.task.done() and not prepared.task.cancelled():
@@ -2969,6 +2975,7 @@ async def main() -> None:
         await shutdown.wait()
     finally:
         ready = False
+        await effect_exports.close()
         for task in (welcome_warmup_task, radio_warmup_task, radio_probe_task, owner_probe_task, lyrics_probe_task, effects_probe_task):
             if task:
                 task.cancel()

@@ -7,7 +7,7 @@ import tempfile
 import time
 from pathlib import Path
 
-_OWNED_DIR = re.compile(r'^mudyar_(media|recognize|recognition_upload)_[A-Za-z0-9_-]+$')
+_OWNED_DIR = re.compile(r'^mudyar_(media|recognize|recognition_upload|export)_[A-Za-z0-9_-]+$')
 _OWNED_FILE = re.compile(r'^music_[a-f0-9]{32}\.(mp3|mp4)$')
 
 

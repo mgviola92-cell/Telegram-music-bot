@@ -1,4 +1,5 @@
 """Bounded audio-sample recognition via the existing third-party source."""
+from source_replies import ReplyInbox
 import asyncio
 import re
 import tempfile
@@ -122,6 +123,7 @@ class SongRecognizer:
             await asyncio.wait_for(source.lock.acquire(), 2)
         except TimeoutError:
             raise BotSourceUnavailable('Source busy') from None
+        inbox = None
         try:
             async with asyncio.timeout(25):
                 if source.peer is None:
@@ -133,11 +135,11 @@ class SongRecognizer:
                     await source.client.send_message(source.peer.id, '/start')
                     await asyncio.sleep(.5)
                     source.started = True
+                inbox = ReplyInbox(source.client, source.peer.id)
                 sent = await source.client.send_audio(source.peer.id, str(sample), disable_notification=True)
                 while True:
-                    messages = [m async for m in source.client.get_chat_history(source.peer.id, limit=15)
-                                if m.id > sent.id and not getattr(m, 'outgoing', False)]
-                    for message in reversed(messages):
+                    messages = await inbox.batch(sent.id)
+                    for message in messages:
                         reply_id = getattr(message, 'reply_to_message_id', None)
                         if reply_id and reply_id != sent.id:
                             continue
@@ -160,8 +162,9 @@ class SongRecognizer:
                         text = str(getattr(message, 'text', '') or '').casefold()
                         if any(s in text for s in ('not recognized', 'could not recognize', 'no matches', 'nothing found')):
                             raise BotSourceUnavailable('Song not recognized')
-                    await asyncio.sleep(.5)
         finally:
+            if inbox is not None:
+                inbox.close()
             source.lock.release()
 
 

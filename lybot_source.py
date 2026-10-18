@@ -9,6 +9,7 @@ from pathlib import Path
 
 from bot_source_probe import audio_media, select_song
 from song_cache import get_cached_song, save_cached_song
+from source_replies import ReplyInbox, reply_hub
 
 LOG = logging.getLogger('telegram_music')
 MAX_BYTES = 20 * 1024 * 1024
@@ -59,10 +60,17 @@ class AudioCandidate:
         remember_link(label,message_link(message))
 
 
+def search_text(value):
+    """Treat artist spellings such as TEAM143 and Team 143 consistently."""
+    import re
+    text = unicodedata.normalize("NFKC", str(value)).casefold()
+    return re.sub(r"(?<=[a-z])\s+(?=[0-9])", "", text)
+
+
 def matches_query(media, query):
     import re
     def tokens(value):
-        normalized = unicodedata.normalize("NFKC", str(value)).casefold()
+        normalized = search_text(value)
         words = "".join(c if c.isalnum() or unicodedata.category(c).startswith("M") else " " for c in normalized)
         return set(words.split())
     wanted = tokens(query)
@@ -75,6 +83,8 @@ class LyBotSource:
         if username not in APPROVED_BOTS:
             raise ValueError('Unapproved music bot')
         self.client, self.username, self.trace = client, username, trace
+        # Register update handlers before the assistant starts receiving replies.
+        reply_hub(client)
         self.lock = asyncio.Lock()
         self.peer = None
         self.cooldown_until = 0.
@@ -99,6 +109,7 @@ class LyBotSource:
         except TimeoutError:
             raise BotSourceUnavailable('Source is busy') from None
         callback = None
+        inbox = None
         seen = set()
         try:
             async with asyncio.timeout(18):
@@ -114,12 +125,12 @@ class LyBotSource:
                     await self.client.send_message(self.peer.id, '/start')
                     await asyncio.sleep(0.5)
                     self.started = True
+                inbox = ReplyInbox(self.client, self.peer.id)
                 sent = await self.client.send_message(self.peer.id, query, disable_web_page_preview=True)
                 selected_id, selected_label = None, ''
                 while True:
-                    messages = [m async for m in self.client.get_chat_history(self.peer.id, limit=15)
-                                if m.id > sent.id and not getattr(m, 'outgoing', False)]
-                    for message in reversed(messages):
+                    messages = await inbox.batch(sent.id)
+                    for message in messages:
                         media = audio_media(message)
                         if subscription_gate(message):
                             LOG.info("Music source @%s requires assistant subscriptions; skipping this source", self.username)
@@ -131,7 +142,7 @@ class LyBotSource:
                             if media:
                                 LOG.info('Music bot probe @%s audio metadata: title=%s artist=%s duration=%s', self.username, str(getattr(media, 'title', '') or '')[:100], str(getattr(media, 'performer', '') or '')[:80], getattr(media, 'duration', None))
                             LOG.info('Music bot probe @%s response: audio=%s text=%s buttons=%s', self.username, bool(media), safe_error(str(getattr(message, 'text', '') or getattr(message, 'caption', '') or ''))[:400], buttons)
-                        matched = (selected_id is not None and message.id > selected_id and matches_selection(media, selected_label)) if media else False
+                        matched = (selected_id is not None and message.id >= selected_id and matches_selection(media, selected_label)) if media else False
                         if media and (matched or (selected_id is None and matches_query(media, query))):
                             size = int(getattr(media, 'file_size', 0) or 0)
                             duration = float(getattr(media, 'duration', 0) or 0)
@@ -151,7 +162,6 @@ class LyBotSource:
                             if label:
                                 selected_id, selected_label = message.id, label
                                 callback = asyncio.create_task(select_song(self.client, message, label))
-                    await asyncio.sleep(.5)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -159,6 +169,8 @@ class LyBotSource:
             LOG.info('Music source @%s unavailable (%s)', self.username, type(exc).__name__)
             raise BotSourceUnavailable('Music bot did not return a matching track in time') from None
         finally:
+            if inbox is not None:
+                inbox.close()
             if callback is not None:
                 if not callback.done():
                     callback.cancel()

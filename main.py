@@ -43,7 +43,7 @@ from music_stats import record_play, stats_text, stats_popup
 from music_cleanup import housekeeping
 from feature_probe import run_feature_probe
 from bot_source_probe import run_bot_source_probe
-from lybot_source import LyBotSource, BotSourceUnavailable, resolve_with_fallback, run_live_probe, run_candidate_probes, APPROVED_BOTS
+from lybot_source import LyBotSource, BotSourceUnavailable, resolve_with_fallback, run_live_probe, run_candidate_probes, APPROVED_BOTS, search_text
 from voice_transport import clear_stale_voice, ensure_native_sender, AudioTransportUnavailable
 from source_race import ParallelSources
 from track_metadata import remember_metadata, lookup_metadata
@@ -474,9 +474,12 @@ def suitable_recording(title: str, query: str, artist: str = "") -> bool:
         return False
     # With an artist and title supplied, require most query keywords.
     # For short ambiguous queries such as "baby", no identity guarantee.
-    if len(terms) >= 2:
-        matched = terms & (title_words | artist_words)
-        return len(matched) >= max(2, len(terms) - 1)
+    match_terms = set(re.findall(r"[a-z0-9]+", search_text(query)))
+    if len(match_terms) >= 2:
+        actual = set(re.findall(r"[a-z0-9]+", search_text(title))) | set(
+            re.findall(r"[a-z0-9]+", search_text(artist)))
+        matched = match_terms & actual
+        return len(matched) >= max(2, len(match_terms) - 1)
     return True
 
 

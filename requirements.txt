@@ -4,3 +4,7 @@ aiohttp>=3.10,<4
 yt-dlp>=2025.1.15,<2027
 TgCrypto==1.2.5
 edge-tts>=7.2,<8
+
+# Loaded only for explicit YouTube extraction/probes; no background runtime.
+yt-dlp-ejs==0.8.0
+deno==2.9.7

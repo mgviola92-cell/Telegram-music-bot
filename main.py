@@ -2898,6 +2898,7 @@ async def main() -> None:
     owner_probe_task: asyncio.Task | None = None
     lyrics_probe_task: asyncio.Task | None = None
     effects_probe_task: asyncio.Task | None = None
+    cookie_probe_task: asyncio.Task | None = None
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, shutdown.set)
@@ -2910,6 +2911,8 @@ async def main() -> None:
         await owner_settings.load()
         await bot.start()
         ready = True
+        from youtube_cookie_probe import run_cookie_probe
+        cookie_probe_task=asyncio.create_task(run_cookie_probe(players))
         welcome_warmup_task = asyncio.create_task(welcome.warmup())
         radio_warmup_task = asyncio.create_task(radio_catalog.load_local())
         try:
@@ -2976,10 +2979,10 @@ async def main() -> None:
     finally:
         ready = False
         await effect_exports.close()
-        for task in (welcome_warmup_task, radio_warmup_task, radio_probe_task, owner_probe_task, lyrics_probe_task, effects_probe_task):
+        for task in (welcome_warmup_task, radio_warmup_task, radio_probe_task, owner_probe_task, lyrics_probe_task, effects_probe_task, cookie_probe_task):
             if task:
                 task.cancel()
-        await asyncio.gather(*(t for t in (welcome_warmup_task, radio_warmup_task, radio_probe_task, owner_probe_task, lyrics_probe_task, effects_probe_task) if t), return_exceptions=True)
+        await asyncio.gather(*(t for t in (welcome_warmup_task, radio_warmup_task, radio_probe_task, owner_probe_task, lyrics_probe_task, effects_probe_task, cookie_probe_task) if t), return_exceptions=True)
         if bandwidth_task:
             bandwidth_task.cancel()
             await asyncio.gather(bandwidth_task,return_exceptions=True)

@@ -6,10 +6,12 @@ import json
 import os
 import subprocess
 import time
+import tempfile
+from http.cookiejar import MozillaCookieJar
 from urllib.parse import urlsplit
 
 
-def probe(mode, url, cookiefile=None, system_ca=False):
+def probe(mode, url, cookiefile=None, system_ca=False, cookie_work_dir=None):
     from yt_dlp import YoutubeDL
     messages=[]
     class Logger:
@@ -25,9 +27,27 @@ def probe(mode, url, cookiefile=None, system_ca=False):
     if system_ca:options['compat_opts']={'no-certifi'}
     if mode=='pot':options['extractor_args']={'youtube':{'player_client':['mweb']},
         'youtubepot-bgutilhttp':{'base_url':['http://127.0.0.1:4416']}}
-    if mode=='cookies':
+    if mode in {'cookies','cookies-safari'}:
         if not cookiefile or not os.path.isfile(cookiefile):return {'mode':mode,'result':'not_tested_no_user_cookies'}
-        options['cookiefile']=cookiefile
+        # Never mutate the read-only Render Secret File or export cookies in logs.
+        jar=MozillaCookieJar(cookiefile)
+        try:jar.load(ignore_discard=True,ignore_expires=False)
+        except Exception:return {'mode':mode,'result':'invalid_cookie_file'}
+        scoped=[c for c in jar if c.domain.lstrip('.')=='youtube.com' or c.domain.endswith('.youtube.com')]
+        if not scoped:return {'mode':mode,'result':'no_unexpired_youtube_cookies'}
+        cookie_dir=tempfile.TemporaryDirectory(prefix='mudyar_cookie_probe_',dir=cookie_work_dir)
+        destination=os.path.join(cookie_dir.name,'cookies.txt')
+        safe_jar=MozillaCookieJar(destination)
+        for cookie in scoped:safe_jar.set_cookie(cookie)
+        safe_jar.save(ignore_discard=True)
+        os.chmod(destination,0o600)
+        options['cookiefile']=destination
+        if mode=='cookies-safari':options['extractor_args']={'youtube':{'player_client':['web_safari']}}
+    else:cookie_dir=None
+    try:
+        import deno
+        options['js_runtimes']={'deno':{'path':deno.find_deno_bin()}}
+    except ImportError:pass
     started=time.monotonic()
     row={'mode':mode,'result':'unavailable'}
     try:
@@ -46,7 +66,7 @@ def probe(mode, url, cookiefile=None, system_ca=False):
         ca=os.environ.get('SSL_CERT_FILE')
         if system_ca and ca:cmd+=['-ca_file',ca]
         if headers:cmd+=['-headers',headers]
-        cmd+=['-i',stream,'-t','2','-vn','-ac','1','-ar','16000','-f','s16le','pipe:1']
+        cmd+=['-i',stream,'-t','2','-vn','-threads','1','-filter_threads','1','-ac','1','-ar','16000','-f','s16le','pipe:1']
         audio=subprocess.run(cmd,capture_output=True,timeout=18)
         row['decoded_pcm_bytes']=len(audio.stdout)
         error=audio.stderr.decode(errors='replace').casefold()
@@ -61,14 +81,15 @@ def probe(mode, url, cookiefile=None, system_ca=False):
         row['error']=('verification_required' if 'confirm' in message and 'bot' in message else
                       'tls_certificate' if 'certificate' in message else
                       'unavailable_video' if 'video is unavailable' in message else type(exc).__name__)
+    if cookie_dir is not None:cookie_dir.cleanup()
     row.update(seconds=round(time.monotonic()-started,2),pot_requested='pot_requested' in messages,
                pot_warning='pot_warning' in messages)
     return row
 
 
 if __name__=='__main__':
-    p=argparse.ArgumentParser();p.add_argument('--mode',choices=['runtime','pot','cookies'],required=True)
+    p=argparse.ArgumentParser();p.add_argument('--mode',choices=['runtime','pot','cookies','cookies-safari'],required=True)
     p.add_argument('--url',default='https://www.youtube.com/watch?v=aqz-KE-bpKQ')
-    p.add_argument('--cookie-file');p.add_argument('--system-ca',action='store_true')
+    p.add_argument('--cookie-file');p.add_argument('--cookie-work-dir');p.add_argument('--system-ca',action='store_true')
     args=p.parse_args()
-    print(json.dumps(probe(args.mode,args.url,args.cookie_file,args.system_ca)),flush=True)
+    print(json.dumps(probe(args.mode,args.url,args.cookie_file,args.system_ca,args.cookie_work_dir)),flush=True)

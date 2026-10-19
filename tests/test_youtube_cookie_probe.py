@@ -101,6 +101,8 @@ class PotHelperSafetyTest(unittest.TestCase):
             env=helper_environment('/tmp/job')
         self.assertNotIn('BOT_TOKEN',env);self.assertNotIn('SESSION_STRING',env)
         self.assertNotIn('GOOGLE_PASSWORD',env);self.assertEqual(env['npm_config_cache'],'/tmp/job/npm-cache')
+        self.assertEqual(env['NODE_OPTIONS'],'--max-old-space-size=96')
+        self.assertEqual(env['npm_config_maxsockets'],'1')
 
     def test_helper_does_not_install_without_owner_cookie_file(self):
         from tools.youtube_pot_probe import run

@@ -12,7 +12,7 @@ import shutil
 
 LOG=logging.getLogger('telegram_music')
 # Short fixed window for the owner-authorized test; inert after expiry.
-PROBE_UNTIL = 1792439440
+PROBE_UNTIL = 1792439847
 
 
 def busy(players):
@@ -42,7 +42,13 @@ async def attempt(mode,players):
             if mode=='cookies-pot':
                 from runtime_status import memory_sample
                 used,limit=memory_sample()
-                if limit and used/limit>.85:return {'mode':mode,'result':'aborted_for_memory'}
+                if limit and used/limit>.85:
+                    phase=Path(folder.name)/'helper.phase'
+                    try:stage=phase.read_text().strip()
+                    except OSError:stage='starting'
+                    if stage not in {'install','helper_start','extract_audio'}:stage='starting'
+                    return {'mode':mode,'result':'aborted_for_memory','helper_phase':stage,
+                            'used_mb':round(used/1024**2,1),'limit_mb':round(limit/1024**2,1)}
             if time.monotonic()>=until:return {'mode':mode,'result':'probe_timeout'}
             await asyncio.wait({result},timeout=.25)
         out,_=await result
@@ -50,7 +56,7 @@ async def attempt(mode,players):
         except (ValueError,UnicodeError):return {'mode':mode,'result':'probe_process_failed'}
         # Fixed result allowlist; never forward arbitrary child output to logs.
         fields={'mode','result','error','media_error','metadata','audio_only',
-                'helper_ready','helper_setup_seconds','sabr_warning','format_id','audio_formats','challenge_warning','protocol','decoded_pcm_bytes','seconds','pot_requested','pot_warning'}
+                'helper_phase','used_mb','limit_mb','helper_ready','helper_setup_seconds','sabr_warning','format_id','audio_formats','challenge_warning','protocol','decoded_pcm_bytes','seconds','pot_requested','pot_warning'}
         return {k:v for k,v in row.items() if k in fields and isinstance(v,(str,int,float,bool))}
     finally:
         if proc.returncode is None:

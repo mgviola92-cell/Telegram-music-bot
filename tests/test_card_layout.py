@@ -62,7 +62,7 @@ class CardLayoutTest(unittest.IsolatedAsyncioTestCase):
         await ns['announce_now_playing'](1,player,song,progress)
         kw=bot.send_photo.call_args.kwargs
         self.assertEqual(kw['reply_to_message_id'],17)
-        self.assertIn('Requested by : Sam',kw['caption'])
+        self.assertIn('𝐑𝐞𝐪𝐮𝐞𝐬𝐭𝐞𝐝 𝐛𝐲 : Sam',kw['caption'])
         self.assertIn('02:48',kw['caption'])
         buttons=[b.callback_data for row in kw['reply_markup'].inline_keyboard for b in row]
         for action in ['pause','skip','stop','loop','queue','effects','quality','normalize','top']:

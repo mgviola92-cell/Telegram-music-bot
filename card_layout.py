@@ -34,6 +34,15 @@ def mention(name,user_id=None):
     return f'<a href="tg://user?id={user_id}">{label}</a>' if type(user_id) is int and user_id>0 else label
 
 
+def styled_label(text):
+    """Style fixed English headings, leaving song values and names unchanged."""
+    return ''.join(chr(0x1D400+ord(c)-65) if 'A'<=c<='Z' else
+                   chr(0x1D41A+ord(c)-97) if 'a'<=c<='z' else c for c in text)
+
+def style_literal(text):
+    return re.sub(r'(?m)(?<=▸ )(?:Title|Duration|Requested [Bb]y)(?=\s*:)',
+                  lambda match: styled_label(match.group()), text)
+
 def render(key, *, html_mode=False, requester_id=None, **values):
     settings=_getter() or {}
     context={field:'—' for field in FIELDS}
@@ -52,7 +61,7 @@ def render(key, *, html_mode=False, requester_id=None, **values):
         remaining-=len(value.encode('utf-16-le'))//2
         return value
     for literal,field,_,_ in string.Formatter().parse(template):
-        result.append(escape(clip(literal)))
+        result.append(escape(clip(style_literal(literal))))
         if field is not None:
             value=clip(context[field])
             if field=='requester':result.append(mention(value,requester_id))
@@ -60,6 +69,8 @@ def render(key, *, html_mode=False, requester_id=None, **values):
                 from song_links import link_for,safe_link
                 url=link_for(values.get('title',''))
                 result.append('<a href="'+escape(url,quote=True)+'">'+escape(value)+'</a>' if safe_link(url) else escape(value))
-            elif field in {'brand','status'}:result.append('<b>'+escape(value)+'</b>')
+            elif field in {'brand','status'}:
+                if field=='status' and value in {'Started Streaming','Paused'}:value=styled_label(value)
+                result.append('<b>'+escape(value)+'</b>')
             else:result.append(escape(value))
     return ''.join(result)

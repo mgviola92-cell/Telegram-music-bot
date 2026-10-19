@@ -12,7 +12,7 @@ import shutil
 
 LOG=logging.getLogger('telegram_music')
 # Short fixed window for the owner-authorized test; inert after expiry.
-PROBE_UNTIL = 1792438816
+PROBE_UNTIL = 1792439440
 
 
 def busy(players):
@@ -21,7 +21,7 @@ def busy(players):
 
 
 async def attempt(mode,players):
-    script=Path(__file__).parent/'tools'/'youtube_direct_probe.py'
+    script=Path(__file__).parent/'tools'/('youtube_pot_probe.py' if mode=='cookies-pot' else 'youtube_direct_probe.py')
     folder=tempfile.TemporaryDirectory(prefix='mudyar_cookie_probejob_')
     command=[sys.executable,str(script),'--mode',mode,'--cookie-file','/etc/secrets/cookies.txt',
              '--cookie-work-dir',folder.name]
@@ -36,9 +36,13 @@ async def attempt(mode,players):
         folder.cleanup();raise
     result=asyncio.create_task(proc.communicate())
     try:
-        until=time.monotonic()+65
+        until=time.monotonic()+(170 if mode=='cookies-pot' else 65)
         while not result.done():
             if busy(players):return {'mode':mode,'result':'aborted_for_playback'}
+            if mode=='cookies-pot':
+                from runtime_status import memory_sample
+                used,limit=memory_sample()
+                if limit and used/limit>.85:return {'mode':mode,'result':'aborted_for_memory'}
             if time.monotonic()>=until:return {'mode':mode,'result':'probe_timeout'}
             await asyncio.wait({result},timeout=.25)
         out,_=await result
@@ -46,7 +50,7 @@ async def attempt(mode,players):
         except (ValueError,UnicodeError):return {'mode':mode,'result':'probe_process_failed'}
         # Fixed result allowlist; never forward arbitrary child output to logs.
         fields={'mode','result','error','media_error','metadata','audio_only',
-                'sabr_warning','format_id','audio_formats','challenge_warning','protocol','decoded_pcm_bytes','seconds','pot_requested','pot_warning'}
+                'helper_ready','helper_setup_seconds','sabr_warning','format_id','audio_formats','challenge_warning','protocol','decoded_pcm_bytes','seconds','pot_requested','pot_warning'}
         return {k:v for k,v in row.items() if k in fields and isinstance(v,(str,int,float,bool))}
     finally:
         if proc.returncode is None:
@@ -64,7 +68,7 @@ async def run_cookie_probe(players,until=None):
     await asyncio.sleep(8)
     if busy(players):
         LOG.info('YouTube cookie probe: skipped_for_playback');return
-    for mode in ('cookies-samsung','cookies-safari'):
+    for mode in ('cookies-pot',):
         if time.time()>=until or busy(players):return
         row=await attempt(mode,players)
         LOG.info('YouTube cookie probe: %s',json.dumps(row,sort_keys=True))

@@ -29,7 +29,7 @@ def install_samsung_client():
         INNERTUBE_CLIENTS['tv_samsung']=config
 
 
-def probe(mode, url, cookiefile=None, system_ca=False, cookie_work_dir=None):
+def probe(mode, url, cookiefile=None, system_ca=False, cookie_work_dir=None, pot_base_url=None):
     from yt_dlp import YoutubeDL
     messages=[]
     class Logger:
@@ -47,7 +47,7 @@ def probe(mode, url, cookiefile=None, system_ca=False, cookie_work_dir=None):
     if system_ca:options['compat_opts']={'no-certifi'}
     if mode=='pot':options['extractor_args']={'youtube':{'player_client':['mweb']},
         'youtubepot-bgutilhttp':{'base_url':['http://127.0.0.1:4416']}}
-    if mode in {'cookies','cookies-safari','cookies-samsung'}:
+    if mode in {'cookies','cookies-safari','cookies-samsung','cookies-pot'}:
         if not cookiefile or not os.path.isfile(cookiefile):return {'mode':mode,'result':'not_tested_no_user_cookies'}
         # Never mutate the read-only Render Secret File or export cookies in logs.
         jar=MozillaCookieJar(cookiefile)
@@ -67,6 +67,13 @@ def probe(mode, url, cookiefile=None, system_ca=False, cookie_work_dir=None):
             client='tv_samsung' if mode=='cookies-samsung' else 'web_safari'
             options['extractor_args']={'youtube':{'player_client':[client]}}
             options['format']='bestaudio[protocol=https]/bestaudio'
+        if mode=='cookies-pot':
+            if not pot_base_url or not pot_base_url.startswith('http://127.0.0.1:'):
+                cookie_dir.cleanup();return {'mode':mode,'result':'helper_endpoint_missing'}
+            options['extractor_args']={'youtube':{'player_client':['web_creator']},
+                'youtubepot-bgutilhttp':{'base_url':[pot_base_url]}}
+            options['format']='bestaudio[protocol=https]/bestaudio'
+            options['verbose']=True
     else:cookie_dir=None
     try:
         import deno
@@ -116,7 +123,7 @@ def probe(mode, url, cookiefile=None, system_ca=False, cookie_work_dir=None):
 
 
 if __name__=='__main__':
-    p=argparse.ArgumentParser();p.add_argument('--mode',choices=['runtime','pot','cookies','cookies-safari','cookies-samsung'],required=True)
+    p=argparse.ArgumentParser();p.add_argument('--mode',choices=['runtime','pot','cookies','cookies-safari','cookies-samsung','cookies-pot'],required=True)
     p.add_argument('--url',default='https://www.youtube.com/watch?v=aqz-KE-bpKQ')
     p.add_argument('--cookie-file');p.add_argument('--cookie-work-dir');p.add_argument('--system-ca',action='store_true')
     args=p.parse_args()

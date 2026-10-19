@@ -4,6 +4,7 @@ from pathlib import Path
 import tempfile
 from types import SimpleNamespace as N
 import unittest
+import os
 from unittest.mock import patch,AsyncMock
 import youtube_cookie_probe as runner
 from tools.youtube_direct_probe import probe,install_samsung_client
@@ -91,3 +92,25 @@ class CookieProbeRunnerTest(unittest.IsolatedAsyncioTestCase):
         with patch('youtube_cookie_probe.asyncio.create_subprocess_exec',spawn):row=await runner.attempt('cookies',{})
         self.assertEqual(row['result'],'decoded_audio');self.assertNotIn('cookies',row)
         self.assertFalse(paths[0].exists())
+
+
+class PotHelperSafetyTest(unittest.TestCase):
+    def test_helper_environment_excludes_bot_and_account_credentials(self):
+        from tools.youtube_pot_probe import helper_environment
+        with patch.dict(os.environ,{'BOT_TOKEN':'private','SESSION_STRING':'private','GOOGLE_PASSWORD':'private'}):
+            env=helper_environment('/tmp/job')
+        self.assertNotIn('BOT_TOKEN',env);self.assertNotIn('SESSION_STRING',env)
+        self.assertNotIn('GOOGLE_PASSWORD',env);self.assertEqual(env['npm_config_cache'],'/tmp/job/npm-cache')
+
+    def test_helper_does_not_install_without_owner_cookie_file(self):
+        from tools.youtube_pot_probe import run
+        with patch('tools.youtube_pot_probe.Path.is_file',return_value=False),patch('tools.youtube_pot_probe.subprocess.run') as subprocess_run:
+            self.assertEqual(run('/missing','/tmp')['result'],'not_tested_no_user_cookies')
+            subprocess_run.assert_not_called()
+
+    def test_helper_skips_when_runtime_or_disk_is_unavailable(self):
+        from tools.youtube_pot_probe import run
+        with patch('tools.youtube_pot_probe.Path.is_file',return_value=True),patch('tools.youtube_pot_probe.shutil.which',return_value=None):
+            self.assertEqual(run('/cookie','/tmp')['result'],'helper_runtime_missing')
+        with patch('tools.youtube_pot_probe.Path.is_file',return_value=True),patch('tools.youtube_pot_probe.shutil.which',return_value='node'),patch('tools.youtube_pot_probe.shutil.disk_usage',return_value=N(free=1)):
+            self.assertEqual(run('/cookie','/tmp')['result'],'helper_storage_busy')

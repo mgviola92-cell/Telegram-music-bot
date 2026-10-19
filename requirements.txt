@@ -8,3 +8,4 @@ edge-tts>=7.2,<8
 # Loaded only for explicit YouTube extraction/probes; no background runtime.
 yt-dlp-ejs==0.8.0
 deno==2.9.7
+bgutil-ytdlp-pot-provider==2.0.2

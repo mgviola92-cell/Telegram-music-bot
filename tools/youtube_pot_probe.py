@@ -18,8 +18,11 @@ else:
 def helper_environment(folder):
     # The helper never needs bot credentials or account cookies in its env.
     names={'PATH','LD_LIBRARY_PATH','SSL_CERT_FILE','SSL_CERT_DIR','LANG','LC_ALL',
-           'NODE_EXTRA_CA_CERTS','REQUESTS_CA_BUNDLE','SYSTEMROOT'}
+           'NODE_EXTRA_CA_CERTS','REQUESTS_CA_BUNDLE','SYSTEMROOT',
+           'HTTP_PROXY','HTTPS_PROXY','NO_PROXY','http_proxy','https_proxy','no_proxy'}
     env={k:v for k,v in os.environ.items() if k in names}
+    if 'NODE_EXTRA_CA_CERTS' not in env and env.get('SSL_CERT_FILE'):
+        env['NODE_EXTRA_CA_CERTS']=env['SSL_CERT_FILE']
     env['npm_config_cache']=str(Path(folder)/'npm-cache')
     env['npm_config_update_notifier']='false'
     env['NODE_OPTIONS']='--max-old-space-size=96'
@@ -30,20 +33,15 @@ def helper_environment(folder):
 
 def run(cookie_file,work_dir):
     if not Path(cookie_file).is_file():return {'mode':'cookies-pot','result':'not_tested_no_user_cookies'}
-    node,npm=shutil.which('node'),shutil.which('npm')
-    if not node or not npm:return {'mode':'cookies-pot','result':'helper_runtime_missing'}
-    if shutil.disk_usage(work_dir).free<256*1024*1024:return {'mode':'cookies-pot','result':'helper_storage_busy'}
+    node=shutil.which('node')
+    if not node:return {'mode':'cookies-pot','result':'helper_runtime_missing'}
+    source=Path(__file__).parent.parent/'diagnostic_pot'
+    if not (source/'node_modules').is_dir():return {'mode':'cookies-pot','result':'helper_build_required'}
     phase=Path(work_dir)/'helper.phase'
     with tempfile.TemporaryDirectory(prefix='pot_',dir=work_dir) as folder:
-        source=Path(__file__).parent.parent/'diagnostic_pot'
-        target=Path(folder)/'server';shutil.copytree(source,target)
+        target=source
         env=helper_environment(folder)
-        started=time.monotonic()
-        phase.write_text('install')
-        setup=subprocess.run([npm,'ci','--omit=dev','--ignore-scripts','--no-audit','--no-fund'],
-            cwd=target,env=env,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=90)
-        if setup.returncode:return {'mode':'cookies-pot','result':'helper_install_failed'}
-        setup_seconds=round(time.monotonic()-started,2)
+        setup_seconds=0.0
         with socket.socket() as sock:
             sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]
         phase.write_text('helper_start')
@@ -64,7 +62,7 @@ def run(cookie_file,work_dir):
             phase.write_text('extract_audio')
             row=probe('cookies-pot','https://www.youtube.com/watch?v=aqz-KE-bpKQ',
                 cookie_file,cookie_work_dir=folder,pot_base_url=f'http://127.0.0.1:{port}')
-            row.update(helper_ready=True,helper_setup_seconds=setup_seconds)
+            row.update(helper_ready=True,helper_prebuilt=True,helper_setup_seconds=setup_seconds)
             return row
         finally:
             if helper.poll() is None:helper.terminate()

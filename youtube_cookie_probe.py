@@ -56,7 +56,7 @@ async def attempt(mode,players):
         except (ValueError,UnicodeError):return {'mode':mode,'result':'probe_process_failed'}
         # Fixed result allowlist; never forward arbitrary child output to logs.
         fields={'mode','result','error','media_error','metadata','audio_only',
-                'helper_phase','used_mb','limit_mb','helper_ready','helper_setup_seconds','sabr_warning','format_id','audio_formats','challenge_warning','protocol','decoded_pcm_bytes','seconds','pot_requested','pot_warning'}
+                'helper_phase','used_mb','limit_mb','helper_prebuilt','helper_ready','helper_setup_seconds','sabr_warning','format_id','audio_formats','challenge_warning','protocol','decoded_pcm_bytes','seconds','pot_requested','pot_warning'}
         return {k:v for k,v in row.items() if k in fields and isinstance(v,(str,int,float,bool))}
     finally:
         if proc.returncode is None:

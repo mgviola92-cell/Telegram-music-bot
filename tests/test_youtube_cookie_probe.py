@@ -110,9 +110,11 @@ class PotHelperSafetyTest(unittest.TestCase):
             self.assertEqual(run('/missing','/tmp')['result'],'not_tested_no_user_cookies')
             subprocess_run.assert_not_called()
 
-    def test_helper_skips_when_runtime_or_disk_is_unavailable(self):
+    def test_helper_skips_when_runtime_or_prebuilt_dependencies_are_unavailable(self):
         from tools.youtube_pot_probe import run
         with patch('tools.youtube_pot_probe.Path.is_file',return_value=True),patch('tools.youtube_pot_probe.shutil.which',return_value=None):
             self.assertEqual(run('/cookie','/tmp')['result'],'helper_runtime_missing')
-        with patch('tools.youtube_pot_probe.Path.is_file',return_value=True),patch('tools.youtube_pot_probe.shutil.which',return_value='node'),patch('tools.youtube_pot_probe.shutil.disk_usage',return_value=N(free=1)):
-            self.assertEqual(run('/cookie','/tmp')['result'],'helper_storage_busy')
+        with patch('tools.youtube_pot_probe.Path.is_file',return_value=True),patch('tools.youtube_pot_probe.shutil.which',return_value='node'),patch('tools.youtube_pot_probe.Path.is_dir',return_value=False),patch('tools.youtube_pot_probe.subprocess.run') as installer:
+            self.assertEqual(run('/cookie','/tmp')['result'],'helper_build_required')
+            installer.assert_not_called()
+

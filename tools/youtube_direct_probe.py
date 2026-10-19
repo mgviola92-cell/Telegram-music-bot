@@ -11,6 +11,24 @@ from http.cookiejar import MozillaCookieJar
 from urllib.parse import urlsplit
 
 
+def install_samsung_client():
+    """Upstream client config, isolated to this diagnostic child process.
+
+    Source: yt-dlp 897341241f2bfb2439fe0367f4c7c9ccd29a3828,
+    yt_dlp/extractor/youtube/_base.py (Unlicense). No production patch.
+    """
+    from copy import deepcopy
+    from yt_dlp.extractor.youtube._base import INNERTUBE_CLIENTS
+    if 'tv_samsung' not in INNERTUBE_CLIENTS:
+        config=deepcopy(INNERTUBE_CLIENTS['tv_downgraded'])
+        config['INNERTUBE_CONTEXT']['client'].update({
+            'clientName':'TVHTML5','clientVersion':'5.20260707',
+            'deviceMake':'Samsung','deviceModel':'UKS9800',
+            'userAgent':'Mozilla/5.0 (SMART-TV; Linux; Tizen 2.4.0) AppleWebKit/538.1 (KHTML, like Gecko) Version/2.4.0 TV Safari/538.1',
+            'osName':'Tizen','osVersion':'2.4.0'})
+        INNERTUBE_CLIENTS['tv_samsung']=config
+
+
 def probe(mode, url, cookiefile=None, system_ca=False, cookie_work_dir=None):
     from yt_dlp import YoutubeDL
     messages=[]
@@ -20,15 +38,16 @@ def probe(mode, url, cookiefile=None, system_ca=False, cookie_work_dir=None):
         def warning(self,msg):
             if 'PO Token' in msg:messages.append('pot_warning')
             if 'challenge' in msg.casefold():messages.append('challenge_warning')
+            if 'SABR' in msg:messages.append('sabr_warning')
         def error(self,msg):pass
-    options=dict(quiet=True,no_warnings=True,logger=Logger(),noplaylist=True,
+    options=dict(quiet=True,no_warnings=False,logger=Logger(),noplaylist=True,
                  skip_download=True,format='bestaudio/best',socket_timeout=8,
                  retries=0,extractor_retries=0,js_runtimes={'node':{}},
                  cachedir=False)
     if system_ca:options['compat_opts']={'no-certifi'}
     if mode=='pot':options['extractor_args']={'youtube':{'player_client':['mweb']},
         'youtubepot-bgutilhttp':{'base_url':['http://127.0.0.1:4416']}}
-    if mode in {'cookies','cookies-safari'}:
+    if mode in {'cookies','cookies-safari','cookies-samsung'}:
         if not cookiefile or not os.path.isfile(cookiefile):return {'mode':mode,'result':'not_tested_no_user_cookies'}
         # Never mutate the read-only Render Secret File or export cookies in logs.
         jar=MozillaCookieJar(cookiefile)
@@ -43,7 +62,11 @@ def probe(mode, url, cookiefile=None, system_ca=False, cookie_work_dir=None):
         safe_jar.save(ignore_discard=True)
         os.chmod(destination,0o600)
         options['cookiefile']=destination
-        if mode=='cookies-safari':options['extractor_args']={'youtube':{'player_client':['web_safari']}}
+        if mode in {'cookies-safari','cookies-samsung'}:
+            if mode=='cookies-samsung':install_samsung_client()
+            client='tv_samsung' if mode=='cookies-samsung' else 'web_safari'
+            options['extractor_args']={'youtube':{'player_client':[client]}}
+            options['format']='bestaudio[protocol=https]/bestaudio'
     else:cookie_dir=None
     try:
         import deno
@@ -59,7 +82,7 @@ def probe(mode, url, cookiefile=None, system_ca=False, cookie_work_dir=None):
         row.update(metadata=True,audio_only=info.get('vcodec')=='none',
                    format_id=info.get('format_id'),protocol=info.get('protocol'))
         row['audio_formats']=sum(f.get('vcodec')=='none' and f.get('acodec') not in (None,'none') for f in info.get('formats',[]))
-        if not row['audio_only'] and mode not in {'cookies','cookies-safari'}:raise ValueError('Selected format includes video')
+        if not row['audio_only'] and mode!='cookies':raise ValueError('Selected format includes video')
         headers=''.join(f'{key}: {value}\r\n' for key,value in info.get('http_headers',{}).items()
                         if '\r' not in str(value) and '\n' not in str(value))
         cmd=['ffmpeg','-nostdin','-v','error','-rw_timeout','5000000']
@@ -88,12 +111,12 @@ def probe(mode, url, cookiefile=None, system_ca=False, cookie_work_dir=None):
                       'unavailable_video' if 'video is unavailable' in message else type(exc).__name__)
     if cookie_dir is not None:cookie_dir.cleanup()
     row.update(seconds=round(time.monotonic()-started,2),pot_requested='pot_requested' in messages,
-               pot_warning='pot_warning' in messages,challenge_warning='challenge_warning' in messages)
+               pot_warning='pot_warning' in messages,challenge_warning='challenge_warning' in messages,sabr_warning='sabr_warning' in messages)
     return row
 
 
 if __name__=='__main__':
-    p=argparse.ArgumentParser();p.add_argument('--mode',choices=['runtime','pot','cookies','cookies-safari'],required=True)
+    p=argparse.ArgumentParser();p.add_argument('--mode',choices=['runtime','pot','cookies','cookies-safari','cookies-samsung'],required=True)
     p.add_argument('--url',default='https://www.youtube.com/watch?v=aqz-KE-bpKQ')
     p.add_argument('--cookie-file');p.add_argument('--cookie-work-dir');p.add_argument('--system-ca',action='store_true')
     args=p.parse_args()

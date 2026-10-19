@@ -12,7 +12,7 @@ import shutil
 
 LOG=logging.getLogger('telegram_music')
 # Short fixed window for the owner-authorized test; inert after expiry.
-PROBE_UNTIL = 1792437313
+PROBE_UNTIL = 1792438816
 
 
 def busy(players):
@@ -46,7 +46,7 @@ async def attempt(mode,players):
         except (ValueError,UnicodeError):return {'mode':mode,'result':'probe_process_failed'}
         # Fixed result allowlist; never forward arbitrary child output to logs.
         fields={'mode','result','error','media_error','metadata','audio_only',
-                'format_id','audio_formats','challenge_warning','protocol','decoded_pcm_bytes','seconds','pot_requested','pot_warning'}
+                'sabr_warning','format_id','audio_formats','challenge_warning','protocol','decoded_pcm_bytes','seconds','pot_requested','pot_warning'}
         return {k:v for k,v in row.items() if k in fields and isinstance(v,(str,int,float,bool))}
     finally:
         if proc.returncode is None:
@@ -64,9 +64,10 @@ async def run_cookie_probe(players,until=None):
     await asyncio.sleep(8)
     if busy(players):
         LOG.info('YouTube cookie probe: skipped_for_playback');return
-    for mode in ('cookies','cookies-safari'):
+    for mode in ('cookies-samsung','cookies-safari'):
         if time.time()>=until or busy(players):return
         row=await attempt(mode,players)
         LOG.info('YouTube cookie probe: %s',json.dumps(row,sort_keys=True))
-        if row.get('result') in {'decoded_audio','aborted_for_playback','invalid_cookie_file','no_unexpired_youtube_cookies'}:return
+        if row.get('result') in {'aborted_for_playback','invalid_cookie_file','no_unexpired_youtube_cookies'}:return
+        if row.get('result')=='decoded_audio' and row.get('audio_only'):return
         await asyncio.sleep(3)

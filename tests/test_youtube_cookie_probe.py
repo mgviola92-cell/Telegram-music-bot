@@ -6,10 +6,21 @@ from types import SimpleNamespace as N
 import unittest
 from unittest.mock import patch,AsyncMock
 import youtube_cookie_probe as runner
-from tools.youtube_direct_probe import probe
+from tools.youtube_direct_probe import probe,install_samsung_client
 
 
 class CookieProbeTest(unittest.TestCase):
+    def test_samsung_config_isolated_copy_preserves_existing_clients(self):
+        from copy import deepcopy
+        from yt_dlp.extractor.youtube._base import INNERTUBE_CLIENTS
+        original=deepcopy(INNERTUBE_CLIENTS)
+        try:
+            install_samsung_client()
+            self.assertEqual(INNERTUBE_CLIENTS['tv_samsung']['INNERTUBE_CONTEXT']['client']['deviceMake'],'Samsung')
+            self.assertEqual(INNERTUBE_CLIENTS['tv_downgraded'],original['tv_downgraded'])
+        finally:
+            INNERTUBE_CLIENTS.clear();INNERTUBE_CLIENTS.update(original)
+
     def test_missing_and_invalid_cookie_file_are_sanitized(self):
         self.assertEqual(probe('cookies','url')['result'],'not_tested_no_user_cookies')
         with tempfile.TemporaryDirectory() as folder:

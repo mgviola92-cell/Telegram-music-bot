@@ -70,7 +70,7 @@ def probe(mode, url, cookiefile=None, system_ca=False, cookie_work_dir=None, pot
         if mode=='cookies-pot':
             if not pot_base_url or not pot_base_url.startswith('http://127.0.0.1:'):
                 cookie_dir.cleanup();return {'mode':mode,'result':'helper_endpoint_missing'}
-            options['extractor_args']={'youtube':{'player_client':['web_creator']},
+            options['extractor_args']={'youtube':{'player_client':['mweb']},
                 'youtubepot-bgutilhttp':{'base_url':[pot_base_url]}}
             options['format']='bestaudio[protocol=https]/bestaudio'
             options['verbose']=True

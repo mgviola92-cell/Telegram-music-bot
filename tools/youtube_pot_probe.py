@@ -50,7 +50,7 @@ def run(cookie_file,work_dir):
         try:
             ready=False
             opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))
-            for _ in range(40):
+            for _ in range(200):
                 if helper.poll() is not None:break
                 try:
                     with opener.open(f'http://127.0.0.1:{port}/ping',timeout=.3) as response:
@@ -58,7 +58,8 @@ def run(cookie_file,work_dir):
                     if ready:break
                 except OSError:pass
                 time.sleep(.1)
-            if not ready:return {'mode':'cookies-pot','result':'helper_start_failed'}
+            if not ready:return {'mode':'cookies-pot','result':'helper_start_failed',
+                                 'helper_exit_code':helper.poll() if helper.poll() is not None else 999}
             phase.write_text('extract_audio')
             row=probe('cookies-pot','https://www.youtube.com/watch?v=aqz-KE-bpKQ',
                 cookie_file,cookie_work_dir=folder,pot_base_url=f'http://127.0.0.1:{port}')

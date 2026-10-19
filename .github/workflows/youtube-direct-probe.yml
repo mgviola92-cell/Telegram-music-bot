@@ -1,0 +1,49 @@
+name: Isolated YouTube Direct Audio Probe
+on:
+  push:
+    paths:
+      - '.github/workflows/youtube-direct-probe.yml'
+      - 'tools/youtube_direct_probe.py'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Install independent diagnostic dependencies
+        run: |
+          python -m pip install 'yt-dlp[default]==2026.08.19' 'bgutil-ytdlp-pot-provider==2.0.2'
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev
+      - name: Runtime-only extraction and two seconds of actual audio decoding
+        run: timeout 75 python tools/youtube_direct_probe.py --mode runtime
+      - name: Install version-matched local PO Token helper
+        run: |
+          git clone --depth 1 --branch 2.0.2 https://github.com/Brainicism/bgutil-ytdlp-pot-provider.git "$RUNNER_TEMP/pot-helper"
+          cd "$RUNNER_TEMP/pot-helper/server"
+          npm ci --no-audit --no-fund
+          npm exec tsc
+      - name: PO Token extraction and actual audio decoding
+        run: |
+          cd "$RUNNER_TEMP/pot-helper/server"
+          node build/main.js --host 127.0.0.1 > "$RUNNER_TEMP/pot-helper.log" 2>&1 &
+          helper_pid=$!
+          trap 'kill "$helper_pid" 2>/dev/null || true' EXIT
+          for attempt in 1 2 3 4 5; do
+            if curl --max-time 2 -fsS http://127.0.0.1:4416/ping > /dev/null; then break; fi
+            sleep 1
+          done
+          cd "$GITHUB_WORKSPACE"
+          timeout 75 python tools/youtube_direct_probe.py --mode pot
+      - name: Report cookies prerequisite without requesting account secrets
+        if: always()
+        run: python tools/youtube_direct_probe.py --mode cookies

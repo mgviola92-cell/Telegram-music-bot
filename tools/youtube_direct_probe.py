@@ -19,6 +19,7 @@ def probe(mode, url, cookiefile=None, system_ca=False, cookie_work_dir=None):
             if 'Generating a ' in msg and 'PO Token' in msg:messages.append('pot_requested')
         def warning(self,msg):
             if 'PO Token' in msg:messages.append('pot_warning')
+            if 'challenge' in msg.casefold():messages.append('challenge_warning')
         def error(self,msg):pass
     options=dict(quiet=True,no_warnings=True,logger=Logger(),noplaylist=True,
                  skip_download=True,format='bestaudio/best',socket_timeout=8,
@@ -57,7 +58,8 @@ def probe(mode, url, cookiefile=None, system_ca=False, cookie_work_dir=None):
         if not stream or urlsplit(stream).scheme!='https':raise ValueError('No HTTPS audio URL')
         row.update(metadata=True,audio_only=info.get('vcodec')=='none',
                    format_id=info.get('format_id'),protocol=info.get('protocol'))
-        if not row['audio_only']:raise ValueError('Selected format includes video')
+        row['audio_formats']=sum(f.get('vcodec')=='none' and f.get('acodec') not in (None,'none') for f in info.get('formats',[]))
+        if not row['audio_only'] and mode not in {'cookies','cookies-safari'}:raise ValueError('Selected format includes video')
         headers=''.join(f'{key}: {value}\r\n' for key,value in info.get('http_headers',{}).items()
                         if '\r' not in str(value) and '\n' not in str(value))
         cmd=['ffmpeg','-nostdin','-v','error','-rw_timeout','5000000']
@@ -79,11 +81,14 @@ def probe(mode, url, cookiefile=None, system_ca=False, cookie_work_dir=None):
         # Do not expose signed CDN URLs or cookie/session material in exceptions.
         message=str(exc).casefold()
         row['error']=('verification_required' if 'confirm' in message and 'bot' in message else
+                      'format_unavailable' if 'requested format is not available' in message else
+                      'http_403' if '403' in message else
+                      'cookies_rejected' if 'cookies' in message and ('invalid' in message or 'expired' in message) else
                       'tls_certificate' if 'certificate' in message else
                       'unavailable_video' if 'video is unavailable' in message else type(exc).__name__)
     if cookie_dir is not None:cookie_dir.cleanup()
     row.update(seconds=round(time.monotonic()-started,2),pot_requested='pot_requested' in messages,
-               pot_warning='pot_warning' in messages)
+               pot_warning='pot_warning' in messages,challenge_warning='challenge_warning' in messages)
     return row
 
 

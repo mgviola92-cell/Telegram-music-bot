@@ -22,6 +22,35 @@ class ProbeSafetyTest(unittest.TestCase):
 
 @unittest.skipUnless(shutil.which('ffmpeg'), 'FFmpeg is required')
 class ProbeDecodeTest(unittest.IsolatedAsyncioTestCase):
+    async def test_muxed_video_input_streams_only_audio_with_bounded_decoder(self):
+        with tempfile.TemporaryDirectory() as folder:
+            movie=str(Path(folder)/'sample.mp4')
+            subprocess.run(['ffmpeg','-v','error','-f','lavfi','-i',
+                'color=c=black:s=320x180:r=5:d=2','-f','lavfi','-i',
+                'sine=frequency=440:duration=2','-threads','1','-c:v','mpeg4',
+                '-c:a','aac','-movflags','+faststart','-shortest',movie],
+                check=True,capture_output=True,timeout=15)
+            app=web.Application();app.router.add_static('/',folder)
+            runner=web.AppRunner(app);await runner.setup()
+            site=web.TCPSite(runner,'127.0.0.1',0);await site.start()
+            port=site._server.sockets[0].getsockname()[1]
+            try:
+                with patch('network_audio.allowed_audio_cdn',return_value=True):
+                    stream=DirectAudioStream(f'http://127.0.0.1:{port}/sample.mp4')
+                stream._youtube_media=True
+                await stream.check_stream()
+                command=shlex.split(stream.microphone.path)
+                self.assertLess(command.index('-vn'),command.index('-i'))
+                self.assertEqual(command[command.index('-threads')+1],'1')
+                command[-1:-1]=['-t','0.25']
+                process=await asyncio.create_subprocess_exec(*command,
+                    stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.PIPE)
+                out,err=await asyncio.wait_for(process.communicate(),5)
+                self.assertEqual(process.returncode,0,err)
+                self.assertGreater(len(out),0)
+                self.assertIn('s16le',command)
+            finally:await runner.cleanup()
+
     async def test_decodes_hls_http_in_memory_with_bounded_output(self):
         with tempfile.TemporaryDirectory() as folder:
             playlist = str(Path(folder) / 'test.m3u8')

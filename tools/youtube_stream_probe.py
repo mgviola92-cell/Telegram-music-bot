@@ -15,13 +15,18 @@ if __name__ == '__main__':
     parser.add_argument('--mode');parser.add_argument('--cookie-file',required=True)
     parser.add_argument('--cookie-work-dir',required=True);args=parser.parse_args()
     row={'mode':'stream-trial','result':'unavailable'};started=time.monotonic()
+    phase=Path(args.cookie_work_dir)/'helper.phase'
     try:
         os.environ['NODE_OPTIONS']='--max-old-space-size=64'
+        os.environ['DENO_V8_FLAGS']='--max-old-space-size=64'
+        phase.write_text('extract_audio')
         url,_,_=resolve('https://www.youtube.com/watch?v=aqz-KE-bpKQ',
                         cookiefile=args.cookie_file,cookie_work_dir=args.cookie_work_dir,
                         duration_limit=660)  # Fixed 10:34 sample; decode only 2 seconds.
         headers=''.join(f'{k}: {v}\r\n' for k,v in stream_headers_for(url).items())
-        cmd=['ffmpeg','-nostdin','-v','error','-rw_timeout','5000000','-tls_verify','1']
+        phase.write_text('media_decode')
+        cmd=['ffmpeg','-nostdin','-v','error','-rw_timeout','5000000','-tls_verify','1',
+             '-threads','1','-vn','-analyzeduration','1000000','-probesize','262144']
         if headers:cmd+=['-headers',headers]
         cmd+=['-i',url,'-t','2','-vn','-threads','1','-ac','1','-ar','16000','-f','s16le','pipe:1']
         audio=subprocess.run(cmd,capture_output=True,timeout=18)

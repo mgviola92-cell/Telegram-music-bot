@@ -12,7 +12,7 @@ import shutil
 
 LOG=logging.getLogger('telegram_music')
 # Short fixed window for the owner-authorized test; inert after expiry.
-PROBE_UNTIL = 1792473555
+PROBE_UNTIL = 1792475351
 
 
 def busy(players):
@@ -21,9 +21,8 @@ def busy(players):
 
 
 async def attempt(mode,players):
-    name=('youtube_stream_probe.py' if mode=='stream-trial' else
-          'youtube_pot_probe.py' if mode=='cookies-pot' else 'youtube_direct_probe.py')
-    script=Path(__file__).parent/'tools'/name
+    if mode!='stream-trial':raise ValueError('Retired diagnostic mode')
+    script=Path(__file__).parent/'tools'/'youtube_stream_probe.py'
     folder=tempfile.TemporaryDirectory(prefix='mudyar_cookie_probejob_')
     command=[sys.executable,str(script),'--mode',mode,'--cookie-file','/etc/secrets/cookies.txt',
              '--cookie-work-dir',folder.name]
@@ -38,19 +37,25 @@ async def attempt(mode,players):
         folder.cleanup();raise
     result=asyncio.create_task(proc.communicate())
     try:
-        until=time.monotonic()+(170 if mode=='cookies-pot' else 65)
+        until=time.monotonic()+65
         while not result.done():
             if busy(players):return {'mode':mode,'result':'aborted_for_playback'}
-            if mode in {'cookies-pot','stream-trial'}:
+            if mode=='stream-trial':
                 from runtime_status import memory_sample
                 used,limit=memory_sample()
                 if limit and used/limit>.85:
                     phase=Path(folder.name)/'helper.phase'
                     try:stage=phase.read_text().strip()
                     except OSError:stage='starting'
-                    if stage not in {'install','helper_start','extract_audio'}:stage='starting'
+                    if stage not in {'starting','extract_audio','media_decode'}:stage='starting'
+                    try:
+                        stats=dict(line.split() for line in Path('/sys/fs/cgroup/memory.stat').read_text().splitlines())
+                        anon=int(stats.get('anon',0))/1024**2
+                        inactive=int(stats.get('inactive_file',0))/1024**2
+                    except (OSError,ValueError):anon=inactive=0
                     return {'mode':mode,'result':'aborted_for_memory','helper_phase':stage,
-                            'used_mb':round(used/1024**2,1),'limit_mb':round(limit/1024**2,1)}
+                            'used_mb':round(used/1024**2,1),'limit_mb':round(limit/1024**2,1),
+                            'anon_mb':round(anon,1),'inactive_file_mb':round(inactive,1)}
             if time.monotonic()>=until:return {'mode':mode,'result':'probe_timeout'}
             await asyncio.wait({result},timeout=.25)
         out,_=await result

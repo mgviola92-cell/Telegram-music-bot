@@ -31,8 +31,9 @@ class ResolveTest(unittest.TestCase):
                     assert 'unrelated-value' not in copies[-1].read_text()
                     assert copies[-1].stat().st_mode & 0o777 == 0o600
                     assert opts['skip_download']
-                    assert opts['js_runtimes'] == {}
-                    assert opts['extractor_args']['youtube']['player_client'] == ['web_embedded']
+                    assert 'deno' in opts['js_runtimes']
+                    assert opts['format'].startswith('18[')
+                    assert 'extractor_args' not in opts
                 def __enter__(self): return self
                 def __exit__(self, *args): pass
                 def extract_info(self, target, download):

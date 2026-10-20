@@ -68,14 +68,14 @@ def resolve(query, cancel=None, cookiefile='/etc/secrets/cookies.txt', check=Non
                     jar.set_cookie(c)
             if not len(jar): raise RuntimeError('No usable YouTube session')
             jar.save(ignore_discard=True); os.chmod(destination, 0o600)
-            opts = dict(cookiefile=destination, format='bestaudio[protocol=https]/18[protocol=https]',
+            opts = dict(cookiefile=destination, format='18[protocol=https]/best[height<=360][protocol=https]/bestaudio[protocol=https]',
                         skip_download=True, noplaylist=True, playlist_items='1',
                         quiet=True, logger=QuietLogger(), no_warnings=True,
                         socket_timeout=8, retries=0, extractor_retries=0, cachedir=False)
-            # Authenticated TV client: avoid launching a browser JS engine on
-            # the 512 MiB service. Do not fall back to multiple heavier clients.
-            opts['js_runtimes'] = {}
-            opts['extractor_args'] = {'youtube': {'player_client': ['web_embedded']}}
+            # Restore the default authenticated clients used by the successful
+            # format18 test. Audio-only is not a playback prerequisite.
+            import deno
+            opts['js_runtimes'] = {'deno': {'path': deno.find_deno_bin()}}
             target = query if query.startswith('https://') else 'ytsearch1:'+query
             with YoutubeDL(opts) as ydl:
                 info = ydl.extract_info(target, download=False)
@@ -134,6 +134,7 @@ async def resolve_bounded(query, check=None):
                 'NODE_EXTRA_CA_CERTS','REQUESTS_CA_BUNDLE','SYSTEMROOT',
                 'HTTP_PROXY','HTTPS_PROXY','NO_PROXY','http_proxy','https_proxy','no_proxy'}}
             env['NODE_OPTIONS']='--max-old-space-size=64'
+            env['DENO_V8_FLAGS']='--max-old-space-size=64'
             cmd=[sys.executable,str(Path(__file__).resolve()),'--resolve',query,'--work-dir',folder]
             if shutil.which('nice'):cmd=[shutil.which('nice'),'-n','15',*cmd]
             proc=await asyncio.create_subprocess_exec(*cmd,env=env,

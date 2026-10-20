@@ -15,6 +15,7 @@ import urllib.request
 import unicodedata
 from dataclasses import dataclass
 
+from aiohttp import ClientError
 from pytgcalls.types import MediaStream
 from pytgcalls.ffmpeg import build_command
 from audio_options import AudioSettings, apply_filters
@@ -27,7 +28,8 @@ _ID = re.compile(r'[A-Za-z0-9_-]{11}\Z')
 _CACHE = {}
 _ALIASES = {}
 _DIRECT_BACKOFF = 0.0
-STARTUP_PROBE_UNTIL = 1792501887  # One authorized, expiring comparison window.
+_INFLIGHT = {}
+STARTUP_PROBE_UNTIL = 1792504574  # One expiring metadata-only comparison.
 
 
 def enabled():
@@ -212,6 +214,27 @@ def _direct_search(query):
     return _search_track(json.loads(raw))
 
 
+async def _direct_search_async(query):
+    from youtube_metadata import HTTP
+    body = {'context': {'client': {'clientName': 'ANDROID', 'clientVersion': '20.10.38',
+            'androidSdkVersion': 30, 'hl': 'en', 'gl': 'US'}}, 'query': query}
+    return _search_track(await HTTP.request('search', body))
+
+
+async def _link_metadata_async(video_id):
+    from youtube_metadata import HTTP
+    body = {'context': {'client': {'clientName': 'ANDROID', 'clientVersion': '20.10.38',
+            'androidSdkVersion': 30, 'hl': 'en', 'gl': 'US'}}, 'videoId': video_id}
+    details = (await HTTP.request('player', body)).get('videoDetails') or {}
+    if details.get('isLiveContent'):
+        raise ValueError('Live YouTube is not supported')
+    title = str(details.get('title') or '').strip()
+    if not title:
+        raise LookupError('No public title')
+    return RelayTrack(relay_source(video_id), title[:140] + ' · YouTube',
+                      _duration(details.get('lengthSeconds')))
+
+
 def _flat_search(query):
     from yt_dlp import YoutubeDL
     with YoutubeDL(dict(quiet=True, no_warnings=True, extract_flat=True,
@@ -246,7 +269,7 @@ def _link_metadata(video_id):
                       _duration(details.get('lengthSeconds')))
 
 
-async def resolve_request(query):
+async def _resolve_request(query):
     global _DIRECT_BACKOFF
     if not enabled():
         raise ValueError('YouTube relay trial is disabled')
@@ -261,8 +284,8 @@ async def resolve_request(query):
         video_id = youtube_id(query)
         if video_id:
             try:
-                track = await asyncio.to_thread(_link_metadata, video_id)
-            except (LookupError, OSError, json.JSONDecodeError):
+                track = await _link_metadata_async(video_id)
+            except (LookupError, OSError, json.JSONDecodeError, asyncio.TimeoutError, ClientError):
                 title = await youtube_title(query)
                 track = RelayTrack(relay_source(video_id), title + ' · YouTube', None)
         else:
@@ -272,7 +295,7 @@ async def resolve_request(query):
             method = 'flat_fallback'
             track = None
             if os.getenv('YOUTUBE_RELAY_DIRECT_SEARCH', '1') == '1' and time.monotonic() >= _DIRECT_BACKOFF:
-                direct = asyncio.create_task(asyncio.to_thread(_direct_search, query))
+                direct = asyncio.create_task(_direct_search_async(query))
                 fallback = None
                 try:
                     done, _ = await asyncio.wait({direct}, timeout=.75)
@@ -311,6 +334,38 @@ async def resolve_request(query):
             LOG.info('YouTube metadata lookup method=%s seconds=%.2f', method, time.monotonic() - started)
     _remember(query, track)
     return track
+
+
+async def resolve_request(query):
+    """Share metadata work across search/play without sharing caller cancellation."""
+    query = str(query).strip()
+    if not enabled() or not query or len(query) > 2048:
+        raise ValueError('Invalid or disabled YouTube request')
+    cached = _cached(query)
+    if cached:
+        LOG.info('YouTube relay metadata cache hit')
+        return cached
+    key = (asyncio.get_running_loop(), youtube_id(query) or _query_key(query))
+    job = _INFLIGHT.get(key)
+    if job is None:
+        if len(_INFLIGHT) >= 32:
+            raise LookupError('YouTube metadata busy')
+        job = {'task': asyncio.create_task(_resolve_request(query)), 'users': 0}
+        _INFLIGHT[key] = job
+    else:
+        LOG.info('YouTube metadata joined existing lookup')
+    job['users'] += 1
+    try:
+        return await asyncio.shield(job['task'])
+    finally:
+        job['users'] -= 1
+        if not job['users']:
+            if _INFLIGHT.get(key) is job:
+                _INFLIGHT.pop(key, None)
+            task = job['task']
+            if not task.done():
+                task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
 
 
 def _busy(players):
@@ -353,24 +408,22 @@ async def _probe_profile(players, fast_mp3):
 
 
 async def startup_probe(players):
-    """Authorized idle-only comparison; never change the live FFmpeg profile."""
+    """One expiring idle-only metadata comparison; never open media or join VC."""
     if not enabled() or not 0 < STARTUP_PROBE_UNTIL - time.time() <= 1800:
         return
     await asyncio.sleep(8)
-    for method, lookup in [('direct_json', _direct_search), ('flat_search', _flat_search)]:
+    for method in ('urllib_baseline', 'pooled_first', 'pooled_reuse'):
         if _busy(players) or time.time() >= STARTUP_PROBE_UNTIL:
-            LOG.info('YouTube relay probe: skipped_for_playback')
+            LOG.info('YouTube metadata comparison: skipped_for_playback')
             return
         started = time.monotonic()
         try:
-            track = await asyncio.wait_for(asyncio.to_thread(lookup, 'Charlie Puth Attention'), 10)
-            LOG.info('YouTube metadata comparison: %s', json.dumps({'method': method, 'ok': True,
-                     'video_id': source_id(track.source), 'seconds': round(time.monotonic() - started, 2)}))
+            if method == 'urllib_baseline':
+                track = await asyncio.wait_for(asyncio.to_thread(_direct_search, 'Charlie Puth Attention'), 3)
+            else:
+                track = await _direct_search_async('Charlie Puth Attention')
+            LOG.info('YouTube metadata comparison method=%s ok=True seconds=%.3f video_id=%s',
+                     method, time.monotonic()-started, source_id(track.source))
         except Exception as exc:
-            LOG.info('YouTube metadata comparison: %s', json.dumps({'method': method, 'ok': False,
-                     'error_type': type(exc).__name__, 'seconds': round(time.monotonic() - started, 2)}))
-    for fast in (False, True, True, False):
-        if _busy(players) or time.time() >= STARTUP_PROBE_UNTIL:
-            return
-        if not await _probe_profile(players, fast):
-            return
+            LOG.info('YouTube metadata comparison method=%s ok=False seconds=%.3f error=%s',
+                     method, time.monotonic()-started, type(exc).__name__)

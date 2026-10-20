@@ -3075,6 +3075,8 @@ async def main() -> None:
                 player.cancel_download.set()
             discard_prepared(player)
             clean_temp(player.temp_file)
+        from youtube_metadata import close as close_youtube_metadata
+        await close_youtube_metadata()
         await private_songs.close()
         await owner_ui.close()
         await owner_settings.close()

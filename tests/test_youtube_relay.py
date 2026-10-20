@@ -78,17 +78,17 @@ class RelayIntegration(unittest.IsolatedAsyncioTestCase):
 
     async def test_name_and_link_reuse_same_metadata_with_unicode_space_alias(self):
         track = RelayTrack(relay_source('nfs8NYg7yQM'), 'Attention · YouTube', 231)
-        with patch('youtube_relay._direct_search', return_value=track) as direct, \
+        with patch('youtube_relay._direct_search_async', return_value=track) as direct, \
              patch('youtube_relay._flat_search') as flat, \
-             patch('youtube_relay._link_metadata') as link:
+             patch('youtube_relay._link_metadata_async') as link:
             self.assertEqual(await resolve_request('Attention'), track)
             self.assertEqual(await resolve_request('  ＡＴＴＥＮＴＩＯＮ  '), track)
             self.assertEqual(await resolve_request('https://youtu.be/nfs8NYg7yQM'), track)
-        direct.assert_called_once();flat.assert_not_called();link.assert_not_called()
+        direct.assert_awaited_once();flat.assert_not_called();link.assert_not_called()
 
     async def test_direct_failure_retains_flat_search_and_backs_off(self):
         track = RelayTrack(relay_source('nfs8NYg7yQM'), 'Attention · YouTube', 231)
-        with patch('youtube_relay._direct_search', side_effect=OSError('network unavailable')) as direct, \
+        with patch('youtube_relay._direct_search_async', side_effect=OSError('network unavailable')) as direct, \
              patch('youtube_relay._flat_search', return_value=track) as flat:
             self.assertEqual(await resolve_request('Attention'), track)
             self.assertEqual(await resolve_request('Charlie Puth Attention'), track)
@@ -102,7 +102,7 @@ class RelayIntegration(unittest.IsolatedAsyncioTestCase):
         player = N(current=object(), idle_mode=None, skip_pending=False, loading_task=None)
         with patch('youtube_relay.STARTUP_PROBE_UNTIL', time.time() + 300), \
              patch('youtube_relay.asyncio.sleep', new_callable=AsyncMock), \
-             patch('youtube_relay._direct_search') as direct, \
+             patch('youtube_relay._direct_search_async') as direct, \
              patch('youtube_relay._probe_profile', new_callable=AsyncMock) as decode:
             await startup_probe({1: player})
         direct.assert_not_called();decode.assert_not_awaited()
@@ -151,7 +151,7 @@ class RelayIntegration(unittest.IsolatedAsyncioTestCase):
     async def test_link_metadata_is_cached_and_duration_checked(self):
         _CACHE.clear()
         track = RelayTrack(relay_source('jNQXAC9IVRw'), 'Real title · YouTube', 19)
-        with patch('youtube_relay._link_metadata', return_value=track) as lookup:
+        with patch('youtube_relay._link_metadata_async', return_value=track) as lookup:
             self.assertEqual(await resolve_request('https://youtu.be/jNQXAC9IVRw'), track)
             self.assertEqual(await resolve_request('https://youtube.com/watch?v=jNQXAC9IVRw'), track)
             self.assertEqual(lookup.call_count, 1)

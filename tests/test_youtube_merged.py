@@ -10,10 +10,10 @@ class MergedYouTube(unittest.IsolatedAsyncioTestCase):
         import youtube_relay as relay
         relay._CACHE.clear(); relay._ALIASES.clear(); relay._DIRECT_BACKOFF=0
         track=RelayTrack(relay_source('nfs8NYg7yQM'),'Attention · YouTube',231)
-        def slow(_):
-            time.sleep(1.8)
+        async def slow(_):
+            await asyncio.sleep(1.8)
             raise TimeoutError()
-        with patch('youtube_relay._direct_search',side_effect=slow), patch('youtube_relay._flat_search',return_value=track):
+        with patch('youtube_relay._direct_search_async',side_effect=slow), patch('youtube_relay._flat_search',return_value=track):
             start=time.monotonic()
             self.assertEqual(await resolve_request('Attention'),track)
             self.assertLess(time.monotonic()-start,1.5)

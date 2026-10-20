@@ -35,3 +35,15 @@ class MergedYouTube(unittest.IsolatedAsyncioTestCase):
         with patch('music_search.soundcloud_choices',return_value=[]),patch('youtube_relay.resolve_request',return_value=track):
             rows=await collect_choices('Attention',youtube=True)
         self.assertEqual(rows[0].source,'https://www.youtube.com/watch?v=nfs8NYg7yQM')
+
+    async def test_failed_relay_is_excluded_from_fallback_race(self):
+        import main
+        from types import SimpleNamespace as N
+        from unittest.mock import AsyncMock, Mock
+        from test_music_extensions import closure
+        sources=N(race=AsyncMock(return_value=('local.mp3','Fallback',60)))
+        ns=dict(vars(main));ns.update(stream_only_enabled=lambda:False,
+            youtube_relay_enabled=lambda:True,lybot=sources,
+            PreparedAudio=Mock(),download_song=Mock())
+        await closure('resolve_for_queue',ns)(main.Track('Attention','Attention',youtube=True,skip_relay=True),True)
+        self.assertIsNone(sources.race.call_args.kwargs['extra'])

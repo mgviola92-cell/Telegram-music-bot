@@ -97,6 +97,7 @@ class Track:
     control_actor: str = ""
     control_actor_id: int | None = None
     relay_requested: bool = False
+    skip_relay: bool = False
 
 
 @dataclass
@@ -922,7 +923,7 @@ async def main() -> None:
             except Exception as exc:
                 log.info('YouTube relay lookup unavailable (%s); using existing music sources', type(exc).__name__)
                 query = await youtube_title(song.source) if is_youtube_url(song.source) else song.source
-                song = replace(song, source=query, title=query, relay_requested=False)
+                song = replace(song, source=query, title=query, relay_requested=False, skip_relay=True)
         if song.selected is not None:
             if strict:
                 raise StreamOnlyPlaybackError("Selected Telegram audio requires a file transfer")
@@ -943,7 +944,7 @@ async def main() -> None:
                 relay = await resolve_youtube_relay(song.source)
                 return relay.source, relay.title, relay.duration
             return await (lybot or ParallelSources([], clean_temp)).race(primary, song.source,
-                extra=youtube_candidate if youtube_relay_enabled() else None)
+                extra=youtube_candidate if youtube_relay_enabled() and not song.skip_relay else None)
         try:
             return await primary.consume()
         except (asyncio.CancelledError, InterruptedError):
@@ -1540,7 +1541,7 @@ async def main() -> None:
                             log.warning('YouTube relay VC audio unavailable (%s); trying existing sources', type(live_exc).__name__)
                             fallback_query = queue_track_title(song).rsplit(' · YouTube', 1)[0]
                             local_file, title, duration_seconds = await resolve_for_queue(
-                                Track(fallback_query, fallback_query, youtube=True), player.stream_enabled)
+                                Track(fallback_query, fallback_query, youtube=True, skip_relay=True), player.stream_enabled)
                             song.duration_seconds, song.title = duration_seconds, title
                             song.metadata_resolved = True
                             source = local_file

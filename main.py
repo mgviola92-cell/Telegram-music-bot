@@ -38,7 +38,8 @@ from playback_prepare import warm_voice
 from stream_probe import probe_audio_url
 from network_audio import DirectAudioStream
 from youtube_relay import (RelayAudioStream, resolve_request as resolve_youtube_relay,
-                           source_id as relay_source_id, enabled as youtube_relay_enabled)
+                           source_id as relay_source_id, enabled as youtube_relay_enabled,
+                           sender_startup_timeout)
 from audio_options import AudioSettings, ProcessedAudioStream, EFFECTS, EFFECT_LABELS
 from music_search import collect_choices, SearchSessions, youtube_title, related_query, choose_related, title_key, restricted_error, block_source, source_blocked
 from music_stats import record_play, stats_text, stats_popup
@@ -220,7 +221,7 @@ async def _play_with_reconnect(calls: PyTgCalls, chat_id: int, stream: MediaStre
         )
         log.info("VC stream setup chat %s after %.2fs", chat_id, time.monotonic()-started)
         started = time.monotonic()
-        await ensure_native_sender(calls, chat_id)
+        await ensure_native_sender(calls, chat_id, startup_timeout=sender_startup_timeout(stream))
         log.info("VC sender check chat %s after %.2fs", chat_id, time.monotonic()-started)
     except asyncio.CancelledError:
         raise
@@ -239,7 +240,7 @@ async def _play_with_reconnect(calls: PyTgCalls, chat_id: int, stream: MediaStre
             timeout=40,
         )
 
-        await ensure_native_sender(calls, chat_id)
+        await ensure_native_sender(calls, chat_id, startup_timeout=sender_startup_timeout(stream))
 
 class AudioFramesStalled(RuntimeError):
     """The decoder was accepted but its outgoing media clock never advanced."""

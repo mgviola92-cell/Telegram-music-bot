@@ -44,6 +44,21 @@ def relay_source(video_id):
     return _MARKER + video_id
 
 
+def sender_startup_timeout(stream):
+    """Cold POST audio may need >4s; keep ordinary streams' original budget.
+
+    WelcomeStream and CheckedAudioStream wrap the actual source. Inspect only
+    our fixed marker, with bounded traversal, never arbitrary request URLs.
+    """
+    for _ in range(4):
+        if source_id(getattr(stream, 'relay_source', None)):
+            return 16
+        stream = getattr(stream, 'original', None)
+        if stream is None:
+            break
+    return 4
+
+
 def relay_command(command, source):
     """Preserve native PCM/output filters; replace only the HTTP input."""
     video_id = source_id(source)

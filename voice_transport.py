@@ -31,13 +31,19 @@ async def clear_stale_voice(client, chat_id, own_id):
             return
 
 
-async def ensure_native_sender(calls, chat_id, *, startup_timeout=4):
+async def ensure_native_sender(calls, chat_id, *, startup_timeout=4, diagnostic=None):
     binding = getattr(calls, '_binding', None)
     if binding is None:
         return
     # Stream replacement preserves native capture state. A new song must resume it.
+    if diagnostic:
+        diagnostic.record('resume_start')
     await asyncio.wait_for(calls.resume(chat_id), timeout=startup_timeout)
+    if diagnostic:
+        diagnostic.record('resume_done')
     await asyncio.wait_for(calls.unmute(chat_id), timeout=startup_timeout)
+    if diagnostic:
+        diagnostic.record('unmute_done')
     mode = await asyncio.wait_for(binding.get_connection_mode(chat_id), timeout=4)
     state = await asyncio.wait_for(binding.get_state(chat_id), timeout=4)
     LOG.info('VC native audio transport chat %s: mode=%s capture_muted=%s',

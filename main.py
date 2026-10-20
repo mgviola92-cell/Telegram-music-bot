@@ -214,16 +214,29 @@ async def _play_with_reconnect(calls: PyTgCalls, chat_id: int, stream: MediaStre
 
     Do not create missing group calls; a group admin must start the VC.
     """
+    async def attempt():
+        from startup_audio_trace import wrap
+        observed, diagnostic = wrap(calls, chat_id, stream) if isinstance(calls, PyTgCalls) else (stream, None)
+        try:
+            started = time.monotonic()
+            await asyncio.wait_for(
+                calls.play(chat_id, observed, GroupCallConfig(auto_start=False)), timeout=40)
+            log.info("VC stream setup chat %s after %.2fs", chat_id, time.monotonic()-started)
+            if diagnostic:
+                diagnostic.record('native_stream_accepted')
+            started = time.monotonic()
+            options = {'startup_timeout': sender_startup_timeout(stream)}
+            if diagnostic:
+                options['diagnostic'] = diagnostic
+            await ensure_native_sender(calls, chat_id, **options)
+            log.info("VC sender check chat %s after %.2fs", chat_id, time.monotonic()-started)
+        except BaseException:
+            if diagnostic:
+                diagnostic.record('setup_failed')
+                diagnostic.close()
+            raise
     try:
-        started = time.monotonic()
-        await asyncio.wait_for(
-            calls.play(chat_id, stream, GroupCallConfig(auto_start=False)),
-            timeout=40,
-        )
-        log.info("VC stream setup chat %s after %.2fs", chat_id, time.monotonic()-started)
-        started = time.monotonic()
-        await ensure_native_sender(calls, chat_id, startup_timeout=sender_startup_timeout(stream))
-        log.info("VC sender check chat %s after %.2fs", chat_id, time.monotonic()-started)
+        await attempt()
     except asyncio.CancelledError:
         raise
     except Exception as exc:
@@ -236,12 +249,7 @@ async def _play_with_reconnect(calls: PyTgCalls, chat_id: int, stream: MediaStre
         except Exception as leave_exc:
             log.info("VC reconnection cleanup in %s: %s", chat_id, type(leave_exc).__name__)
         await asyncio.sleep(0.8)
-        await asyncio.wait_for(
-            calls.play(chat_id, stream, GroupCallConfig(auto_start=False)),
-            timeout=40,
-        )
-
-        await ensure_native_sender(calls, chat_id, startup_timeout=sender_startup_timeout(stream))
+        await attempt()
 
 class AudioFramesStalled(RuntimeError):
     """The decoder was accepted but its outgoing media clock never advanced."""
@@ -259,11 +267,19 @@ async def wait_for_audio_frames(calls: PyTgCalls, chat_id: int, *,
             if current > previous:
                 log.info("VC outgoing media clock advanced chat %s: %s -> %s",
                          chat_id, initial, current)
+                from startup_audio_trace import current as startup_trace
+                trace = startup_trace(calls, chat_id)
+                if trace:
+                    trace.record('native_clock_advanced')
                 return
             previous = current
     try:
         await asyncio.wait_for(poll(), timeout=timeout)
     except asyncio.TimeoutError:
+        from startup_audio_trace import current as startup_trace
+        trace = startup_trace(calls, chat_id)
+        if trace:
+            trace.record('native_clock_stalled')
         log.warning("VC decoder accepted but outgoing media stalled chat %s", chat_id)
         raise AudioFramesStalled("No outgoing audio frame progress after playback started") from None
 
@@ -3037,6 +3053,8 @@ async def main() -> None:
         if bandwidth_task:
             bandwidth_task.cancel()
             await asyncio.gather(bandwidth_task,return_exceptions=True)
+        from startup_audio_trace import close as close_startup_traces
+        await close_startup_traces(calls)
         await welcome.close()
         if feature_probe_task is not None:
             feature_probe_task.cancel()

@@ -72,20 +72,18 @@ def resolve(query, cancel=None, cookiefile='/etc/secrets/cookies.txt', check=Non
                         skip_download=True, noplaylist=True, playlist_items='1',
                         quiet=True, logger=QuietLogger(), no_warnings=True,
                         socket_timeout=8, retries=0, extractor_retries=0, cachedir=False)
-            if shutil.which('node'):
-                opts['js_runtimes'] = {'node': {'path': shutil.which('node')}}
-            else:
-                try:
-                    import deno
-                    opts['js_runtimes'] = {'deno': {'path': deno.find_deno_bin()}}
-                except ImportError: pass
+            # Authenticated TV client: avoid launching a browser JS engine on
+            # the 512 MiB service. Do not fall back to multiple heavier clients.
+            opts['js_runtimes'] = {}
+            opts['extractor_args'] = {'youtube': {'player_client': ['tv_downgraded']}}
             target = query if query.startswith('https://') else 'ytsearch1:'+query
             with YoutubeDL(opts) as ydl:
                 info = ydl.extract_info(target, download=False)
             if cancel is not None and cancel.is_set(): raise InterruptedError()
             if info and info.get('entries') is not None:
                 info = next((e for e in info['entries'] if e), None)
-            if not info or not media_url(info.get('url')) or info.get('is_live') or info.get('is_drm'):
+            if (not info or not media_url(info.get('url')) or info.get('is_live')
+                    or info.get('is_drm') or info.get('has_drm')):
                 raise RuntimeError('No usable public YouTube stream')
             if check and not query.startswith('https://') and not check(
                     str(info.get('title') or ''), query, str(info.get('uploader') or '')):

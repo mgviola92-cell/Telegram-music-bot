@@ -37,6 +37,8 @@ from prefetch import PreparedAudio, AsyncPreparedAudio
 from playback_prepare import warm_voice
 from stream_probe import probe_audio_url
 from network_audio import DirectAudioStream
+from youtube_relay import (RelayAudioStream, resolve_request as resolve_youtube_relay,
+                           source_id as relay_source_id, enabled as youtube_relay_enabled)
 from audio_options import AudioSettings, ProcessedAudioStream, EFFECTS, EFFECT_LABELS
 from music_search import collect_choices, SearchSessions, youtube_title, related_query, choose_related, title_key, restricted_error, block_source, source_blocked
 from music_stats import record_play, stats_text, stats_popup
@@ -93,6 +95,7 @@ class Track:
     requester_id: int | None = None
     control_actor: str = ""
     control_actor_id: int | None = None
+    relay_requested: bool = False
 
 
 @dataclass
@@ -178,6 +181,8 @@ def ended_early(elapsed: float, duration_seconds: float | None) -> bool:
 
 
 def audio_stream(source: str, quality=AudioQuality.HIGH, *, settings=None):
+    if relay_source_id(source):
+        return RelayAudioStream(source, settings)
     if settings is not None and settings != AudioSettings():
         if allowed_audio_cdn(source):
             return DirectAudioStream(source, settings)
@@ -906,6 +911,17 @@ async def main() -> None:
 
     async def resolve_for_queue(song, prefer_stream):
         strict = stream_only_enabled()
+        if song.relay_requested:
+            try:
+                relay = await resolve_youtube_relay(song.source)
+                log.info('YouTube relay metadata ready; direct POST audio selected')
+                return relay.source, relay.title, relay.duration
+            except (asyncio.CancelledError, InterruptedError):
+                raise
+            except Exception as exc:
+                log.info('YouTube relay lookup unavailable (%s); using existing music sources', type(exc).__name__)
+                query = await youtube_title(song.source) if is_youtube_url(song.source) else song.source
+                song = replace(song, source=query, title=query, relay_requested=False)
         if song.selected is not None:
             if strict:
                 raise StreamOnlyPlaybackError("Selected Telegram audio requires a file transfer")
@@ -984,7 +1000,14 @@ async def main() -> None:
         async def update():
             try:
                 async with metadata_slots:
-                    result = await lybot.describe(track.source, describe_primary)
+                    if track.relay_requested:
+                        try:
+                            relay = await resolve_youtube_relay(track.source)
+                            result = relay.title, relay.duration
+                        except Exception:
+                            result = None
+                    else:
+                        result = await lybot.describe(track.source, describe_primary)
                 if result and any(item is track for item in player.queue) and not track.metadata_resolved:
                     track.title, track.duration_seconds = result
                     track.metadata_resolved = True
@@ -1507,27 +1530,36 @@ async def main() -> None:
                     except Exception as live_exc:
                         if isinstance(live_exc, AudioTransportUnavailable):
                             raise
-                        if song.youtube and not song.video and stream_only_enabled():
+                        if relay_source_id(source):
+                            log.warning('YouTube relay VC audio unavailable (%s); trying existing sources', type(live_exc).__name__)
+                            fallback_query = queue_track_title(song).rsplit(' · YouTube', 1)[0]
+                            local_file, title, duration_seconds = await resolve_for_queue(
+                                Track(fallback_query, fallback_query, youtube=True), player.stream_enabled)
+                            song.duration_seconds, song.title = duration_seconds, title
+                            song.metadata_resolved = True
+                            source = local_file
+                        elif song.youtube and not song.video and stream_only_enabled():
                             log.warning("Stream-only playback failed (%s); download fallback disabled",
                                         type(live_exc).__name__)
                             raise StreamOnlyPlaybackError(
                                 "Direct stream produced no usable audio; download fallback disabled"
                             ) from live_exc
-                        if not (allowed_audio_cdn(source) and song.youtube):
+                        elif not (allowed_audio_cdn(source) and song.youtube):
                             raise
-                        log.warning(
-                            "Remote audio not playable in VC (%s); reverting to tested local media",
-                            type(live_exc).__name__,
-                        )
-                        local_file, title, duration_seconds = await asyncio.wait_for(
-                            asyncio.to_thread(
-                                download_song, song.source, song.video, cancel_signal, False
-                            ), timeout=100,
-                        )
-                        song.duration_seconds = duration_seconds
-                        song.title = title
-                        song.metadata_resolved = True
-                        source = local_file
+                        else:
+                            log.warning(
+                                "Remote audio not playable in VC (%s); reverting to tested local media",
+                                type(live_exc).__name__,
+                            )
+                            local_file, title, duration_seconds = await asyncio.wait_for(
+                                asyncio.to_thread(
+                                    download_song, song.source, song.video, cancel_signal, False
+                                ), timeout=100,
+                            )
+                            song.duration_seconds = duration_seconds
+                            song.title = title
+                            song.metadata_resolved = True
+                            source = local_file
                         stream = (audio_stream(source) if settings == AudioSettings() else
                                   audio_stream(source, settings=settings))
                         await play_with_reconnect(calls, chat_id, stream)
@@ -1646,7 +1678,7 @@ async def main() -> None:
         await home.show(msg,help_page=(msg.command or ['start'])[0] in {'help','cmd'})
 
     @bot.on_message(
-        filters.command(["play", "vplay", "ping", "stop", "queue", "radio", "idle", "stream"]) &
+        filters.command(["play", "ytplay", "vplay", "ping", "stop", "queue", "radio", "idle", "stream"]) &
         (filters.group | filters.private),
         group=-1,
     )
@@ -1665,7 +1697,7 @@ async def main() -> None:
         except Exception:
             log.exception("Ping reply failed in chat %s", msg.chat.id)
 
-    @bot.on_message(filters.command(["play", "p", "vplay"]) & filters.group)
+    @bot.on_message(filters.command(["play", "p", "ytplay", "vplay"]) & filters.group)
     async def play_command(_: Client, msg: Message) -> None:
         private_songs.preempt()
         video_mode = msg.command[0].lower() == "vplay"
@@ -1703,7 +1735,13 @@ async def main() -> None:
             if not query or len(query) > (2048 if query.startswith(("https://", "http://")) else 120):
                 await msg.reply_text("⚠️ သီချင်းနာမည် 1–120 စာလုံးအတွင်း ထည့်ပေးပါ။")
                 return
-            if query.startswith(("https://", "http://")):
+            if (not video_mode and youtube_relay_enabled()
+                    and (msg.command[0].lower() == 'ytplay' or is_youtube_url(query))):
+                track = Track(query, query, youtube=True, relay_requested=True)
+            elif msg.command[0].lower() == 'ytplay':
+                await msg.reply_text('YouTube စမ်းသပ် source ကို လောလောဆယ် ပိတ်ထားတယ်။ /play နဲ့ သုံးပါ။')
+                return
+            elif query.startswith(("https://", "http://")):
                 if is_youtube_url(query):
                     if not youtube_audio_enabled() and not video_mode:
                         link_progress = await msg.reply_text("🔎 Link ကနေ သီချင်းရှာနေတယ်…")
@@ -2743,7 +2781,7 @@ async def main() -> None:
                     if player.recovery_attempts < 1:
                         player.recovery_attempts += 1
                         source = player.temp_file or song.source
-                        if not source or (player.temp_file and not allowed_audio_cdn(source)
+                        if not source or (player.temp_file and not allowed_audio_cdn(source) and not relay_source_id(source)
                                           and not Path(source).is_file()):
                             log.warning("VC recovery file absent in chat %s", chat_id)
                         else:
@@ -2899,6 +2937,7 @@ async def main() -> None:
     lyrics_probe_task: asyncio.Task | None = None
     effects_probe_task: asyncio.Task | None = None
     cookie_probe_task: asyncio.Task | None = None
+    relay_probe_task: asyncio.Task | None = None
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, shutdown.set)
@@ -2913,6 +2952,8 @@ async def main() -> None:
         ready = True
         from youtube_cookie_probe import run_cookie_probe
         cookie_probe_task=asyncio.create_task(run_cookie_probe(players))
+        from youtube_relay import startup_probe as probe_youtube_relay
+        relay_probe_task = asyncio.create_task(probe_youtube_relay(players))
         welcome_warmup_task = asyncio.create_task(welcome.warmup())
         radio_warmup_task = asyncio.create_task(radio_catalog.load_local())
         try:
@@ -2979,10 +3020,10 @@ async def main() -> None:
     finally:
         ready = False
         await effect_exports.close()
-        for task in (welcome_warmup_task, radio_warmup_task, radio_probe_task, owner_probe_task, lyrics_probe_task, effects_probe_task, cookie_probe_task):
+        for task in (welcome_warmup_task, radio_warmup_task, radio_probe_task, owner_probe_task, lyrics_probe_task, effects_probe_task, cookie_probe_task, relay_probe_task):
             if task:
                 task.cancel()
-        await asyncio.gather(*(t for t in (welcome_warmup_task, radio_warmup_task, radio_probe_task, owner_probe_task, lyrics_probe_task, effects_probe_task, cookie_probe_task) if t), return_exceptions=True)
+        await asyncio.gather(*(t for t in (welcome_warmup_task, radio_warmup_task, radio_probe_task, owner_probe_task, lyrics_probe_task, effects_probe_task, cookie_probe_task, relay_probe_task) if t), return_exceptions=True)
         if bandwidth_task:
             bandwidth_task.cancel()
             await asyncio.gather(bandwidth_task,return_exceptions=True)

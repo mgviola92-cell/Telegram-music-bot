@@ -19,6 +19,7 @@ from audio_options import AudioSettings, EFFECT_LABELS
 from card_layout import DEFAULTS
 from music_ui import queue_track_title
 from player_visuals import allowed_audio_cdn, stream_headers_for
+from youtube_relay import source_id as relay_source_id, relay_command
 from runtime_status import cpu_sample, memory_sample
 
 LOG = logging.getLogger('telegram_music')
@@ -36,13 +37,14 @@ def export_key(song, settings):
 def export_command(source, output, settings, seconds):
     command = ['ffmpeg','-nostdin','-hide_banner','-v','error','-threads','1']
     if str(source).startswith(('https://','http://')):
-        if not allowed_audio_cdn(source):raise ValueError('Unsupported export source')
+        if not (allowed_audio_cdn(source) or relay_source_id(source)):raise ValueError('Unsupported export source')
         headers = ''.join(f'{k}: {v}\r\n' for k,v in stream_headers_for(source).items())
         command += ['-rw_timeout','5000000','-reconnect','1','-reconnect_streamed','1','-reconnect_delay_max','2']
         if headers:command += ['-headers',headers]
     else:
         command += ['-protocol_whitelist','file,pipe']
     command += ['-i',str(source),'-vn','-map','0:a:0','-filter_threads','1']
+    if relay_source_id(source):command = relay_command(command, source)
     chain = settings.filters()
     if chain:command += ['-af',chain]
     rate = {'high':48000,'medium':32000,'low':24000}[settings.quality]
@@ -133,7 +135,7 @@ class EffectExports:
                     raise ValueError('Temporary storage busy')
                 source = player.temp_file or song.source
                 if str(source).startswith(('https://','http://')):
-                    if not allowed_audio_cdn(source):raise ValueError('Unsupported source')
+                    if not (allowed_audio_cdn(source) or relay_source_id(source)):raise ValueError('Unsupported source')
                     job.source = str(source)
                 else:
                     path = Path(source)

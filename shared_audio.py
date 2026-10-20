@@ -12,6 +12,7 @@ class SharedAudio:
         selected=getattr(track,'selected',None)
         keys=identities(track)
         stable=next((k for k in keys if k[0]=='telegram'),None) or ('source',track.video,track.source.strip().casefold())
+        if getattr(track, 'relay_requested', False):stable=('youtube-relay',stable)
         key=repr((stable,bool(prefer_stream)))
         cached=get_cached_song('shared:'+key,track.video)
         if cached:return cached

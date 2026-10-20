@@ -1,6 +1,7 @@
 """One two-second read through the exact production cookie-only resolver."""
 import argparse
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -15,6 +16,7 @@ if __name__ == '__main__':
     parser.add_argument('--cookie-work-dir',required=True);args=parser.parse_args()
     row={'mode':'stream-trial','result':'unavailable'};started=time.monotonic()
     try:
+        os.environ['NODE_OPTIONS']='--max-old-space-size=64'
         url,_,_=resolve('https://www.youtube.com/watch?v=aqz-KE-bpKQ',
                         cookiefile=args.cookie_file,cookie_work_dir=args.cookie_work_dir,
                         duration_limit=660)  # Fixed 10:34 sample; decode only 2 seconds.

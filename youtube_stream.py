@@ -7,14 +7,20 @@ import tempfile
 import threading
 import time
 import math
+import json
+import signal
+import shutil
+import sys
 from urllib.parse import urlsplit
 
 _SLOTS = threading.BoundedSemaphore(1)
 _RATES = {}
+_PAGES = {}
 _LOCK = threading.RLock()
 _BYTES = 0.0
 _COOLDOWN_UNTIL = 0.0
 _UNKNOWN_SECONDS = 0.0
+_ASYNC_SLOT = asyncio.Semaphore(1)
 
 
 def enabled():
@@ -42,7 +48,6 @@ def resolve(query, cancel=None, cookiefile='/etc/secrets/cookies.txt', check=Non
     global _COOLDOWN_UNTIL
     from yt_dlp import YoutubeDL
     from player_visuals import save_stream_headers, register_youtube_stream
-    from song_links import remember_link
     if time.monotonic() < _COOLDOWN_UNTIL:
         raise RuntimeError('YouTube trial cooling down')
     from runtime_status import memory_sample
@@ -67,10 +72,13 @@ def resolve(query, cancel=None, cookiefile='/etc/secrets/cookies.txt', check=Non
                         skip_download=True, noplaylist=True, playlist_items='1',
                         quiet=True, logger=QuietLogger(), no_warnings=True,
                         socket_timeout=8, retries=0, extractor_retries=0, cachedir=False)
-            try:
-                import deno
-                opts['js_runtimes'] = {'deno': {'path': deno.find_deno_bin()}}
-            except ImportError: pass
+            if shutil.which('node'):
+                opts['js_runtimes'] = {'node': {'path': shutil.which('node')}}
+            else:
+                try:
+                    import deno
+                    opts['js_runtimes'] = {'deno': {'path': deno.find_deno_bin()}}
+                except ImportError: pass
             target = query if query.startswith('https://') else 'ytsearch1:'+query
             with YoutubeDL(opts) as ydl:
                 info = ydl.extract_info(target, download=False)
@@ -88,15 +96,16 @@ def resolve(query, cancel=None, cookiefile='/etc/secrets/cookies.txt', check=Non
             register_youtube_stream(url)
             save_stream_headers(url, info.get('http_headers') or {})
             title = str(info.get('title') or query)[:85]+' · YouTube (live)'
-            remember_link(title, info.get('webpage_url') or target)
             # tbr includes VIDEO for muxed format18. Never report audio bitrate as total.
             rate = info.get('tbr')
             if not rate and info.get('filesize'):
                 rate = float(info['filesize'])*8/seconds/1000
             with _LOCK:
-                if len(_RATES) >= 128: _RATES.pop(next(iter(_RATES)))
+                if len(_RATES) >= 128:
+                    oldest=next(iter(_RATES));_RATES.pop(oldest);_PAGES.pop(oldest,None)
                 rate = float(rate) if rate else 0
                 _RATES[url] = rate if math.isfinite(rate) and rate > 0 else None
+                _PAGES[url] = info.get('webpage_url') or target
             return url, title, seconds
     except InterruptedError: raise
     except Exception:
@@ -107,11 +116,66 @@ def resolve(query, cancel=None, cookiefile='/etc/secrets/cookies.txt', check=Non
         _SLOTS.release()
 
 
+async def resolve_bounded(query, check=None):
+    """Kill the whole extraction process group on timeout, memory pressure or cancellation."""
+    global _COOLDOWN_UNTIL
+    from runtime_status import memory_sample
+    from player_visuals import register_youtube_stream, save_stream_headers
+    from song_links import remember_link
+    if _ASYNC_SLOT.locked() or time.monotonic() < _COOLDOWN_UNTIL:
+        raise RuntimeError('YouTube trial deferred')
+    async with _ASYNC_SLOT:
+        with tempfile.TemporaryDirectory(prefix='mudyar_youtube_job_') as folder:
+            env={k:v for k,v in os.environ.items() if k in {
+                'PATH','LD_LIBRARY_PATH','SSL_CERT_FILE','SSL_CERT_DIR','LANG','LC_ALL',
+                'NODE_EXTRA_CA_CERTS','REQUESTS_CA_BUNDLE','SYSTEMROOT',
+                'HTTP_PROXY','HTTPS_PROXY','NO_PROXY','http_proxy','https_proxy','no_proxy'}}
+            env['NODE_OPTIONS']='--max-old-space-size=64'
+            cmd=[sys.executable,str(Path(__file__).resolve()),'--resolve',query,'--work-dir',folder]
+            if shutil.which('nice'):cmd=[shutil.which('nice'),'-n','15',*cmd]
+            proc=await asyncio.create_subprocess_exec(*cmd,env=env,
+                stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.DEVNULL,start_new_session=True)
+            output=asyncio.create_task(proc.communicate())
+            deadline=time.monotonic()+55
+            try:
+                while not output.done():
+                    used,limit=memory_sample()
+                    if limit and used/limit>.85:
+                        raise RuntimeError('YouTube extraction stopped for memory')
+                    if time.monotonic()>=deadline:
+                        raise RuntimeError('YouTube extraction timed out')
+                    await asyncio.wait({output},timeout=.25)
+                raw,_=await output
+                if proc.returncode or len(raw)>32768:raise RuntimeError('YouTube worker unavailable')
+                row=json.loads(raw)
+                url,title,seconds=row['source'],row['title'],float(row['seconds'])
+                if not media_url(url) or not 0<seconds<=600 or not isinstance(title,str):
+                    raise RuntimeError('Invalid YouTube stream result')
+                if check and not query.startswith('https://') and not check(
+                        title.rsplit(' · YouTube',1)[0],query,''):
+                    raise RuntimeError('YouTube result does not match request')
+                register_youtube_stream(url);save_stream_headers(url,row.get('headers') or {})
+                rate=float(row.get('rate') or 0)
+                with _LOCK:
+                    if len(_RATES)>=128:_RATES.pop(next(iter(_RATES)))
+                    _RATES[url]=rate if math.isfinite(rate) and rate>0 else None
+                remember_link(title,row.get('webpage') or query)
+                return url,title[:110],seconds
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                _COOLDOWN_UNTIL=time.monotonic()+120
+                raise RuntimeError('YouTube direct trial unavailable') from None
+            finally:
+                if proc.returncode is None:
+                    try:os.killpg(proc.pid,signal.SIGKILL)
+                    except ProcessLookupError:pass
+                await asyncio.gather(output,return_exceptions=True)
+
+
 async def race(existing, song, prefer_stream, cleanup, check=None):
     """Race free text against existing sources; direct YouTube links select YouTube."""
-    cancel = threading.Event()
-    yt = asyncio.create_task(asyncio.wait_for(
-        asyncio.to_thread(resolve, song.source, cancel, check=check), 50))
+    yt = asyncio.create_task(resolve_bounded(song.source, check=check))
     direct = song.source.startswith('https://')
     tasks = {yt} if direct else {yt, asyncio.create_task(existing(song, prefer_stream))}
     all_tasks = set(tasks)
@@ -137,7 +201,6 @@ async def race(existing, song, prefer_stream, cleanup, check=None):
                 return result
         raise RuntimeError('No playable music source')
     finally:
-        cancel.set()
         for task in all_tasks:
             if not task.done(): task.cancel()
         await asyncio.gather(*all_tasks, return_exceptions=True)
@@ -166,3 +229,17 @@ def usage_text():
         missing = '; bitrate မသိသည့်အပိုင်း မပါ' if _UNKNOWN_SECONDS else ''
         return (f'▸ YouTube အဝင်ဒေတာ ခန့်မှန်း : {_BYTES/1e6:.1f} MB (ဤ run)\n'
                 '  Render outbound quota မဟုတ်'+missing)
+
+
+if __name__ == '__main__':
+    import argparse
+    parser=argparse.ArgumentParser();parser.add_argument('--resolve',required=True)
+    parser.add_argument('--work-dir',required=True);args=parser.parse_args()
+    try:
+        source,title,seconds=resolve(args.resolve,cookie_work_dir=args.work_dir)
+        from player_visuals import stream_headers_for
+        print(json.dumps(dict(source=source,title=title,seconds=seconds,
+                              headers=stream_headers_for(source),rate=_RATES.get(source),
+                              webpage=_PAGES.get(source))))
+    except Exception:
+        print('{}');sys.exit(1)

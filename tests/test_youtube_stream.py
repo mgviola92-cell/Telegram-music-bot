@@ -66,24 +66,46 @@ class ResolveTest(unittest.TestCase):
 
 
 class RaceTest(unittest.IsolatedAsyncioTestCase):
+    async def test_memory_pressure_kills_worker_group_and_removes_private_cookie_folder(self):
+        old=yt._COOLDOWN_UNTIL;yt._COOLDOWN_UNTIL=0
+        gate=asyncio.Event();folders=[]
+        class Process:
+            pid=12345;returncode=None
+            async def communicate(self):
+                await gate.wait();self.returncode=-9;return b'',b''
+        async def spawn(*cmd,**kwargs):
+            folders.append(Path(cmd[cmd.index('--work-dir')+1]))
+            self.assertTrue(kwargs['start_new_session'])
+            self.assertNotIn('BOT_TOKEN',kwargs['env'])
+            self.assertEqual(kwargs['env']['NODE_OPTIONS'],'--max-old-space-size=64')
+            return Process()
+        try:
+            with patch('youtube_stream.asyncio.create_subprocess_exec',spawn),patch('runtime_status.memory_sample',return_value=(90,100)),patch('youtube_stream.os.killpg',side_effect=lambda *args:gate.set()) as kill:
+                with self.assertRaises(RuntimeError):await yt.resolve_bounded('Sample')
+            kill.assert_called_once()
+            self.assertFalse(folders[0].exists())
+        finally:yt._COOLDOWN_UNTIL=old
+
     async def test_existing_source_can_win_without_waiting_for_youtube(self):
         started=threading.Event(); cancelled=threading.Event()
-        def lookup(query, cancel, **kwargs):
-            started.set();cancel.wait(2);cancelled.set();raise InterruptedError()
+        async def lookup(query, **kwargs):
+            started.set()
+            try:await asyncio.Future()
+            finally:cancelled.set()
         async def existing(*args):
             await asyncio.to_thread(started.wait,1)
             return ('https://a.sndcdn.com/audio','Sample · SoundCloud',120)
-        with patch('youtube_stream.resolve',lookup):
+        with patch('youtube_stream.resolve_bounded',lookup):
             result=await asyncio.wait_for(yt.race(existing,N(source='Sample'),True,lambda _:None),1)
             self.assertIn('SoundCloud',result[1])
             self.assertTrue(await asyncio.to_thread(cancelled.wait,1))
 
     async def test_failed_youtube_keeps_existing_source_running(self):
-        def lookup(*args, **kwargs): raise RuntimeError('unavailable')
+        async def lookup(*args, **kwargs): raise RuntimeError('unavailable')
         async def existing(*args):
             await asyncio.sleep(.01)
             return ('local.mp3','Sample',120)
-        with patch('youtube_stream.resolve',lookup):
+        with patch('youtube_stream.resolve_bounded',lookup):
             result=await yt.race(existing,N(source='Sample'),True,lambda _:None)
         self.assertEqual(result[0],'local.mp3')
 

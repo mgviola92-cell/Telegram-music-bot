@@ -31,7 +31,7 @@ class ResolveTest(unittest.TestCase):
                     assert 'unrelated-value' not in copies[-1].read_text()
                     assert copies[-1].stat().st_mode & 0o777 == 0o600
                     assert opts['skip_download']
-                    assert 'deno' in opts['js_runtimes']
+                    assert 'quickjs' in opts['js_runtimes']
                     assert opts['format'] == 'bestaudio/best'
                     assert 'extractor_args' not in opts
                 def __enter__(self): return self
@@ -80,7 +80,7 @@ class RaceTest(unittest.IsolatedAsyncioTestCase):
             folders.append(Path(cmd[cmd.index('--work-dir')+1]))
             self.assertTrue(kwargs['start_new_session'])
             self.assertNotIn('BOT_TOKEN',kwargs['env'])
-            self.assertEqual(kwargs['env']['NODE_OPTIONS'],'--max-old-space-size=64')
+            self.assertEqual(kwargs['env']['TMPDIR'],str(folders[-1]))
             return Process()
         try:
             with patch('youtube_stream.asyncio.create_subprocess_exec',spawn),patch('youtube_resources.over_budget',return_value=True),patch('youtube_stream.os.killpg',side_effect=lambda *args:gate.set()) as kill:

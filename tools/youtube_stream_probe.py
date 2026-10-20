@@ -17,8 +17,9 @@ if __name__ == '__main__':
     row={'mode':'stream-trial','result':'unavailable'};started=time.monotonic()
     phase=Path(args.cookie_work_dir)/'helper.phase'
     try:
-        os.environ['NODE_OPTIONS']='--max-old-space-size=64'
-        os.environ['DENO_V8_FLAGS']='--max-old-space-size=128'
+        os.environ['TMPDIR']=args.cookie_work_dir
+        import tempfile
+        tempfile.tempdir=args.cookie_work_dir
         phase.write_text('extract_audio')
         url,_,_=resolve('https://www.youtube.com/watch?v=aqz-KE-bpKQ',
                         cookiefile=args.cookie_file,cookie_work_dir=args.cookie_work_dir,

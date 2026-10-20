@@ -82,8 +82,8 @@ def resolve(query, cancel=None, cookiefile='/etc/secrets/cookies.txt', check=Non
                         socket_timeout=8, retries=0, extractor_retries=0, cachedir=False)
             # Restore the default authenticated clients used by the successful
             # format18 test. Audio-only is not a playback prerequisite.
-            import deno
-            opts['js_runtimes'] = {'deno': {'path': deno.find_deno_bin()}}
+            runtime = Path(__file__).resolve().parent / 'runtime_bin' / 'qjs'
+            opts['js_runtimes'] = {'quickjs': {'path': str(runtime)}}
             target = query if query.startswith('https://') else 'ytsearch1:'+query
             with YoutubeDL(opts) as ydl:
                 info = ydl.extract_info(target, download=False)
@@ -143,8 +143,7 @@ async def resolve_bounded(query, check=None):
                 'PATH','LD_LIBRARY_PATH','SSL_CERT_FILE','SSL_CERT_DIR','LANG','LC_ALL',
                 'NODE_EXTRA_CA_CERTS','REQUESTS_CA_BUNDLE','SYSTEMROOT',
                 'HTTP_PROXY','HTTPS_PROXY','NO_PROXY','http_proxy','https_proxy','no_proxy'}}
-            env['NODE_OPTIONS']='--max-old-space-size=64'
-            env['DENO_V8_FLAGS']='--max-old-space-size=128'
+            env['TMPDIR']=folder
             cmd=[sys.executable,str(Path(__file__).resolve()),'--resolve',query,'--work-dir',folder]
             if shutil.which('nice'):cmd=[shutil.which('nice'),'-n','15',*cmd]
             proc=await asyncio.create_subprocess_exec(*cmd,env=env,

@@ -74,9 +74,10 @@ class CookieProbeRunnerTest(unittest.IsolatedAsyncioTestCase):
         paths=[]
         class Process:
             pid=1234;returncode=0
-            async def communicate(self):return json.dumps({'result':'decoded_audio','decoded_pcm_bytes':64000,'cookies':'secret'}).encode(),b''
+            async def communicate(self):return json.dumps({'result':'decoded_audio','decoded_pcm_bytes':64000,'extract_seconds':30.25,'decode_seconds':1.4,'cookies':'secret'}).encode(),b''
         async def spawn(*command,**kw):
             paths.append(Path(command[command.index('--cookie-work-dir')+1]));return Process()
         with patch('youtube_cookie_probe.asyncio.create_subprocess_exec',spawn):row=await runner.attempt('cookies',{})
         self.assertEqual(row['result'],'decoded_audio');self.assertNotIn('cookies',row)
+        self.assertEqual(row['extract_seconds'],30.25);self.assertEqual(row['decode_seconds'],1.4)
         self.assertFalse(paths[0].exists())

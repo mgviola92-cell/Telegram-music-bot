@@ -52,8 +52,10 @@ def probe(mode, url, cookiefile=None, system_ca=False, cookie_work_dir=None):
     started=time.monotonic()
     row={'mode':mode,'result':'unavailable'}
     try:
+        extract_started=time.monotonic()
         with YoutubeDL(options) as ydl:
             info=ydl.extract_info(url,download=False)
+        row['extract_seconds']=round(time.monotonic()-extract_started,2)
         stream=info.get('url')
         if not stream or urlsplit(stream).scheme!='https':raise ValueError('No HTTPS audio URL')
         row.update(metadata=True,audio_only=info.get('vcodec')=='none',
@@ -69,7 +71,9 @@ def probe(mode, url, cookiefile=None, system_ca=False, cookie_work_dir=None):
         if system_ca and ca:cmd+=['-ca_file',ca]
         if headers:cmd+=['-headers',headers]
         cmd+=['-i',stream,'-t','2','-vn','-threads','1','-filter_threads','1','-ac','1','-ar','16000','-f','s16le','pipe:1']
+        decode_started=time.monotonic()
         audio=subprocess.run(cmd,capture_output=True,timeout=18)
+        row['decode_seconds']=round(time.monotonic()-decode_started,2)
         row['decoded_pcm_bytes']=len(audio.stdout)
         error=audio.stderr.decode(errors='replace').casefold()
         row['media_error']=('http_403' if '403' in error else 'http_429' if '429' in error else

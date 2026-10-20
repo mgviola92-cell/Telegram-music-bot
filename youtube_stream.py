@@ -58,9 +58,8 @@ def resolve(query, cancel=None, cookiefile='/etc/secrets/cookies.txt', check=Non
     from player_visuals import save_stream_headers, register_youtube_stream
     if time.monotonic() < _COOLDOWN_UNTIL:
         raise RuntimeError('YouTube trial cooling down')
-    from runtime_status import memory_sample
-    used, limit = memory_sample()
-    if limit and used/limit > .75:
+    from youtube_resources import memory_snapshot, over_budget
+    if over_budget(memory_snapshot(),starting=True):
         raise RuntimeError('YouTube trial deferred for memory')
     if not _SLOTS.acquire(blocking=False):
         raise RuntimeError('YouTube trial busy')
@@ -133,7 +132,7 @@ def resolve(query, cancel=None, cookiefile='/etc/secrets/cookies.txt', check=Non
 async def resolve_bounded(query, check=None):
     """Kill the whole extraction process group on timeout, memory pressure or cancellation."""
     global _COOLDOWN_UNTIL
-    from runtime_status import memory_sample
+    from youtube_resources import memory_snapshot, over_budget
     from player_visuals import register_youtube_stream, save_stream_headers
     from song_links import remember_link
     if _ASYNC_SLOT.locked() or time.monotonic() < _COOLDOWN_UNTIL:
@@ -154,8 +153,7 @@ async def resolve_bounded(query, check=None):
             deadline=time.monotonic()+55
             try:
                 while not output.done():
-                    used,limit=memory_sample()
-                    if limit and used/limit>.85:
+                    if over_budget(memory_snapshot()):
                         raise RuntimeError('YouTube extraction stopped for memory')
                     if time.monotonic()>=deadline:
                         raise RuntimeError('YouTube extraction timed out')

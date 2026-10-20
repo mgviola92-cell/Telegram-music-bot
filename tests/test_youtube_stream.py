@@ -50,7 +50,7 @@ class ResolveTest(unittest.TestCase):
             self.assertFalse(allowed_audio_cdn('https://r1.googlevideo.com/not-extracted'))
 
     def test_memory_guard_skips_before_cookie_read_or_extraction(self):
-        with patch('runtime_status.memory_sample', return_value=(80,100)), patch('youtube_stream.MozillaCookieJar') as jar:
+        with patch('youtube_resources.over_budget', return_value=True), patch('youtube_stream.MozillaCookieJar') as jar:
             with self.assertRaises(RuntimeError): yt.resolve('Sample')
             jar.assert_not_called()
 
@@ -83,7 +83,7 @@ class RaceTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(kwargs['env']['NODE_OPTIONS'],'--max-old-space-size=64')
             return Process()
         try:
-            with patch('youtube_stream.asyncio.create_subprocess_exec',spawn),patch('runtime_status.memory_sample',return_value=(90,100)),patch('youtube_stream.os.killpg',side_effect=lambda *args:gate.set()) as kill:
+            with patch('youtube_stream.asyncio.create_subprocess_exec',spawn),patch('youtube_resources.over_budget',return_value=True),patch('youtube_stream.os.killpg',side_effect=lambda *args:gate.set()) as kill:
                 with self.assertRaises(RuntimeError):await yt.resolve_bounded('Sample')
             kill.assert_called_once()
             self.assertFalse(folders[0].exists())

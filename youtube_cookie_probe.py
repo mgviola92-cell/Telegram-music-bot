@@ -12,7 +12,7 @@ import shutil
 
 LOG=logging.getLogger('telegram_music')
 # Short fixed window for the owner-authorized test; inert after expiry.
-PROBE_UNTIL = 1792494038
+PROBE_UNTIL = 1792495240
 
 
 def busy(players):
@@ -20,11 +20,12 @@ def busy(players):
                (p.loading_task is not None and not p.loading_task.done()) for p in players.values())
 
 
-async def attempt(mode,players):
+async def attempt(mode,players,cache_dir=None):
     script=Path(__file__).parent/'tools'/'youtube_direct_probe.py'
     folder=tempfile.TemporaryDirectory(prefix='mudyar_cookie_probejob_')
     command=[sys.executable,str(script),'--mode',mode,'--cookie-file','/etc/secrets/cookies.txt',
-             '--cookie-work-dir',folder.name,'--primary-web-only']
+             '--cookie-work-dir',folder.name,'--primary-web-only','--js-variant','tv']
+    if cache_dir:command+=['--cache-dir',str(cache_dir)]
     nice=shutil.which('nice')
     if nice:command=[nice,'-n','15',*command]
     try:
@@ -46,7 +47,7 @@ async def attempt(mode,players):
         except (ValueError,UnicodeError):return {'mode':mode,'result':'probe_process_failed'}
         # Fixed result allowlist; never forward arbitrary child output to logs.
         fields={'mode','result','error','media_error','metadata','audio_only',
-                'primary_web_only','stage_marks','js_seconds','js_calls','extract_seconds','decode_seconds','format_id','audio_formats','challenge_warning','protocol','decoded_pcm_bytes','seconds','pot_requested','pot_warning'}
+                'js_variant','primary_web_only','stage_marks','js_seconds','js_calls','extract_seconds','decode_seconds','format_id','audio_formats','challenge_warning','protocol','decoded_pcm_bytes','seconds','pot_requested','pot_warning'}
         return {k:v for k,v in row.items() if k in fields and isinstance(v,(str,int,float,bool))}
     finally:
         if proc.returncode is None:
@@ -64,9 +65,17 @@ async def run_cookie_probe(players,until=None):
     await asyncio.sleep(8)
     if busy(players):
         LOG.info('YouTube cookie probe: skipped_for_playback');return
-    for mode in ('cookies',):
-        if time.time()>=until or busy(players):return
-        row=await attempt(mode,players)
-        LOG.info('YouTube cookie probe: %s',json.dumps(row,sort_keys=True))
-        if row.get('result') in {'decoded_audio','aborted_for_playback','invalid_cookie_file','no_unexpired_youtube_cookies'}:return
-        await asyncio.sleep(3)
+    # Two separate child processes: only the temporary metadata cache is shared.
+    # Never share cookies or a previously resolved stream URL between the runs.
+    with tempfile.TemporaryDirectory(prefix='mudyar_youtube_cachecheck_') as folder:
+        cache_dir=Path(folder)/'metadata'
+        for phase in ('cold','warm'):
+            if time.time()>=until or busy(players):return
+            row=await attempt('cookies',players,cache_dir=cache_dir)
+            row['cache_phase']=phase
+            LOG.info('YouTube cookie probe: %s',json.dumps(row,sort_keys=True))
+            if row.get('result')!='decoded_audio':return
+            files=[p for p in cache_dir.rglob('*') if p.is_file()]
+            if len(files)>64 or sum(p.stat().st_size for p in files)>32*1024**2:
+                LOG.info('YouTube cookie probe: cache_budget_exceeded');return
+            await asyncio.sleep(3)

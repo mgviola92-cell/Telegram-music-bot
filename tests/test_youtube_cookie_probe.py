@@ -120,3 +120,22 @@ class ExtractionProfileTest(unittest.TestCase):
                     DenoJCP._run_js_runtime(None,'unchanged input')
             self.assertIs(DenoJCP._run_js_runtime,original)
         self.assertEqual(metrics,{'js_seconds':2.,'js_calls':1})
+
+class CacheComparisonTest(unittest.IsolatedAsyncioTestCase):
+    async def test_successful_runs_share_only_private_temporary_metadata_cache(self):
+        paths=[]
+        async def attempt(mode,players,cache_dir=None):
+            paths.append(cache_dir)
+            cache_dir.mkdir(exist_ok=True)
+            (cache_dir/'player.json').write_text('{}')
+            return {'result':'decoded_audio'}
+        with patch('youtube_cookie_probe.Path.is_file',return_value=True),patch('youtube_cookie_probe.asyncio.sleep',AsyncMock()),patch('youtube_cookie_probe.attempt',attempt):
+            await runner.run_cookie_probe({},until=__import__('time').time()+300)
+        self.assertEqual(len(paths),2)
+        self.assertEqual(paths[0],paths[1])
+        self.assertFalse(paths[0].exists())
+
+    async def test_failed_cold_run_does_not_repeat_request(self):
+        with patch('youtube_cookie_probe.Path.is_file',return_value=True),patch('youtube_cookie_probe.asyncio.sleep',AsyncMock()),patch('youtube_cookie_probe.attempt',AsyncMock(return_value={'result':'unavailable'})) as attempt:
+            await runner.run_cookie_probe({},until=__import__('time').time()+300)
+        attempt.assert_awaited_once()

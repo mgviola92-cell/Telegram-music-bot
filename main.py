@@ -32,7 +32,6 @@ from music_owner_ui import MusicOwnerUI
 from private_songs import PrivateSongs
 from lyrics_service import LyricsUI
 from youtube_health import youtube_guard
-from youtube_stream import enabled as youtube_trial_enabled
 from archive_source import get_archive_audio
 from prefetch import PreparedAudio, AsyncPreparedAudio
 from playback_prepare import warm_voice
@@ -935,28 +934,6 @@ async def main() -> None:
             log.info("Selected SoundCloud audio unavailable (%s); matching selected title on bot sources", type(exc).__name__)
             return await lybot.resolve(queue_track_title(song))
 
-    from youtube_stream import race as youtube_race
-    existing_resolve_for_queue = resolve_for_queue
-    async def resolve_for_queue(song, prefer_stream):
-        if (prefer_stream and youtube_trial_enabled() and not song.video
-                and song.selected is None
-                and (not song.source.startswith(('http://','https://')) or is_youtube_url(song.source))):
-            try:
-                result = await youtube_race(existing_resolve_for_queue, song, prefer_stream,
-                                            clean_temp, check=suitable_recording)
-                if ' · YouTube (live)' in result[1]:
-                    log.info('YouTube direct HTTPS trial selected; no media file downloaded')
-                return result
-            except Exception:
-                if not is_youtube_url(song.source):
-                    raise
-                selected_title = await youtube_title(song.source)
-                if not selected_title:
-                    raise RuntimeError('YouTube stream unavailable') from None
-                replacement = Track(selected_title, selected_title, youtube=True)
-                return await existing_resolve_for_queue(replacement, prefer_stream)
-        return await existing_resolve_for_queue(song, prefer_stream)
-
     from shared_audio import SharedAudio
     shared_audio=SharedAudio(resolve_for_queue,clean_temp)
     resolve_for_queue=shared_audio.resolve
@@ -1542,18 +1519,11 @@ async def main() -> None:
                             "Remote audio not playable in VC (%s); reverting to tested local media",
                             type(live_exc).__name__,
                         )
-                        from youtube_stream import media_url as youtube_media_url
-                        if youtube_media_url(source):
-                            requested_title = title.rsplit(' · YouTube', 1)[0]
-                            replacement = Track(requested_title, requested_title, youtube=True)
-                            local_file, title, duration_seconds = await asyncio.wait_for(
-                                existing_resolve_for_queue(replacement, True), timeout=100)
-                        else:
-                            local_file, title, duration_seconds = await asyncio.wait_for(
-                                asyncio.to_thread(
-                                    download_song, song.source, song.video, cancel_signal, False
-                                ), timeout=100,
-                            )
+                        local_file, title, duration_seconds = await asyncio.wait_for(
+                            asyncio.to_thread(
+                                download_song, song.source, song.video, cancel_signal, False
+                            ), timeout=100,
+                        )
                         song.duration_seconds = duration_seconds
                         song.title = title
                         song.metadata_resolved = True
@@ -1735,9 +1705,7 @@ async def main() -> None:
                 return
             if query.startswith(("https://", "http://")):
                 if is_youtube_url(query):
-                    if not video_mode and youtube_trial_enabled():
-                        track = Track('YouTube audio', query, youtube=True)
-                    elif not youtube_audio_enabled() and not video_mode:
+                    if not youtube_audio_enabled() and not video_mode:
                         link_progress = await msg.reply_text("🔎 Link ကနေ သီချင်းရှာနေတယ်…")
                         try:
                             title = await youtube_title(query)
@@ -2920,7 +2888,6 @@ async def main() -> None:
     cleanup_task: asyncio.Task | None = None
     watchdog_task: asyncio.Task | None = None
     bandwidth_task = None
-    youtube_meter_task = None
     bandwidth_saver = None
     probe_task: asyncio.Task | None = None
     bot_probe_task: asyncio.Task | None = None
@@ -3008,14 +2975,9 @@ async def main() -> None:
         from bandwidth_saver import EmptyRoomSaver
         bandwidth_saver=EmptyRoomSaver(calls,players,identity.id,welcome,update_player_panel)
         bandwidth_task=asyncio.create_task(bandwidth_saver.run())
-        from youtube_stream import meter as youtube_meter
-        youtube_meter_task = asyncio.create_task(youtube_meter(players))
         await shutdown.wait()
     finally:
         ready = False
-        if youtube_meter_task:
-            youtube_meter_task.cancel()
-            await asyncio.gather(youtube_meter_task, return_exceptions=True)
         await effect_exports.close()
         for task in (welcome_warmup_task, radio_warmup_task, radio_probe_task, owner_probe_task, lyrics_probe_task, effects_probe_task, cookie_probe_task):
             if task:

@@ -12,7 +12,6 @@ PULSES = ("▁▃▆▄▂", "▂▅▇▃▁", "▃▆▂▇▄", "▁▄▆▃
 _LOCK = threading.RLock()
 _IMAGES = {}
 _STREAM_HEADERS = {}
-_YOUTUBE_STREAMS = {}
 _MAX_META = 48
 
 
@@ -33,7 +32,7 @@ def artwork_is_safe(url: str | None) -> bool:
 
 
 def allowed_audio_cdn(url: str | None) -> bool:
-    """Accept public source CDNs; Googlevideo is used by owner-cookie trial."""
+    """Accept only HTTPS SoundCloud-operated public transcoding hosts."""
     if not isinstance(url, str) or len(url) > 16384:
         return False
     try:
@@ -43,21 +42,10 @@ def allowed_audio_cdn(url: str | None) -> bool:
             parsed.scheme == "https" and parsed.port in (None, 443)
             and not parsed.username and not parsed.password
             and (host == "sndcdn.com" or host.endswith(".sndcdn.com")
-                 or host == "playback.media-streaming.soundcloud.cloud"
-                 or (host.endswith(".googlevideo.com") and url in _YOUTUBE_STREAMS))
+                 or host == "playback.media-streaming.soundcloud.cloud")
         )
     except ValueError:
         return False
-
-
-def register_youtube_stream(url):
-    from youtube_stream import media_url
-    if not media_url(url):
-        raise ValueError('Invalid YouTube media host')
-    with _LOCK:
-        if len(_YOUTUBE_STREAMS) >= 128:
-            _YOUTUBE_STREAMS.pop(next(iter(_YOUTUBE_STREAMS)))
-        _YOUTUBE_STREAMS[url] = True
 
 
 def save_artwork(query: str, thumbnail: str | None) -> None:

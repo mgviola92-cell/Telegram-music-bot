@@ -31,8 +31,6 @@ class DirectAudioStream(MediaStream):
         if not allowed_audio_cdn(url):
             raise ValueError('Unapproved audio host')
         self.settings = settings or AudioSettings()
-        from youtube_stream import media_url
-        self._youtube_media = media_url(url)
         self._direct_headers = stream_headers_for(url)
         super().__init__(url, self.settings.parameters, video_flags=MediaStream.Flags.IGNORE,
                          audio_flags=MediaStream.Flags.REQUIRED, headers=self._direct_headers)
@@ -43,10 +41,4 @@ class DirectAudioStream(MediaStream):
         if self.microphone is None:
             raise RuntimeError('Direct audio stream has no microphone source')
         command = hls_command(shlex.split(self.microphone.path), self._direct_headers)
-        if self._youtube_media:
-            # Input options: skip video decoding and bound probing/decoder RAM.
-            # This does not claim to remove video bytes from network traffic.
-            index=command.index('-i')
-            command[index:index]=['-threads','1','-vn','-analyzeduration','1000000',
-                                  '-probesize','262144']
         self.microphone.path = shlex.join(apply_filters(command, self.settings))

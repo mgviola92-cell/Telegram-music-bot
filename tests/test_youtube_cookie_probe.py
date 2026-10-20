@@ -92,6 +92,7 @@ class ExtractionProfileTest(unittest.TestCase):
                     self.logger=opts['logger']
                     assert opts['cachedir'] is False
                     assert opts['format']=='bestaudio/best'
+                    assert opts['extractor_args']=={'youtube':{'player_client':['web']}}
                 def __enter__(self):return self
                 def __exit__(self,*args):pass
                 def extract_info(self,url,download):
@@ -101,7 +102,7 @@ class ExtractionProfileTest(unittest.TestCase):
                     return dict(url='https://r1.googlevideo.com/private-signed-url',
                                 vcodec='avc1',format_id='18',protocol='https',formats=[])
             with patch('yt_dlp.YoutubeDL',Extractor),patch('tools.youtube_direct_probe.subprocess.run',return_value=N(returncode=0,stdout=b'0'*64000,stderr=b'')):
-                row=probe('cookies','https://www.youtube.com/watch?v=sample',str(cookie))
+                row=probe('cookies','https://www.youtube.com/watch?v=sample',str(cookie),primary_web_only=True)
             self.assertEqual(row['result'],'decoded_audio')
             self.assertTrue(row['stage_marks'].startswith('webpage@'))
             self.assertEqual(row['js_calls'],0)

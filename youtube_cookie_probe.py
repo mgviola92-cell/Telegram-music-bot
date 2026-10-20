@@ -12,7 +12,7 @@ import shutil
 
 LOG=logging.getLogger('telegram_music')
 # Short fixed window for the owner-authorized test; inert after expiry.
-PROBE_UNTIL = 1792493680
+PROBE_UNTIL = 1792494038
 
 
 def busy(players):
@@ -24,7 +24,7 @@ async def attempt(mode,players):
     script=Path(__file__).parent/'tools'/'youtube_direct_probe.py'
     folder=tempfile.TemporaryDirectory(prefix='mudyar_cookie_probejob_')
     command=[sys.executable,str(script),'--mode',mode,'--cookie-file','/etc/secrets/cookies.txt',
-             '--cookie-work-dir',folder.name]
+             '--cookie-work-dir',folder.name,'--primary-web-only']
     nice=shutil.which('nice')
     if nice:command=[nice,'-n','15',*command]
     try:
@@ -46,7 +46,7 @@ async def attempt(mode,players):
         except (ValueError,UnicodeError):return {'mode':mode,'result':'probe_process_failed'}
         # Fixed result allowlist; never forward arbitrary child output to logs.
         fields={'mode','result','error','media_error','metadata','audio_only',
-                'stage_marks','js_seconds','js_calls','extract_seconds','decode_seconds','format_id','audio_formats','challenge_warning','protocol','decoded_pcm_bytes','seconds','pot_requested','pot_warning'}
+                'primary_web_only','stage_marks','js_seconds','js_calls','extract_seconds','decode_seconds','format_id','audio_formats','challenge_warning','protocol','decoded_pcm_bytes','seconds','pot_requested','pot_warning'}
         return {k:v for k,v in row.items() if k in fields and isinstance(v,(str,int,float,bool))}
     finally:
         if proc.returncode is None:

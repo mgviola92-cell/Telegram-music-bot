@@ -31,7 +31,7 @@ def measure_js(metrics):
         DenoJCP._run_js_runtime = original
 
 
-def probe(mode, url, cookiefile=None, system_ca=False, cookie_work_dir=None):
+def probe(mode, url, cookiefile=None, system_ca=False, cookie_work_dir=None, primary_web_only=False):
     from yt_dlp import YoutubeDL
     messages=[]
     marks=[]
@@ -81,8 +81,10 @@ def probe(mode, url, cookiefile=None, system_ca=False, cookie_work_dir=None):
         import deno
         options['js_runtimes']={'deno':{'path':deno.find_deno_bin()}}
     except ImportError:pass
+    if primary_web_only:
+        options['extractor_args']={'youtube':{'player_client':['web']}}
     started=time.monotonic()
-    row={'mode':mode,'result':'unavailable'}
+    row={'mode':mode,'result':'unavailable','primary_web_only':primary_web_only}
     try:
         extract_started=time.monotonic()
         clock[0]=extract_started
@@ -133,6 +135,7 @@ def probe(mode, url, cookiefile=None, system_ca=False, cookie_work_dir=None):
 if __name__=='__main__':
     p=argparse.ArgumentParser();p.add_argument('--mode',choices=['runtime','pot','cookies','cookies-safari'],required=True)
     p.add_argument('--url',default='https://www.youtube.com/watch?v=aqz-KE-bpKQ')
+    p.add_argument('--primary-web-only',action='store_true')
     p.add_argument('--cookie-file');p.add_argument('--cookie-work-dir');p.add_argument('--system-ca',action='store_true')
     args=p.parse_args()
-    print(json.dumps(probe(args.mode,args.url,args.cookie_file,args.system_ca,args.cookie_work_dir)),flush=True)
+    print(json.dumps(probe(args.mode,args.url,args.cookie_file,args.system_ca,args.cookie_work_dir,args.primary_web_only)),flush=True)

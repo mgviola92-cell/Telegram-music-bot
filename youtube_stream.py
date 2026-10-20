@@ -38,8 +38,16 @@ def media_url(url):
 
 
 class QuietLogger:
+    def __init__(self):
+        self.challenge_failed=False
+        self.cookies_expired=False
     def debug(self, message): pass
-    def warning(self, message): pass
+    def warning(self, message):
+        text=str(message).casefold()
+        if any(word in text for word in ('signature','nsig','challenge','javascript')):
+            self.challenge_failed=True
+        if 'cookie' in text and any(word in text for word in ('no longer valid','expired','invalid')):
+            self.cookies_expired=True
     def error(self, message): pass
 
 
@@ -56,6 +64,7 @@ def resolve(query, cancel=None, cookiefile='/etc/secrets/cookies.txt', check=Non
         raise RuntimeError('YouTube trial deferred for memory')
     if not _SLOTS.acquire(blocking=False):
         raise RuntimeError('YouTube trial busy')
+    logger=QuietLogger()
     try:
         if cancel is not None and cancel.is_set(): raise InterruptedError()
         with tempfile.TemporaryDirectory(prefix='mudyar_youtube_cookie_', dir=cookie_work_dir) as folder:
@@ -68,9 +77,9 @@ def resolve(query, cancel=None, cookiefile='/etc/secrets/cookies.txt', check=Non
                     jar.set_cookie(c)
             if not len(jar): raise RuntimeError('No usable YouTube session')
             jar.save(ignore_discard=True); os.chmod(destination, 0o600)
-            opts = dict(cookiefile=destination, format='18[protocol=https]/best[height<=360][protocol=https]/bestaudio[protocol=https]',
+            opts = dict(cookiefile=destination, format='bestaudio/best',
                         skip_download=True, noplaylist=True, playlist_items='1',
-                        quiet=True, logger=QuietLogger(), no_warnings=True,
+                        quiet=True, logger=logger, no_warnings=False,
                         socket_timeout=8, retries=0, extractor_retries=0, cachedir=False)
             # Restore the default authenticated clients used by the successful
             # format18 test. Audio-only is not a playback prerequisite.
@@ -110,7 +119,9 @@ def resolve(query, cancel=None, cookiefile='/etc/secrets/cookies.txt', check=Non
         _COOLDOWN_UNTIL = time.monotonic()+120
         # yt-dlp exceptions may contain signed URLs; do not propagate them.
         message=str(exc).casefold()
-        reason=('format_unavailable' if 'requested format' in message else
+        reason=('cookies_expired' if logger.cookies_expired else
+                'challenge_unavailable' if logger.challenge_failed else
+                'format_unavailable' if 'requested format' in message else
                 'verification_required' if 'confirm' in message or 'sign in' in message else
                 'http_403' if '403' in message else
                 'duration_limit' if 'duration limit' in message else 'unavailable')
@@ -134,7 +145,7 @@ async def resolve_bounded(query, check=None):
                 'NODE_EXTRA_CA_CERTS','REQUESTS_CA_BUNDLE','SYSTEMROOT',
                 'HTTP_PROXY','HTTPS_PROXY','NO_PROXY','http_proxy','https_proxy','no_proxy'}}
             env['NODE_OPTIONS']='--max-old-space-size=64'
-            env['DENO_V8_FLAGS']='--max-old-space-size=64'
+            env['DENO_V8_FLAGS']='--max-old-space-size=128'
             cmd=[sys.executable,str(Path(__file__).resolve()),'--resolve',query,'--work-dir',folder]
             if shutil.which('nice'):cmd=[shutil.which('nice'),'-n','15',*cmd]
             proc=await asyncio.create_subprocess_exec(*cmd,env=env,

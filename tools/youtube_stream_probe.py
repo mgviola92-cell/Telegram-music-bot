@@ -18,7 +18,7 @@ if __name__ == '__main__':
     phase=Path(args.cookie_work_dir)/'helper.phase'
     try:
         os.environ['NODE_OPTIONS']='--max-old-space-size=64'
-        os.environ['DENO_V8_FLAGS']='--max-old-space-size=64'
+        os.environ['DENO_V8_FLAGS']='--max-old-space-size=128'
         phase.write_text('extract_audio')
         url,_,_=resolve('https://www.youtube.com/watch?v=aqz-KE-bpKQ',
                         cookiefile=args.cookie_file,cookie_work_dir=args.cookie_work_dir,
@@ -36,7 +36,8 @@ if __name__ == '__main__':
     except Exception as exc:
         row['error']=type(exc).__name__
         if str(exc) in {'youtube_format_unavailable','youtube_verification_required',
-                        'youtube_http_403','youtube_duration_limit','youtube_unavailable'}:
+                        'youtube_http_403','youtube_duration_limit','youtube_unavailable',
+                        'youtube_cookies_expired','youtube_challenge_unavailable'}:
             row['media_error']=str(exc)
     row['seconds']=round(time.monotonic()-started,2)
     print(json.dumps(row),flush=True)

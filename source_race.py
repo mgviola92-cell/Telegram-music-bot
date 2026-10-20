@@ -80,12 +80,14 @@ class ParallelSources:
                     except Exception:
                         pass
 
-    async def describe(self, query, primary_description):
+    async def describe(self, query, primary_description, *, extra=None):
         async def describe_bot(source):
             candidate = await source.find(query)
             return candidate.label,candidate.duration
         tasks = [asyncio.create_task(describe_bot(s)) for s in self.sources]
         tasks.append(asyncio.create_task(primary_description(query)))
+        if extra is not None:
+            tasks.append(asyncio.create_task(extra(query)))
         pending = set(tasks)
         try:
             async with asyncio.timeout(20):

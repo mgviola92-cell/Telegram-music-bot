@@ -76,4 +76,5 @@ class QueueReceiptTest(unittest.IsolatedAsyncioTestCase):
         player=Player(queue=deque([track]))
         await sync_receipts(player)
         self.assertNotIn('ရှာနေဆဲ',unescape(message.edit_text.call_args.args[0]))
-        self.assertIn('ရှာမရသေး',unescape(message.edit_text.call_args.args[0]))
+        self.assertIn('အချက်အလက် မရသေး',unescape(message.edit_text.call_args.args[0]))
+        self.assertNotIn('Source',unescape(message.edit_text.call_args.args[0]))

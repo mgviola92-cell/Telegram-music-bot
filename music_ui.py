@@ -42,7 +42,7 @@ def clean_track_title(title):
 
 def queue_track_title(track):
     if not getattr(track, 'metadata_resolved', False) and getattr(track, 'youtube', False):
-        return '⚠️ Source ရှာမရသေး' if getattr(track, 'metadata_failed', False) else '🔎 သီချင်းရှာနေဆဲ…'
+        return 'အချက်အလက် မရသေး' if getattr(track, 'metadata_failed', False) else '🔎 သီချင်းရှာနေဆဲ…'
     return clean_track_title(track.title)
 
 

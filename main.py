@@ -1000,7 +1000,7 @@ async def main() -> None:
         return lookup_metadata(query)
 
     def describe_queued(player, track):
-        if (not track.youtube or track.video or track.metadata_resolved or lybot is None
+        if (not track.youtube or track.video or track.metadata_resolved
                 or (player.prepared is not None and player.prepared.track is track)):
             return
         async def update():
@@ -1013,7 +1013,12 @@ async def main() -> None:
                         except Exception:
                             result = None
                     else:
-                        result = await lybot.describe(track.source, describe_primary)
+                        async def describe_youtube(query):
+                            relay = await resolve_youtube_relay(query)
+                            return relay.title, relay.duration
+                        result = await (lybot or ParallelSources([], clean_temp)).describe(
+                            track.source, describe_primary,
+                            extra=describe_youtube if youtube_relay_enabled() and not track.skip_relay else None)
                 if result and any(item is track for item in player.queue) and not track.metadata_resolved:
                     track.title, track.duration_seconds = result
                     track.metadata_resolved = True

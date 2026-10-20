@@ -8,7 +8,7 @@ from player_visuals import format_clock
 
 def receipt_text(track, *, playing=False, position=1):
     if getattr(track, 'metadata_failed', False) and not getattr(track, 'metadata_resolved', False):
-        return '⚠️ Queue ထဲထည့်ထားတယ်။ သီချင်း Source ရှာမရသေးဘူး။'
+        return 'Queue ထဲထည့်ထားတယ်။ သီချင်းအချက်အလက် မရသေးဘူး။ ဖွင့်ခါနီး ပြန်ရှာမယ်။'
     title = queue_track_title(track)
     return render('playing' if playing else 'queued',html_mode=True,requester_id=getattr(track,'requester_id',None),title=title,
                   duration=format_clock(getattr(track,'duration_seconds',None)),

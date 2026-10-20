@@ -29,7 +29,7 @@ _CACHE = {}
 _ALIASES = {}
 _DIRECT_BACKOFF = 0.0
 _INFLIGHT = {}
-STARTUP_PROBE_UNTIL = 1792504574  # One expiring metadata-only comparison.
+STARTUP_PROBE_UNTIL = 1792507124  # One owner-requested exact-query diagnostic.
 
 
 def enabled():
@@ -193,7 +193,12 @@ def _search_track(data):
         seconds = 0
         for part in clock.split(':'):
             seconds = seconds * 60 + int(part)
-        return RelayTrack(relay_source(video_id), title[:140] + ' · YouTube', _duration(seconds))
+        try:
+            duration = _duration(seconds)
+        except (ValueError, TypeError):
+            LOG.info('YouTube search skipped ineligible duration seconds=%s', seconds)
+            continue
+        return RelayTrack(relay_source(video_id), title[:140] + ' · YouTube', duration)
     raise LookupError('No finite YouTube song result')
 
 
@@ -218,7 +223,12 @@ async def _direct_search_async(query):
     from youtube_metadata import HTTP
     body = {'context': {'client': {'clientName': 'ANDROID', 'clientVersion': '20.10.38',
             'androidSdkVersion': 30, 'hl': 'en', 'gl': 'US'}}, 'query': query}
-    return _search_track(await HTTP.request('search', body))
+    data = await HTTP.request('search', body)
+    try:
+        return _search_track(data)
+    except (LookupError, ValueError, TypeError, AttributeError) as exc:
+        LOG.info('YouTube metadata parse failed error=%s detail=%s', type(exc).__name__, str(exc)[:160])
+        raise
 
 
 async def _link_metadata_async(video_id):
@@ -319,6 +329,9 @@ async def _resolve_request(query):
                                     break
                                 except Exception as exc:
                                     last_error = exc
+                                    LOG.info('YouTube metadata candidate failed method=%s error=%s detail=%s',
+                                             'direct_json' if task is direct else 'flat_fallback',
+                                             type(exc).__name__, re.sub(r'https?://\S+', '<url>', str(exc))[:200])
                                     if task is direct:
                                         _DIRECT_BACKOFF = time.monotonic() + 15
                             if not pending and track is None:
@@ -408,22 +421,21 @@ async def _probe_profile(players, fast_mp3):
 
 
 async def startup_probe(players):
-    """One expiring idle-only metadata comparison; never open media or join VC."""
+    """Owner's exact failing query; idle-only, metadata only, no chat or VC."""
     if not enabled() or not 0 < STARTUP_PROBE_UNTIL - time.time() <= 1800:
         return
     await asyncio.sleep(8)
-    for method in ('urllib_baseline', 'pooled_first', 'pooled_reuse'):
+    query = 'လူသားအသည်းနှစ်လုံးနဲ့ကျနော်'
+    for method in ('direct_parser', 'full_metadata_resolver'):
         if _busy(players) or time.time() >= STARTUP_PROBE_UNTIL:
             LOG.info('YouTube metadata comparison: skipped_for_playback')
             return
         started = time.monotonic()
         try:
-            if method == 'urllib_baseline':
-                track = await asyncio.wait_for(asyncio.to_thread(_direct_search, 'Charlie Puth Attention'), 3)
-            else:
-                track = await _direct_search_async('Charlie Puth Attention')
-            LOG.info('YouTube metadata comparison method=%s ok=True seconds=%.3f video_id=%s',
-                     method, time.monotonic()-started, source_id(track.source))
+            track = await (_direct_search_async(query) if method == 'direct_parser' else resolve_request(query))
+            LOG.info('YouTube exact-query diagnostic method=%s ok=True seconds=%.3f video_id=%s duration=%s',
+                     method, time.monotonic()-started, source_id(track.source), track.duration)
         except Exception as exc:
-            LOG.info('YouTube metadata comparison method=%s ok=False seconds=%.3f error=%s',
-                     method, time.monotonic()-started, type(exc).__name__)
+            LOG.info('YouTube exact-query diagnostic method=%s ok=False seconds=%.3f error=%s detail=%s',
+                     method, time.monotonic()-started, type(exc).__name__,
+                     re.sub(r'https?://\S+', '<url>', str(exc))[:200])

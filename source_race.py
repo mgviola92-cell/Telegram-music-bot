@@ -1,6 +1,7 @@
 """Parallel metadata searches, one Telegram transfer, first ready audio wins."""
 import asyncio
 import logging
+import re
 from lybot_source import BotSourceUnavailable
 
 LOG = logging.getLogger('telegram_music')
@@ -50,7 +51,9 @@ class ParallelSources:
                         try:
                             result = task.result()
                         except Exception as exc:
-                            LOG.info('Parallel source attempt unavailable (%s)',type(exc).__name__)
+                            LOG.info('Parallel source attempt unavailable kind=%s error=%s detail=%s',
+                                     tasks[task], type(exc).__name__,
+                                     re.sub(r'https?://\S+', '<url>', str(exc))[:200])
                             if task is downloading:
                                 downloading = None
                             continue

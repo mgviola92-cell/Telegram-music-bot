@@ -35,10 +35,10 @@ def prepare():
             shutil.copy2(source_dir / 'LICENSE', target / 'LICENSE.quickjs')
             marker.write_text(SHA256)
     wrapper = target / 'qjs'
-    wrapper.write_text('#!/bin/sh\nexec "${0%/*}/qjs-native" --memory-limit 134217728 --stack-size 1048576 "$@"\n')
+    wrapper.write_text('#!/bin/sh\nexec "${0%/*}/qjs-native" --memory-limit 201326592 --stack-size 1048576 "$@"\n')
     wrapper.chmod(0o755)
     subprocess.run([str(wrapper), '-e', 'if (1 + 1 !== 2) throw Error("runtime");'], check=True, timeout=5)
-    print(f'QuickJS {VERSION} ready; interpreter heap limited to 128 MiB.', flush=True)
+    print(f'QuickJS {VERSION} ready; interpreter heap limited to 192 MiB.', flush=True)
 
 if __name__ == '__main__':
     prepare()

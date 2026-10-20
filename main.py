@@ -40,6 +40,7 @@ from network_audio import DirectAudioStream
 from youtube_relay import (RelayAudioStream, resolve_request as resolve_youtube_relay,
                            source_id as relay_source_id, enabled as youtube_relay_enabled,
                            sender_startup_timeout)
+from relay_cooldown import relay_cooldown, upstream_failure
 from audio_options import AudioSettings, ProcessedAudioStream, EFFECTS, EFFECT_LABELS
 from music_search import collect_choices, SearchSessions, youtube_title, related_query, choose_related, title_key, restricted_error, block_source, source_blocked
 from music_stats import record_play, stats_text, stats_popup
@@ -242,6 +243,10 @@ async def _play_with_reconnect(calls: PyTgCalls, chat_id: int, stream: MediaStre
     except Exception as exc:
         reason = type(exc).__name__
         if reason in {"NoActiveGroupCall", "NoAudioSourceFound"}:
+            raise
+        if sender_startup_timeout(stream) == 16 and upstream_failure(exc):
+            # Rejoining Telegram cannot repair a confirmed remote HTTP failure.
+            # Let the existing source fallback handle it without another POST.
             raise
         log.warning("VC first join/play failed in chat %s (%s); trying reconnection", chat_id, reason)
         try:
@@ -931,6 +936,7 @@ async def main() -> None:
         strict = stream_only_enabled()
         if song.relay_requested:
             try:
+                relay_cooldown.require_available()
                 relay = await resolve_youtube_relay(song.source)
                 log.info('YouTube relay metadata ready; direct POST audio selected')
                 return relay.source, relay.title, relay.duration
@@ -960,7 +966,8 @@ async def main() -> None:
                 relay = await resolve_youtube_relay(song.source)
                 return relay.source, relay.title, relay.duration
             return await (lybot or ParallelSources([], clean_temp)).race(primary, song.source,
-                extra=youtube_candidate if youtube_relay_enabled() and not song.skip_relay else None)
+                extra=youtube_candidate if youtube_relay_enabled() and not song.skip_relay
+                and relay_cooldown.available() else None)
         try:
             return await primary.consume()
         except (asyncio.CancelledError, InterruptedError):
@@ -1542,6 +1549,8 @@ async def main() -> None:
                     try:
                         # Stream construction may probe a remote URL and fail.
                         # Include it in the same fallback as calls.play().
+                        if relay_source_id(source):
+                            relay_cooldown.require_available()
                         if song.video:
                             stream = MediaStream(
                                 source, AudioQuality.MEDIUM, VideoQuality.SD_360p,
@@ -1555,10 +1564,13 @@ async def main() -> None:
                         await play_with_reconnect(calls, chat_id, stream)
                         if not song.video:
                             await wait_for_audio_frames(calls, chat_id)
+                        if relay_source_id(source):
+                            relay_cooldown.success()
                     except Exception as live_exc:
                         if isinstance(live_exc, AudioTransportUnavailable):
                             raise
                         if relay_source_id(source):
+                            relay_cooldown.failure(live_exc)
                             log.warning('YouTube relay VC audio unavailable (%s); trying existing sources', type(live_exc).__name__)
                             fallback_query = queue_track_title(song).rsplit(' · YouTube', 1)[0]
                             local_file, title, duration_seconds = await resolve_for_queue(

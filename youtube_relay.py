@@ -12,6 +12,7 @@ import re
 import shlex
 import time
 import urllib.request
+import unicodedata
 from dataclasses import dataclass
 
 from pytgcalls.types import MediaStream
@@ -24,7 +25,9 @@ ENDPOINT = 'https://cold-lemming-3841.alexainc.deno.net/download'
 _MARKER = ENDPOINT + '#video_id='
 _ID = re.compile(r'[A-Za-z0-9_-]{11}\Z')
 _CACHE = {}
-STARTUP_PROBE_UNTIL = 1792499169
+_ALIASES = {}
+_DIRECT_BACKOFF = 0.0
+STARTUP_PROBE_UNTIL = 1792501887  # One authorized, expiring comparison window.
 
 
 def enabled():
@@ -59,7 +62,7 @@ def sender_startup_timeout(stream):
     return 4
 
 
-def relay_command(command, source):
+def relay_command(command, source, *, fast_mp3=None):
     """Preserve native PCM/output filters; replace only the HTTP input."""
     video_id = source_id(source)
     if not video_id:
@@ -77,15 +80,20 @@ def relay_command(command, source):
                            '-method', 'POST', '-post_data', payload,
                            '-headers', 'Content-Type: application/json\r\n',
                            '-user_agent', 'AlexaMusic/ytdlgo-1.0.0']
+    use_fast = fast_mp3 if fast_mp3 is not None else os.getenv('YOUTUBE_RELAY_FAST_MP3', '0') == '1'
+    if use_fast:
+        index = result.index('-i')
+        result[index:index] = ['-f', 'mp3', '-probesize', '32768', '-analyzeduration', '100000']
     return result
 
 
 class RelayAudioStream(MediaStream):
-    def __init__(self, source, settings=None):
+    def __init__(self, source, settings=None, *, fast_mp3=None):
         if not source_id(source):
             raise ValueError('Invalid relay source')
         self.settings = settings or AudioSettings()
         self.relay_source = source
+        self.fast_mp3 = fast_mp3
         super().__init__(source, self.settings.parameters,
                          video_flags=MediaStream.Flags.IGNORE,
                          audio_flags=MediaStream.Flags.REQUIRED)
@@ -95,7 +103,7 @@ class RelayAudioStream(MediaStream):
         # checks at playback. A separate FFprobe would POST/download twice.
         command = build_command('ffmpeg', None, ENDPOINT, self._audio_parameters,
                                 is_livestream=True)
-        command = relay_command(command, self.relay_source)
+        command = relay_command(command, self.relay_source, fast_mp3=self.fast_mp3)
         command[-1:-1] = ['-t', str(600 / self.settings.speed)]
         self.microphone.path = shlex.join(apply_filters(command, self.settings))
 
@@ -114,6 +122,94 @@ def _duration(value):
     if not math.isfinite(value) or not 0 < value <= 600:
         raise ValueError('YouTube trial accepts tracks up to ten minutes')
     return value
+
+
+def _query_key(query):
+    return ' '.join(unicodedata.normalize('NFKC', query).split()).casefold()
+
+
+def _cached(query):
+    key = youtube_id(query) or _ALIASES.get(_query_key(query))
+    row = _CACHE.get(key)
+    if row and row[0] > time.monotonic():
+        _CACHE.pop(key)
+        _CACHE[key] = row
+        return row[1]
+    if row:
+        _CACHE.pop(key, None)
+    return None
+
+
+def _remember(query, track):
+    video_id = source_id(track.source)
+    if not video_id:
+        raise ValueError('Invalid relay metadata source')
+    _CACHE.pop(video_id, None)
+    if len(_CACHE) >= 64:
+        _CACHE.pop(next(iter(_CACHE)))
+    _CACHE[video_id] = time.monotonic() + 600, track
+    if not youtube_id(query):
+        key = _query_key(query)
+        _ALIASES.pop(key, None)
+        if len(_ALIASES) >= 128:
+            _ALIASES.pop(next(iter(_ALIASES)))
+        _ALIASES[key] = video_id
+
+
+def _text(node):
+    if not isinstance(node, dict):
+        return ''
+    return str(node.get('simpleText') or ''.join(str(x.get('text', ''))
+               for x in node.get('runs', []) if isinstance(x, dict))).strip()
+
+
+def _search_track(data):
+    """Read ordinary video results, excluding ads, live and upcoming entries."""
+    def rows(node, depth=0):
+        if depth > 32:
+            return
+        if isinstance(node, dict):
+            for name, value in node.items():
+                if name.lower().endswith('videorenderer') and isinstance(value, dict):
+                    yield value
+                elif 'adslot' not in name.lower() and 'promoted' not in name.lower():
+                    yield from rows(value, depth + 1)
+        elif isinstance(node, list):
+            for value in node:
+                yield from rows(value, depth + 1)
+    for row in rows(data):
+        video_id, title = row.get('videoId'), _text(row.get('title'))
+        if not isinstance(video_id, str) or not _ID.fullmatch(video_id) or not title:
+            continue
+        if row.get('upcomingEventData') or row.get('isLive'):
+            continue
+        clock = _text(row.get('lengthText'))
+        if not re.fullmatch(r'\d{1,3}:\d{2}(?::\d{2})?', clock):
+            continue  # Live/scheduled results have no finite duration.
+        if any(int(part) >= 60 for part in clock.split(':')[1:]):
+            continue
+        seconds = 0
+        for part in clock.split(':'):
+            seconds = seconds * 60 + int(part)
+        return RelayTrack(relay_source(video_id), title[:140] + ' · YouTube', _duration(seconds))
+    raise LookupError('No finite YouTube song result')
+
+
+def _direct_search(query):
+    body = {'context': {'client': {'clientName': 'ANDROID', 'clientVersion': '20.10.38',
+            'androidSdkVersion': 30, 'hl': 'en', 'gl': 'US'}}, 'query': query}
+    request = urllib.request.Request(
+        'https://youtubei.googleapis.com/youtubei/v1/search?prettyPrint=false&fields=contents',
+        data=json.dumps(body).encode(), headers={'Content-Type': 'application/json',
+        'X-Youtube-Client-Name': '3',
+        'User-Agent': 'com.google.android.youtube/20.10.38 (Linux; U; Android 11) gzip'})
+    with urllib.request.urlopen(request, timeout=2) as response:
+        if 'json' not in response.headers.get('Content-Type', ''):
+            raise LookupError('Metadata response was not JSON')
+        raw = response.read(1024 * 1024 + 1)
+    if len(raw) > 1024 * 1024:
+        raise ValueError('Search metadata too large')
+    return _search_track(json.loads(raw))
 
 
 def _flat_search(query):
@@ -151,15 +247,16 @@ def _link_metadata(video_id):
 
 
 async def resolve_request(query):
+    global _DIRECT_BACKOFF
     if not enabled():
         raise ValueError('YouTube relay trial is disabled')
     query = str(query).strip()
     if not query or len(query) > 2048:
         raise ValueError('Invalid YouTube request')
-    key = youtube_id(query) or query.casefold()
-    row = _CACHE.get(key)
-    if row and row[0] > time.monotonic():
-        return row[1]
+    cached = _cached(query)
+    if cached:
+        LOG.info('YouTube relay metadata cache hit')
+        return cached
     async with asyncio.timeout(14):
         video_id = youtube_id(query)
         if video_id:
@@ -171,43 +268,81 @@ async def resolve_request(query):
         else:
             if query.startswith(('http://', 'https://')) or len(query) > 120:
                 raise ValueError('Use a YouTube link or song name')
-            track = await asyncio.to_thread(_flat_search, query)
-    if len(_CACHE) >= 64:
-        _CACHE.pop(next(iter(_CACHE)))
-    _CACHE[key] = time.monotonic() + 600, track
+            started = time.monotonic()
+            method = 'flat_fallback'
+            track = None
+            if os.getenv('YOUTUBE_RELAY_DIRECT_SEARCH', '1') == '1' and time.monotonic() >= _DIRECT_BACKOFF:
+                try:
+                    track = await asyncio.wait_for(asyncio.to_thread(_direct_search, query), timeout=3)
+                    method = 'direct_json'
+                except Exception as exc:
+                    _DIRECT_BACKOFF = time.monotonic() + 180
+                    LOG.info('YouTube direct metadata unavailable (%s); retaining flat search', type(exc).__name__)
+            if track is None:
+                track = await asyncio.to_thread(_flat_search, query)
+            LOG.info('YouTube metadata lookup method=%s seconds=%.2f', method, time.monotonic() - started)
+    _remember(query, track)
     return track
 
 
-async def startup_probe(players):
-    """One expiring, idle-only Render test; no messages and no VC joins."""
-    if not enabled() or not 0 < STARTUP_PROBE_UNTIL - time.time() <= 1800:
-        return
-    await asyncio.sleep(8)
-    def busy():
-        return any(p.current is not None or p.idle_mode == 'radio' or p.skip_pending
-                   or (p.loading_task and not p.loading_task.done()) for p in players.values())
-    if busy():
-        LOG.info('YouTube relay probe: skipped_for_playback')
-        return
-    stream = RelayAudioStream(relay_source('jNQXAC9IVRw'))
+def _busy(players):
+    return any(p.current is not None or p.idle_mode == 'radio' or p.skip_pending
+               or (p.loading_task and not p.loading_task.done()) for p in players.values())
+
+
+async def _probe_profile(players, fast_mp3):
+    stream = RelayAudioStream(relay_source('nfs8NYg7yQM'), fast_mp3=fast_mp3)
     await stream.check_stream()
     command = shlex.split(stream.microphone.path)
     command[command.index('-t') + 1] = '0.5'
     started = time.monotonic()
     proc = await asyncio.create_subprocess_exec(*command, stdout=asyncio.subprocess.PIPE,
                                               stderr=asyncio.subprocess.DEVNULL)
-    result = asyncio.create_task(proc.communicate())
+    async def capture():
+        head = await proc.stdout.read(4096)
+        first_audio = time.monotonic() - started
+        tail = await proc.stdout.read()
+        await proc.wait()
+        return head + tail, first_audio
+    result = asyncio.create_task(capture())
     try:
         while not result.done():
-            if busy() or time.monotonic() - started > 22:
+            if _busy(players) or time.monotonic() - started > 22:
                 LOG.info('YouTube relay probe: aborted_or_timeout')
-                return
+                return False
             await asyncio.wait({result}, timeout=.25)
-        pcm, _ = await result
+        pcm, first_audio = await result
         LOG.info('YouTube relay probe: %s', json.dumps({'ok': proc.returncode == 0 and bool(pcm),
                  'pcm_bytes': len(pcm), 'nonzero': any(pcm),
+                 'profile': 'mp3_tuned' if fast_mp3 else 'baseline',
+                 'first_audio_seconds': round(first_audio, 2),
                  'seconds': round(time.monotonic() - started, 2)}))
+        return proc.returncode == 0 and bool(pcm)
     finally:
         if proc.returncode is None:
             proc.kill()
         await asyncio.gather(result, return_exceptions=True)
+
+
+async def startup_probe(players):
+    """Authorized idle-only comparison; never change the live FFmpeg profile."""
+    if not enabled() or not 0 < STARTUP_PROBE_UNTIL - time.time() <= 1800:
+        return
+    await asyncio.sleep(8)
+    for method, lookup in [('direct_json', _direct_search), ('flat_search', _flat_search)]:
+        if _busy(players) or time.time() >= STARTUP_PROBE_UNTIL:
+            LOG.info('YouTube relay probe: skipped_for_playback')
+            return
+        started = time.monotonic()
+        try:
+            track = await asyncio.wait_for(asyncio.to_thread(lookup, 'Charlie Puth Attention'), 10)
+            LOG.info('YouTube metadata comparison: %s', json.dumps({'method': method, 'ok': True,
+                     'video_id': source_id(track.source), 'seconds': round(time.monotonic() - started, 2)}))
+        except Exception as exc:
+            LOG.info('YouTube metadata comparison: %s', json.dumps({'method': method, 'ok': False,
+                     'error_type': type(exc).__name__, 'seconds': round(time.monotonic() - started, 2)}))
+    for fast in (False, True, True, False):
+        if _busy(players) or time.time() >= STARTUP_PROBE_UNTIL:
+            return
+        if not await _probe_profile(players, fast):
+            return

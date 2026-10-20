@@ -14,6 +14,45 @@ from youtube_relay import (ENDPOINT, RelayAudioStream, relay_source, source_id,
 
 
 class RelaySafety(unittest.TestCase):
+    def test_partial_json_search_uses_finite_video_not_ad_or_live(self):
+        from youtube_relay import _search_track
+        def row(video_id, title, clock):
+            return {'videoRenderer': {'videoId': video_id, 'title': {'runs': [{'text': title}]},
+                                      'lengthText': {'simpleText': clock}}}
+        payload = {'contents': [
+            {'adSlotRenderer': row('abcdefghijk', 'Advert', '1:00')},
+            row('abcdefghijl', 'Live show', 'LIVE'),
+            row('abcdefghijm', 'Bad clock', '1:99'),
+            row('PFkeRVvPPQ4', 'Purple - pGb x Wink', '2:49')]}
+        track = _search_track(payload)
+        self.assertEqual(source_id(track.source), 'PFkeRVvPPQ4')
+        self.assertEqual(track.duration, 169)
+        with self.assertRaises(LookupError):_search_track({'contents': []})
+
+    def test_aliases_and_video_cache_have_hard_bounds_and_expire(self):
+        import youtube_relay as relay
+        relay._CACHE.clear();relay._ALIASES.clear()
+        for i in range(200):
+            relay._remember('query ' + str(i), RelayTrack(relay_source(f'{i:011d}'), 'title', 30))
+        self.assertEqual(len(relay._CACHE), 64)
+        self.assertEqual(len(relay._ALIASES), 128)
+        self.assertIsNotNone(relay._cached('query 199'))
+        self.assertIsNone(relay._cached('query 0'))
+        expiry = next(iter(relay._CACHE.values()))[0]
+        with patch('youtube_relay.time.monotonic', return_value=expiry + 1):
+            self.assertIsNone(relay._cached('query 199'))
+        relay._CACHE.clear();relay._ALIASES.clear()
+
+    def test_fast_mp3_profile_is_input_only_and_optional(self):
+        source = relay_source('jNQXAC9IVRw')
+        original = ['ffmpeg', '-i', 'placeholder', '-f', 's16le', 'pipe:1']
+        baseline = relay_command(original, source, fast_mp3=False)
+        fast = relay_command(original, source, fast_mp3=True)
+        self.assertNotIn('-probesize', baseline)
+        self.assertLess(fast.index('-probesize'), fast.index('-i'))
+        self.assertEqual(fast[fast.index('-f') + 1], 'mp3')
+        self.assertEqual(fast[-3:], original[-3:])
+
     def test_marker_is_an_exact_fixed_endpoint_and_video_id(self):
         source = relay_source('jNQXAC9IVRw')
         self.assertEqual(source_id(source), 'jNQXAC9IVRw')
@@ -33,6 +72,41 @@ class RelaySafety(unittest.TestCase):
 
 
 class RelayIntegration(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        import youtube_relay as relay
+        relay._CACHE.clear();relay._ALIASES.clear();relay._DIRECT_BACKOFF = 0
+
+    async def test_name_and_link_reuse_same_metadata_with_unicode_space_alias(self):
+        track = RelayTrack(relay_source('nfs8NYg7yQM'), 'Attention · YouTube', 231)
+        with patch('youtube_relay._direct_search', return_value=track) as direct, \
+             patch('youtube_relay._flat_search') as flat, \
+             patch('youtube_relay._link_metadata') as link:
+            self.assertEqual(await resolve_request('Attention'), track)
+            self.assertEqual(await resolve_request('  ＡＴＴＥＮＴＩＯＮ  '), track)
+            self.assertEqual(await resolve_request('https://youtu.be/nfs8NYg7yQM'), track)
+        direct.assert_called_once();flat.assert_not_called();link.assert_not_called()
+
+    async def test_direct_failure_retains_flat_search_and_backs_off(self):
+        track = RelayTrack(relay_source('nfs8NYg7yQM'), 'Attention · YouTube', 231)
+        with patch('youtube_relay._direct_search', side_effect=OSError('network unavailable')) as direct, \
+             patch('youtube_relay._flat_search', return_value=track) as flat:
+            self.assertEqual(await resolve_request('Attention'), track)
+            self.assertEqual(await resolve_request('Charlie Puth Attention'), track)
+        direct.assert_called_once()
+        self.assertEqual(flat.call_count, 2)
+
+    async def test_startup_comparison_never_competes_with_playback(self):
+        import time
+        from types import SimpleNamespace as N
+        from youtube_relay import startup_probe
+        player = N(current=object(), idle_mode=None, skip_pending=False, loading_task=None)
+        with patch('youtube_relay.STARTUP_PROBE_UNTIL', time.time() + 300), \
+             patch('youtube_relay.asyncio.sleep', new_callable=AsyncMock), \
+             patch('youtube_relay._direct_search') as direct, \
+             patch('youtube_relay._probe_profile', new_callable=AsyncMock) as decode:
+            await startup_probe({1: player})
+        direct.assert_not_called();decode.assert_not_awaited()
+
     async def test_cold_relay_sender_keeps_one_connection_past_ordinary_deadline(self):
         from main import play_with_reconnect
         from ntgcalls import ConnectionMode

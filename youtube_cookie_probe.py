@@ -12,7 +12,7 @@ import shutil
 
 LOG=logging.getLogger('telegram_music')
 # Short fixed window for the owner-authorized test; inert after expiry.
-PROBE_UNTIL = 1792437313
+PROBE_UNTIL = 1792479081
 
 
 def busy(players):
@@ -64,7 +64,7 @@ async def run_cookie_probe(players,until=None):
     await asyncio.sleep(8)
     if busy(players):
         LOG.info('YouTube cookie probe: skipped_for_playback');return
-    for mode in ('cookies','cookies-safari'):
+    for mode in ('cookies',):
         if time.time()>=until or busy(players):return
         row=await attempt(mode,players)
         LOG.info('YouTube cookie probe: %s',json.dumps(row,sort_keys=True))

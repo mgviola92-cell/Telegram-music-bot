@@ -134,8 +134,7 @@ class RelayIntegration(unittest.IsolatedAsyncioTestCase):
         import main
         from types import SimpleNamespace as N
         from test_music_extensions import closure
-        for action, query, expected in [('ytplay', 'Attention', True),
-                                         ('play', 'https://youtu.be/jNQXAC9IVRw', True),
+        for action, query, expected in [('play', 'https://youtu.be/jNQXAC9IVRw', True),
                                          ('play', 'Attention', False)]:
             player = main.Player()
             progress = N(edit_text=AsyncMock())

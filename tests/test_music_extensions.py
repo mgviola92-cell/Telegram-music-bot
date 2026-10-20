@@ -242,7 +242,7 @@ class AutoplayTests(unittest.IsolatedAsyncioTestCase):
 
     def test_shortcuts_keep_existing_admin_gates(self):
         source=Path(main.__file__).read_text()
-        self.assertIn('filters.command(["play", "p", "ytplay", "vplay"])',source)
+        self.assertIn('filters.command(["play", "p", "vplay"])',source)
         self.assertIn('filters.command(["skip", "s", "next"])',source)
         self.assertIn('filters.command(["clear", "c"])',source)
         tree=ast.parse(source)

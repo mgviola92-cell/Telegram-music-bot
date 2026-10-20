@@ -131,13 +131,19 @@ def soundcloud_choices(query):
     return choices
 
 
-async def collect_choices(query, sources=(), *, limit=5, timeout=12):
+async def collect_choices(query, sources=(), *, limit=5, timeout=12, youtube=False):
     async def primary():
         return await asyncio.to_thread(soundcloud_choices, query)
     async def provider(source):
         candidate = await source.find(query)
         return [SearchChoice(clean_track_title(candidate.label), query, candidate.duration, candidate)]
     tasks = [asyncio.create_task(primary())] + [asyncio.create_task(provider(s)) for s in sources]
+    if youtube:
+        async def relay_choices():
+            from youtube_relay import resolve_request, source_id
+            track = await resolve_request(query)
+            return [SearchChoice(track.title, 'https://www.youtube.com/watch?v=' + source_id(track.source), track.duration)]
+        tasks.append(asyncio.create_task(relay_choices()))
     pending = set(tasks)
     choices, seen = [], set()
     try:

@@ -20,7 +20,7 @@ class ParallelSources:
     async def resolve(self, query):
         return await self.race(None, query)
 
-    async def race(self, prepared, query):
+    async def race(self, prepared, query, *, extra=None):
         cached = self.cached(query)
         if cached:
             if prepared:
@@ -37,6 +37,8 @@ class ParallelSources:
         async def primary():
             return await asyncio.wait_for(prepared.consume(), timeout=12)
         primary_task = add(primary(), 'primary') if prepared else None
+        if extra is not None:
+            add(extra(), 'primary_extra')
         for source in self.sources:
             add(source.find(query), 'metadata')
         try:
@@ -72,7 +74,7 @@ class ParallelSources:
                 prepared.discard()
             # Two ready results can race in the same event-loop iteration.
             for task,kind in tasks.items():
-                if task is not winner and kind in {'primary','download'} and not task.cancelled():
+                if task is not winner and kind in {'primary','primary_extra','download'} and not task.cancelled():
                     try:
                         self.cleanup(task.result()[0])
                     except Exception:

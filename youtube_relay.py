@@ -272,13 +272,41 @@ async def resolve_request(query):
             method = 'flat_fallback'
             track = None
             if os.getenv('YOUTUBE_RELAY_DIRECT_SEARCH', '1') == '1' and time.monotonic() >= _DIRECT_BACKOFF:
+                direct = asyncio.create_task(asyncio.to_thread(_direct_search, query))
+                fallback = None
                 try:
-                    track = await asyncio.wait_for(asyncio.to_thread(_direct_search, query), timeout=3)
-                    method = 'direct_json'
-                except Exception as exc:
-                    _DIRECT_BACKOFF = time.monotonic() + 180
-                    LOG.info('YouTube direct metadata unavailable (%s); retaining flat search', type(exc).__name__)
-            if track is None:
+                    done, _ = await asyncio.wait({direct}, timeout=.75)
+                    if done:
+                        try:
+                            track = direct.result()
+                            method = 'direct_json'
+                        except Exception as exc:
+                            _DIRECT_BACKOFF = time.monotonic() + 15
+                            LOG.info('YouTube direct metadata unavailable (%s); using fallback', type(exc).__name__)
+                    if track is None:
+                        fallback = asyncio.create_task(asyncio.to_thread(_flat_search, query))
+                        pending = {fallback} | ({direct} if not direct.done() else set())
+                        last_error = None
+                        while pending and track is None:
+                            done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+                            for task in sorted(done, key=lambda t: t is not direct):
+                                try:
+                                    track = task.result()
+                                    method = 'direct_json' if task is direct else 'flat_fallback'
+                                    break
+                                except Exception as exc:
+                                    last_error = exc
+                                    if task is direct:
+                                        _DIRECT_BACKOFF = time.monotonic() + 15
+                            if not pending and track is None:
+                                raise last_error or LookupError('No YouTube metadata')
+                finally:
+                    tasks = [t for t in (direct, fallback) if t is not None]
+                    for task in tasks:
+                        if not task.done():
+                            task.cancel()
+                    await asyncio.gather(*tasks, return_exceptions=True)
+            else:
                 track = await asyncio.to_thread(_flat_search, query)
             LOG.info('YouTube metadata lookup method=%s seconds=%.2f', method, time.monotonic() - started)
     _remember(query, track)

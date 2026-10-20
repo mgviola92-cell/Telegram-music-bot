@@ -938,8 +938,12 @@ async def main() -> None:
                 providers = [s for s in lybot.sources if s is not song.selected.source] if lybot else []
                 return await ParallelSources(providers, clean_temp).race(primary, requested.source)
         primary = PreparedAudio(song, download_song, clean_temp, prefer_stream=prefer_stream, publish_metadata=False)
-        if lybot is not None and not song.video and not song.source.startswith(("http://", "https://")) and not strict:
-            return await lybot.race(primary, song.source)
+        if not song.video and not song.source.startswith(("http://", "https://")) and not strict:
+            async def youtube_candidate():
+                relay = await resolve_youtube_relay(song.source)
+                return relay.source, relay.title, relay.duration
+            return await (lybot or ParallelSources([], clean_temp)).race(primary, song.source,
+                extra=youtube_candidate if youtube_relay_enabled() else None)
         try:
             return await primary.consume()
         except (asyncio.CancelledError, InterruptedError):
@@ -1027,7 +1031,8 @@ async def main() -> None:
 
     def choice_track(choice, *, automatic=False):
         return Track(choice.title, choice.source, youtube=True, duration_seconds=choice.duration,
-                     metadata_resolved=True, selected=choice.candidate, autoplay=automatic)
+                     metadata_resolved=True, selected=choice.candidate, autoplay=automatic,
+                     relay_requested=is_youtube_url(choice.source) and youtube_relay_enabled())
 
     def start_autoplay(player):
         if (not player.autoplay_enabled or player.current is None or player.current.video
@@ -1679,7 +1684,7 @@ async def main() -> None:
         await home.show(msg,help_page=(msg.command or ['start'])[0] in {'help','cmd'})
 
     @bot.on_message(
-        filters.command(["play", "ytplay", "vplay", "ping", "stop", "queue", "radio", "idle", "stream"]) &
+        filters.command(["play", "vplay", "ping", "stop", "queue", "radio", "idle", "stream"]) &
         (filters.group | filters.private),
         group=-1,
     )
@@ -1698,7 +1703,7 @@ async def main() -> None:
         except Exception:
             log.exception("Ping reply failed in chat %s", msg.chat.id)
 
-    @bot.on_message(filters.command(["play", "p", "ytplay", "vplay"]) & filters.group)
+    @bot.on_message(filters.command(["play", "p", "vplay"]) & filters.group)
     async def play_command(_: Client, msg: Message) -> None:
         private_songs.preempt()
         video_mode = msg.command[0].lower() == "vplay"
@@ -1737,11 +1742,8 @@ async def main() -> None:
                 await msg.reply_text("⚠️ သီချင်းနာမည် 1–120 စာလုံးအတွင်း ထည့်ပေးပါ။")
                 return
             if (not video_mode and youtube_relay_enabled()
-                    and (msg.command[0].lower() == 'ytplay' or is_youtube_url(query))):
+                    and is_youtube_url(query)):
                 track = Track(query, query, youtube=True, relay_requested=True)
-            elif msg.command[0].lower() == 'ytplay':
-                await msg.reply_text('YouTube စမ်းသပ် source ကို လောလောဆယ် ပိတ်ထားတယ်။ /play နဲ့ သုံးပါ။')
-                return
             elif query.startswith(("https://", "http://")):
                 if is_youtube_url(query):
                     if not youtube_audio_enabled() and not video_mode:
@@ -1904,7 +1906,8 @@ async def main() -> None:
         search_cooldowns[key] = now + 5
         progress = await msg.reply_text("🔎 သီချင်းစာရင်း ရှာနေတယ်…")
         async with search_slots:
-            choices = await collect_choices(query, lybot.sources if lybot and not stream_only_enabled() else ())
+            choices = await collect_choices(query, lybot.sources if lybot and not stream_only_enabled() else (),
+                                            youtube=youtube_relay_enabled())
         if not choices:
             await progress.edit_text("⚠️ သီချင်းမတွေ့သေးဘူး။ အဆိုတော်နာမည်ပါ ထည့်ပြီး ပြန်စမ်းပါ။")
             return

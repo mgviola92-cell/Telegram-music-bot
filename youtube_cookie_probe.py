@@ -12,7 +12,7 @@ import shutil
 
 LOG=logging.getLogger('telegram_music')
 # Short fixed window for the owner-authorized test; inert after expiry.
-PROBE_UNTIL = 1792479885
+PROBE_UNTIL = 1792493680
 
 
 def busy(players):
@@ -46,7 +46,7 @@ async def attempt(mode,players):
         except (ValueError,UnicodeError):return {'mode':mode,'result':'probe_process_failed'}
         # Fixed result allowlist; never forward arbitrary child output to logs.
         fields={'mode','result','error','media_error','metadata','audio_only',
-                'extract_seconds','decode_seconds','format_id','audio_formats','challenge_warning','protocol','decoded_pcm_bytes','seconds','pot_requested','pot_warning'}
+                'stage_marks','js_seconds','js_calls','extract_seconds','decode_seconds','format_id','audio_formats','challenge_warning','protocol','decoded_pcm_bytes','seconds','pot_requested','pot_warning'}
         return {k:v for k,v in row.items() if k in fields and isinstance(v,(str,int,float,bool))}
     finally:
         if proc.returncode is None:

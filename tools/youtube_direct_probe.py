@@ -2,6 +2,7 @@
 No URLs, request headers, cookies or tokens are printed; only result summaries.
 """
 import argparse
+from contextlib import contextmanager
 import json
 import os
 import subprocess
@@ -11,17 +12,48 @@ from http.cookiejar import MozillaCookieJar
 from urllib.parse import urlsplit
 
 
+@contextmanager
+def measure_js(metrics):
+    """Time the existing Deno solver without changing its input or result."""
+    from yt_dlp.extractor.youtube.jsc._builtin.deno import DenoJCP
+    original = DenoJCP._run_js_runtime
+    def measured(instance, script):
+        started = time.monotonic()
+        try:
+            return original(instance, script)
+        finally:
+            metrics['js_seconds'] += time.monotonic() - started
+            metrics['js_calls'] += 1
+    DenoJCP._run_js_runtime = measured
+    try:
+        yield
+    finally:
+        DenoJCP._run_js_runtime = original
+
+
 def probe(mode, url, cookiefile=None, system_ca=False, cookie_work_dir=None):
     from yt_dlp import YoutubeDL
     messages=[]
+    marks=[]
+    clock=[None]
+    metrics={'js_seconds':0.,'js_calls':0}
     class Logger:
         def debug(self,msg):
+            if clock[0] is not None and len(marks)<24:
+                for text,label in [('Downloading webpage','webpage'),
+                                   ('player API JSON','player_api'),
+                                   ('Downloading player','player_js'),
+                                   ('Solving JS challenges using','js_solve'),
+                                   ('Downloading m3u8 information','manifest')]:
+                    if text in str(msg):
+                        marks.append(f'{label}@{time.monotonic()-clock[0]:.2f}')
+                        break
             if 'Generating a ' in msg and 'PO Token' in msg:messages.append('pot_requested')
         def warning(self,msg):
             if 'PO Token' in msg:messages.append('pot_warning')
             if 'challenge' in msg.casefold():messages.append('challenge_warning')
         def error(self,msg):pass
-    options=dict(quiet=True,no_warnings=True,logger=Logger(),noplaylist=True,
+    options=dict(quiet=True,verbose=True,no_warnings=True,logger=Logger(),noplaylist=True,
                  skip_download=True,format='bestaudio/best',socket_timeout=8,
                  retries=0,extractor_retries=0,js_runtimes={'node':{}},
                  cachedir=False)
@@ -53,7 +85,8 @@ def probe(mode, url, cookiefile=None, system_ca=False, cookie_work_dir=None):
     row={'mode':mode,'result':'unavailable'}
     try:
         extract_started=time.monotonic()
-        with YoutubeDL(options) as ydl:
+        clock[0]=extract_started
+        with measure_js(metrics), YoutubeDL(options) as ydl:
             info=ydl.extract_info(url,download=False)
         row['extract_seconds']=round(time.monotonic()-extract_started,2)
         stream=info.get('url')
@@ -91,7 +124,8 @@ def probe(mode, url, cookiefile=None, system_ca=False, cookie_work_dir=None):
                       'tls_certificate' if 'certificate' in message else
                       'unavailable_video' if 'video is unavailable' in message else type(exc).__name__)
     if cookie_dir is not None:cookie_dir.cleanup()
-    row.update(seconds=round(time.monotonic()-started,2),pot_requested='pot_requested' in messages,
+    row.update(js_seconds=round(metrics['js_seconds'],2),js_calls=metrics['js_calls'],
+               stage_marks=';'.join(marks),seconds=round(time.monotonic()-started,2),pot_requested='pot_requested' in messages,
                pot_warning='pot_warning' in messages,challenge_warning='challenge_warning' in messages)
     return row
 

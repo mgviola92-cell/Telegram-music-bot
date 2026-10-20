@@ -81,3 +81,41 @@ class CookieProbeRunnerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(row['result'],'decoded_audio');self.assertNotIn('cookies',row)
         self.assertEqual(row['extract_seconds'],30.25);self.assertEqual(row['decode_seconds'],1.4)
         self.assertFalse(paths[0].exists())
+
+class ExtractionProfileTest(unittest.TestCase):
+    def test_stage_profile_keeps_only_fixed_labels_not_urls_or_cookie_values(self):
+        with tempfile.TemporaryDirectory() as folder:
+            cookie=Path(folder)/'cookie.txt'
+            cookie.write_text('# Netscape HTTP Cookie File\n.youtube.com\tTRUE\t/\tTRUE\t1999999999\tSID\tprivate-cookie-value\n')
+            class Extractor:
+                def __init__(self,opts):
+                    self.logger=opts['logger']
+                    assert opts['cachedir'] is False
+                    assert opts['format']=='bestaudio/best'
+                def __enter__(self):return self
+                def __exit__(self,*args):pass
+                def extract_info(self,url,download):
+                    assert download is False
+                    self.logger.debug('Downloading webpage https://secret.example/private-cookie-value')
+                    self.logger.debug('arbitrary secret https://secret.example/never-log')
+                    return dict(url='https://r1.googlevideo.com/private-signed-url',
+                                vcodec='avc1',format_id='18',protocol='https',formats=[])
+            with patch('yt_dlp.YoutubeDL',Extractor),patch('tools.youtube_direct_probe.subprocess.run',return_value=N(returncode=0,stdout=b'0'*64000,stderr=b'')):
+                row=probe('cookies','https://www.youtube.com/watch?v=sample',str(cookie))
+            self.assertEqual(row['result'],'decoded_audio')
+            self.assertTrue(row['stage_marks'].startswith('webpage@'))
+            self.assertEqual(row['js_calls'],0)
+            for secret in ('secret.example','private-cookie-value','private-signed-url'):
+                self.assertNotIn(secret,json.dumps(row))
+
+    def test_js_measurement_restores_original_method_even_on_failure(self):
+        from yt_dlp.extractor.youtube.jsc._builtin.deno import DenoJCP
+        from tools.youtube_direct_probe import measure_js
+        def original(instance,script):raise RuntimeError('expected')
+        metrics={'js_seconds':0.,'js_calls':0}
+        with patch.object(DenoJCP,'_run_js_runtime',original):
+            with self.assertRaises(RuntimeError):
+                with measure_js(metrics),patch('tools.youtube_direct_probe.time.monotonic',side_effect=[10.,12.]):
+                    DenoJCP._run_js_runtime(None,'unchanged input')
+            self.assertIs(DenoJCP._run_js_runtime,original)
+        self.assertEqual(metrics,{'js_seconds':2.,'js_calls':1})

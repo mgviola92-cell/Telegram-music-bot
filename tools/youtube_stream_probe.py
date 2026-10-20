@@ -28,6 +28,10 @@ if __name__ == '__main__':
         row.update(decoded_pcm_bytes=len(audio.stdout),metadata=True)
         if audio.returncode==0 and len(audio.stdout)>=32000:row['result']='decoded_audio'
         else:row['result']='media_unavailable'
-    except Exception as exc:row['error']=type(exc).__name__
+    except Exception as exc:
+        row['error']=type(exc).__name__
+        if str(exc) in {'youtube_format_unavailable','youtube_verification_required',
+                        'youtube_http_403','youtube_duration_limit','youtube_unavailable'}:
+            row['media_error']=str(exc)
     row['seconds']=round(time.monotonic()-started,2)
     print(json.dumps(row),flush=True)

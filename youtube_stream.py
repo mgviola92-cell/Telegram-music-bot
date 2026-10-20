@@ -75,7 +75,7 @@ def resolve(query, cancel=None, cookiefile='/etc/secrets/cookies.txt', check=Non
             # Authenticated TV client: avoid launching a browser JS engine on
             # the 512 MiB service. Do not fall back to multiple heavier clients.
             opts['js_runtimes'] = {}
-            opts['extractor_args'] = {'youtube': {'player_client': ['tv_downgraded']}}
+            opts['extractor_args'] = {'youtube': {'player_client': ['web_embedded']}}
             target = query if query.startswith('https://') else 'ytsearch1:'+query
             with YoutubeDL(opts) as ydl:
                 info = ydl.extract_info(target, download=False)
@@ -106,10 +106,15 @@ def resolve(query, cancel=None, cookiefile='/etc/secrets/cookies.txt', check=Non
                 _PAGES[url] = info.get('webpage_url') or target
             return url, title, seconds
     except InterruptedError: raise
-    except Exception:
+    except Exception as exc:
         _COOLDOWN_UNTIL = time.monotonic()+120
         # yt-dlp exceptions may contain signed URLs; do not propagate them.
-        raise RuntimeError('YouTube direct trial unavailable') from None
+        message=str(exc).casefold()
+        reason=('format_unavailable' if 'requested format' in message else
+                'verification_required' if 'confirm' in message or 'sign in' in message else
+                'http_403' if '403' in message else
+                'duration_limit' if 'duration limit' in message else 'unavailable')
+        raise RuntimeError('youtube_'+reason) from None
     finally:
         _SLOTS.release()
 

@@ -32,7 +32,7 @@ class ResolveTest(unittest.TestCase):
                     assert copies[-1].stat().st_mode & 0o777 == 0o600
                     assert opts['skip_download']
                     assert opts['js_runtimes'] == {}
-                    assert opts['extractor_args']['youtube']['player_client'] == ['tv_downgraded']
+                    assert opts['extractor_args']['youtube']['player_client'] == ['web_embedded']
                 def __enter__(self): return self
                 def __exit__(self, *args): pass
                 def extract_info(self, target, download):

@@ -41,8 +41,19 @@ class QuietLogger:
     def __init__(self):
         self.challenge_failed=False
         self.cookies_expired=False
-    def debug(self, message): pass
+        self.runtime_failure=None
+    def debug(self, message):
+        text=str(message).casefold()
+        if any(w in text for w in ('out of memory','memory limit','allocation failed')):
+            self.runtime_failure='js_heap_limit'
+        elif any(w in text for w in ('stack overflow','stack limit')):
+            self.runtime_failure='js_stack_limit'
+        elif 'quickjs' in text and any(w in text for w in ('not found','not available','unsupported')):
+            self.runtime_failure='js_runtime_missing'
+        elif any(w in text for w in ('solver lib script','solver core script','ejs package')) and any(w in text for w in ('failed','not found','missing')):
+            self.runtime_failure='js_solver_missing' 
     def warning(self, message):
+        self.debug(message)
         text=str(message).casefold()
         if any(word in text for word in ('signature','nsig','challenge','javascript')):
             self.challenge_failed=True
@@ -78,7 +89,7 @@ def resolve(query, cancel=None, cookiefile='/etc/secrets/cookies.txt', check=Non
             jar.save(ignore_discard=True); os.chmod(destination, 0o600)
             opts = dict(cookiefile=destination, format='bestaudio/best',
                         skip_download=True, noplaylist=True, playlist_items='1',
-                        quiet=True, logger=logger, no_warnings=False,
+                        quiet=True, verbose=True, logger=logger, no_warnings=False,
                         socket_timeout=8, retries=0, extractor_retries=0, cachedir=False)
             # Restore the default authenticated clients used by the successful
             # format18 test. Audio-only is not a playback prerequisite.
@@ -118,7 +129,8 @@ def resolve(query, cancel=None, cookiefile='/etc/secrets/cookies.txt', check=Non
         _COOLDOWN_UNTIL = time.monotonic()+120
         # yt-dlp exceptions may contain signed URLs; do not propagate them.
         message=str(exc).casefold()
-        reason=('cookies_expired' if logger.cookies_expired else
+        reason=(logger.runtime_failure if logger.runtime_failure else
+                'cookies_expired' if logger.cookies_expired else
                 'challenge_unavailable' if logger.challenge_failed else
                 'format_unavailable' if 'requested format' in message else
                 'verification_required' if 'confirm' in message or 'sign in' in message else

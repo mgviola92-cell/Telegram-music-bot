@@ -130,3 +130,12 @@ class RaceTest(unittest.IsolatedAsyncioTestCase):
             self.assertIn('ဤ run',yt.usage_text())
         finally:
             yt._BYTES,yt._UNKNOWN_SECONDS=old[:2];yt._RATES.clear();yt._RATES.update(old[2])
+
+class RuntimeDiagnosticsTest(unittest.TestCase):
+    def test_only_fixed_runtime_failure_codes_are_retained(self):
+        for text,code in [('QuickJS: out of memory at secret-url','js_heap_limit'),
+                          ('QuickJS: stack overflow at secret-url','js_stack_limit'),
+                          ('QuickJS executable not found secret-path','js_runtime_missing')]:
+            logger=yt.QuietLogger();logger.warning(text)
+            self.assertEqual(logger.runtime_failure,code)
+            self.assertNotIn('secret',repr(logger.__dict__))

@@ -38,7 +38,9 @@ if __name__ == '__main__':
         row['error']=type(exc).__name__
         if str(exc) in {'youtube_format_unavailable','youtube_verification_required',
                         'youtube_http_403','youtube_duration_limit','youtube_unavailable',
-                        'youtube_cookies_expired','youtube_challenge_unavailable'}:
+                        'youtube_cookies_expired','youtube_challenge_unavailable',
+                        'youtube_js_heap_limit','youtube_js_stack_limit',
+                        'youtube_js_runtime_missing','youtube_js_solver_missing'}:
             row['media_error']=str(exc)
     row['seconds']=round(time.monotonic()-started,2)
     print(json.dumps(row),flush=True)

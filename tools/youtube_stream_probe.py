@@ -16,7 +16,8 @@ if __name__ == '__main__':
     row={'mode':'stream-trial','result':'unavailable'};started=time.monotonic()
     try:
         url,_,_=resolve('https://www.youtube.com/watch?v=aqz-KE-bpKQ',
-                        cookiefile=args.cookie_file,cookie_work_dir=args.cookie_work_dir)
+                        cookiefile=args.cookie_file,cookie_work_dir=args.cookie_work_dir,
+                        duration_limit=660)  # Fixed 10:34 sample; decode only 2 seconds.
         headers=''.join(f'{k}: {v}\r\n' for k,v in stream_headers_for(url).items())
         cmd=['ffmpeg','-nostdin','-v','error','-rw_timeout','5000000','-tls_verify','1']
         if headers:cmd+=['-headers',headers]

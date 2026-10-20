@@ -37,7 +37,8 @@ class QuietLogger:
     def error(self, message): pass
 
 
-def resolve(query, cancel=None, cookiefile='/etc/secrets/cookies.txt', check=None, cookie_work_dir=None):
+def resolve(query, cancel=None, cookiefile='/etc/secrets/cookies.txt', check=None,
+            cookie_work_dir=None, duration_limit=600):
     global _COOLDOWN_UNTIL
     from yt_dlp import YoutubeDL
     from player_visuals import save_stream_headers, register_youtube_stream
@@ -82,7 +83,7 @@ def resolve(query, cancel=None, cookiefile='/etc/secrets/cookies.txt', check=Non
                     str(info.get('title') or ''), query, str(info.get('uploader') or '')):
                 raise RuntimeError('YouTube result does not match requested recording')
             seconds = float(info.get('duration') or 0)
-            if not 0 < seconds <= 600: raise RuntimeError('Track exceeds trial duration limit')
+            if not 0 < seconds <= duration_limit: raise RuntimeError('Track exceeds trial duration limit')
             url = info['url']
             register_youtube_stream(url)
             save_stream_headers(url, info.get('http_headers') or {})

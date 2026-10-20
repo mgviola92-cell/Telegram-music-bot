@@ -12,7 +12,7 @@ import shutil
 
 LOG=logging.getLogger('telegram_music')
 # Short fixed window for the owner-authorized test; inert after expiry.
-PROBE_UNTIL = 1792441256
+PROBE_UNTIL = 1792473555
 
 
 def busy(players):
@@ -21,7 +21,9 @@ def busy(players):
 
 
 async def attempt(mode,players):
-    script=Path(__file__).parent/'tools'/('youtube_pot_probe.py' if mode=='cookies-pot' else 'youtube_direct_probe.py')
+    name=('youtube_stream_probe.py' if mode=='stream-trial' else
+          'youtube_pot_probe.py' if mode=='cookies-pot' else 'youtube_direct_probe.py')
+    script=Path(__file__).parent/'tools'/name
     folder=tempfile.TemporaryDirectory(prefix='mudyar_cookie_probejob_')
     command=[sys.executable,str(script),'--mode',mode,'--cookie-file','/etc/secrets/cookies.txt',
              '--cookie-work-dir',folder.name]
@@ -39,7 +41,7 @@ async def attempt(mode,players):
         until=time.monotonic()+(170 if mode=='cookies-pot' else 65)
         while not result.done():
             if busy(players):return {'mode':mode,'result':'aborted_for_playback'}
-            if mode=='cookies-pot':
+            if mode in {'cookies-pot','stream-trial'}:
                 from runtime_status import memory_sample
                 used,limit=memory_sample()
                 if limit and used/limit>.85:
@@ -74,7 +76,7 @@ async def run_cookie_probe(players,until=None):
     await asyncio.sleep(8)
     if busy(players):
         LOG.info('YouTube cookie probe: skipped_for_playback');return
-    for mode in ('cookies-pot',):
+    for mode in ('stream-trial',):
         if time.time()>=until or busy(players):return
         row=await attempt(mode,players)
         LOG.info('YouTube cookie probe: %s',json.dumps(row,sort_keys=True))

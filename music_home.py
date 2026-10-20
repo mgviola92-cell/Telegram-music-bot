@@ -9,6 +9,7 @@ from pyrogram.types import InlineKeyboardButton as B,InlineKeyboardMarkup as K
 from card_layout import render,mention
 from runtime_status import STATUS
 from bandwidth_status import BANDWIDTH
+from youtube_stream import usage_text as youtube_usage_text
 from music_help import HELP_TEXT
 from telegram_photo_cache import send_default_photo
 
@@ -22,7 +23,7 @@ class MusicHome:
         return ('<b>'+escape(render('brand'))+'</b>\n\n'
                 'မင်္ဂလာပါ '+name+'။\n'
                 'သီချင်းနားထောင်ဖို့ မုဒြာကနေ ကြိုဆိုပါတယ်။\n\n'
-                '<b>လက်ရှိအခြေအနေ</b>\n'+escape(STATUS.text()+'\n'+BANDWIDTH.text())+'\n\n'
+                '<b>လက်ရှိအခြေအနေ</b>\n'+escape(STATUS.text()+'\n'+BANDWIDTH.text()+'\n'+youtube_usage_text())+'\n\n'
                 '<blockquote>'+escape(BANDWIDTH.reset_notice())+'</blockquote>\n'
                 f'▸ ချိတ်ဆက်ထားသော VC : {active}\n\n'
                 'သီချင်းနာမည် ရိုက်ပြီး ရှာနိုင်တယ်။\n'

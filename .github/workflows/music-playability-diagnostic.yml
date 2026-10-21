@@ -1,0 +1,51 @@
+name: Bounded Music Provider Audio Diagnostic
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/music-playability-diagnostic.yml'
+  workflow_dispatch:
+jobs:
+  provider_probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Probe NubCoders and Audius without printing signed URLs
+        env:
+          NUBCODERS_API_TOKEN: ${{ secrets.NUBCODERS_API_TOKEN }}
+        run: |
+          python - <<'PY'
+          import os,json,urllib.request,urllib.parse,urllib.error,subprocess,time
+          def probe_mp3(source):
+            command=['ffmpeg','-hide_banner','-nostdin','-loglevel','error','-rw_timeout','8000000','-i',source,
+                     '-t','0.15','-vn','-f','s16le','-ar','16000','-ac','1','pipe:1']
+            try:
+              done=subprocess.run(command,capture_output=True,timeout=14)
+              return {'pcm':len(done.stdout),'ffmpeg_rc':done.returncode,'stderr_bytes':len(done.stderr)}
+            except subprocess.TimeoutExpired:return {'timeout':True}
+          token=os.environ.get('NUBCODERS_API_TOKEN')
+          print('nub_token_present',bool(token),flush=True)
+          if token:
+            try:
+              url='https://api.nubcoders.com/stream?'+urllib.parse.urlencode({'q':'jNQXAC9IVRw','mode':'audio','redirect':'false'})
+              request=urllib.request.Request(url,headers={'Authorization':'Bearer '+token,'Accept':'application/json'})
+              with urllib.request.urlopen(request,timeout=10) as result:
+                body=json.load(result)
+              source=body.get('stream_url') or body.get('url')
+              print('nub_api_status','ok' if isinstance(source,str) else 'no_url',flush=True)
+              if isinstance(source,str) and source.startswith('https://'):
+                print('nub_ffmpeg',json.dumps(probe_mp3(source)),flush=True)
+            except Exception as exc:print('nub_api_failure',type(exc).__name__,getattr(exc,'code',None),flush=True)
+          try:
+            q=urllib.parse.urlencode({'query':'electronic','limit':'2','app_name':'mudyar-music'})
+            with urllib.request.urlopen('https://api.audius.co/v1/tracks/search?'+q,timeout=12) as result:
+              body=json.load(result)
+            rows=body.get('data',[])
+            print('audius_search_tracks',len(rows),flush=True)
+            for item in rows:
+              if isinstance(item,dict) and item.get('id') and not item.get('is_stream_gated'):
+                key=urllib.parse.quote(str(item['id']),safe='')
+                source='https://api.audius.co/v1/tracks/'+key+'/stream?app_name=mudyar-music'
+                print('audius_ffmpeg',json.dumps(probe_mp3(source)),flush=True)
+                break
+          except Exception as exc:print('audius_api_failure',type(exc).__name__,getattr(exc,'code',None),flush=True)
+          PY

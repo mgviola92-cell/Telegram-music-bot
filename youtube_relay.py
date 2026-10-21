@@ -74,7 +74,7 @@ def sender_startup_timeout(stream):
         if source_id(getattr(stream, 'relay_source', None)):
             # A deadline, not a sleep: native capture can finish immediately.
             # Cold provider streams must not be cancelled at the old 8s mark.
-            return 16
+            return 8
         stream = getattr(stream, 'original', None)
         if stream is None:
             break

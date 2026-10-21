@@ -42,7 +42,7 @@ from youtube_relay import (RelayAudioStream, resolve_request as resolve_youtube_
                            sender_startup_timeout, audio_provider)
 from relay_cooldown import relay_cooldown, upstream_failure
 from audio_options import AudioSettings, ProcessedAudioStream, EFFECTS, EFFECT_LABELS
-from music_search import collect_choices, SearchSessions, youtube_title, related_query, choose_related, title_key, restricted_error, block_source, source_blocked
+from music_search import collect_choices, SearchSessions, youtube_title, related_query, choose_related, title_key, restricted_error, block_source, source_blocked, youtube_id
 from music_stats import record_play, stats_text, stats_popup
 from music_cleanup import housekeeping
 from feature_probe import run_feature_probe
@@ -945,6 +945,22 @@ async def main() -> None:
         if song.relay_requested:
             try:
                 relay_cooldown.require_available()
+                async def preferred_relay():
+                    relay = await resolve_youtube_relay(song.source)
+                    return relay.source, relay.title, relay.duration
+                if (os.getenv('NUBCODERS_ENABLED', '0') == '1'
+                        and os.getenv('NUBCODERS_API_TOKEN')):
+                    async def nub_for_link():
+                        await asyncio.sleep(0.35)
+                        source_id = youtube_id(song.source)
+                        if not source_id:
+                            raise ValueError('Not a direct YouTube video ID')
+                        stream = await asyncio.wait_for(resolve_nubcoders_audio(source_id), timeout=10)
+                        return stream, queue_track_title(song) + ' · NubCoders', song.duration_seconds
+                    result = await race_candidates([('vapters', preferred_relay),
+                                                    ('nubcoders', nub_for_link)])
+                    log.info('YouTube metadata resolved using parallel provider candidates')
+                    return result
                 relay = await resolve_youtube_relay(song.source)
                 log.info('YouTube metadata ready; configured audio provider selected')
                 return relay.source, relay.title, relay.duration

@@ -45,7 +45,7 @@ class ParallelSources:
         if extra is not None:
             add(extra(), 'primary_extra')
         for source in self.sources:
-            if self.health is not None and not self.health.available(source):
+            if self.health is not None and not self.health.available(id(source)):
                 continue
             add(source.find(query), 'metadata', owner=source)
         try:
@@ -63,7 +63,7 @@ class ParallelSources:
                             if task is downloading:
                                 downloading = None
                             if self.health is not None and task in owners:
-                                self.health.failure(owners[task])
+                                self.health.failure(id(owners[task]))
                             continue
                         if tasks[task] != 'metadata':
                             if not result or not isinstance(result, (tuple, list)) or len(result) < 2 or not result[0]:
@@ -72,7 +72,7 @@ class ParallelSources:
                                 continue
                             winner = task
                             if self.health is not None and task in owners:
-                                self.health.success(owners[task])
+                                self.health.success(id(owners[task]))
                             LOG.info('Parallel audio winner: %s', result[1].rsplit(' · ',1)[-1][:60])
                             return result
                         if result is not None and getattr(result, 'source', None) is not None:

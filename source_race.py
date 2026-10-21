@@ -77,7 +77,7 @@ class ParallelSources:
                             return result
                         if result is not None and getattr(result, 'source', None) is not None:
                             if self.health is not None and task in owners:
-                                self.health.success(owners[task])
+                                self.health.success(id(owners[task]))
                             candidates.append(result)
                     if downloading is None and candidates:
                         candidate = candidates.pop(0)

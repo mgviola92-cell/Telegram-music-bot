@@ -17,7 +17,9 @@ jobs:
           tests = [
              ("nub_health", "https://api.nubcoders.com/health", 4096),
              ("nub_search", "https://api.nubcoders.com/search?q=Attention&limit=1", 8192),
+             ("nub_stream_no_token", "https://api.nubcoders.com/stream?q=nfs8NYg7yQM&mode=audio", 2048),
              ("vapters_audio", "https://vapters.site/stream/nfs8NYg7yQM?vid=false&quality=128", 32768),
+             ("vapters_audio_replay", "https://vapters.site/stream/nfs8NYg7yQM?vid=false&quality=128", 32768),
           ]
           for name, url, limit in tests:
               start=time.monotonic()

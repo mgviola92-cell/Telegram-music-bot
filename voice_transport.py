@@ -11,6 +11,10 @@ class AudioTransportUnavailable(RuntimeError):
     pass
 
 
+class AudioStartupTimeout(TimeoutError):
+    """A stream was accepted, but its native capture did not become ready."""
+
+
 async def clear_stale_voice(client, chat_id, own_id):
     """Remove only this assistant's old participation; never close the group VC."""
     peer = await client.resolve_peer(chat_id)
@@ -38,7 +42,10 @@ async def ensure_native_sender(calls, chat_id, *, startup_timeout=4, diagnostic=
     # Stream replacement preserves native capture state. A new song must resume it.
     if diagnostic:
         diagnostic.record('resume_start')
-    await asyncio.wait_for(calls.resume(chat_id), timeout=startup_timeout)
+    try:
+        await asyncio.wait_for(calls.resume(chat_id), timeout=startup_timeout)
+    except TimeoutError:
+        raise AudioStartupTimeout('Native audio capture exceeded its startup deadline') from None
     if diagnostic:
         diagnostic.record('resume_done')
     await asyncio.wait_for(calls.unmute(chat_id), timeout=startup_timeout)

@@ -48,7 +48,8 @@ from music_cleanup import housekeeping
 from feature_probe import run_feature_probe
 from bot_source_probe import run_bot_source_probe
 from lybot_source import LyBotSource, BotSourceUnavailable, resolve_with_fallback, run_live_probe, run_candidate_probes, APPROVED_BOTS, search_text
-from voice_transport import clear_stale_voice, ensure_native_sender, AudioTransportUnavailable
+from voice_transport import (clear_stale_voice, ensure_native_sender,
+                             AudioTransportUnavailable, AudioStartupTimeout)
 from source_race import ParallelSources
 from effect_exports import EffectExports
 from track_metadata import remember_metadata, lookup_metadata
@@ -244,7 +245,12 @@ async def _play_with_reconnect(calls: PyTgCalls, chat_id: int, stream: MediaStre
         reason = type(exc).__name__
         if reason in {"NoActiveGroupCall", "NoAudioSourceFound"}:
             raise
-        if sender_startup_timeout(stream) in (8, 16) and upstream_failure(exc):
+        if sender_startup_timeout(stream) == 16 and isinstance(exc, AudioStartupTimeout):
+            # A remote decoder deadline is not evidence of a stale Telegram
+            # connection. Keep the VC and let the existing source fallback run.
+            log.warning('Remote audio startup deadline exceeded in chat %s; keeping VC for source fallback', chat_id)
+            raise
+        if sender_startup_timeout(stream) == 16 and upstream_failure(exc):
             # Rejoining Telegram cannot repair a confirmed remote HTTP failure.
             # Let the existing source fallback handle it without another POST.
             raise

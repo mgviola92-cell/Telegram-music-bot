@@ -72,7 +72,9 @@ def sender_startup_timeout(stream):
     """
     for _ in range(4):
         if source_id(getattr(stream, 'relay_source', None)):
-            return 16 if getattr(stream, 'provider', audio_provider()) == 'legacy' else 8
+            # A deadline, not a sleep: native capture can finish immediately.
+            # Cold provider streams must not be cancelled at the old 8s mark.
+            return 16
         stream = getattr(stream, 'original', None)
         if stream is None:
             break

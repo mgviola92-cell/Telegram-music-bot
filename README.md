@@ -47,6 +47,9 @@ Optional variables:
   only explicitly setting this variable to `legacy` selects it again. It is
   never tried automatically when Vapters fails; existing music sources handle
   playback fallback. `off` disables this YouTube candidate.
+  A cold remote decoder has up to 16 seconds to become ready, with no fixed
+  waiting period. If that deadline expires, playback tries the existing music
+  sources in the current VC instead of leaving and reopening the same stream.
 - `YOUTUBE_RELAY_ENABLED`: existing overall YouTube candidate switch (`1` by
   default), retained for compatibility. `0` disables either configured provider.
 - `YOUTUBE_RELAY_FAST_MP3`: applies only to the parked legacy backend. Vapters

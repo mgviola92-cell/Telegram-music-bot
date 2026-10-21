@@ -24,7 +24,7 @@ jobs:
           for client in clients:
               start=time.monotonic()
               cmd=['python','-m','yt_dlp','--no-playlist','--skip-download','--no-warnings',
-                   '--no-check-certificates','--socket-timeout','7','--retries','0',
+                   '--socket-timeout','7','--retries','0',
                    '--extractor-args',f'youtube:player_client={client}',
                    '--print','%(id)s|%(ext)s|%(duration)s',url]
               try:

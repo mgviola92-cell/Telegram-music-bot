@@ -42,7 +42,7 @@ from youtube_relay import (RelayAudioStream, resolve_request as resolve_youtube_
                            sender_startup_timeout, audio_provider)
 from relay_cooldown import relay_cooldown, upstream_failure
 from audio_options import AudioSettings, ProcessedAudioStream, EFFECTS, EFFECT_LABELS
-from music_search import collect_choices, SearchSessions, youtube_title, related_query, choose_related, title_key, restricted_error, block_source, source_blocked
+from music_search import collect_choices, SearchSessions, youtube_title, related_query, choose_related, title_key, restricted_error, block_source, source_blocked, youtube_id
 from music_stats import record_play, stats_text, stats_popup
 from music_cleanup import housekeeping
 from feature_probe import run_feature_probe
@@ -51,6 +51,8 @@ from lybot_source import LyBotSource, BotSourceUnavailable, resolve_with_fallbac
 from voice_transport import (clear_stale_voice, ensure_native_sender,
                              AudioTransportUnavailable, AudioStartupTimeout)
 from source_race import ParallelSources
+from provider_race import race_candidates
+from nubcoders_source import resolve as resolve_nubcoders_audio
 from effect_exports import EffectExports
 from track_metadata import remember_metadata, lookup_metadata
 from queue_receipts import acknowledge_queued, schedule_receipts
@@ -943,6 +945,22 @@ async def main() -> None:
         if song.relay_requested:
             try:
                 relay_cooldown.require_available()
+                async def preferred_relay():
+                    relay = await resolve_youtube_relay(song.source)
+                    return relay.source, relay.title, relay.duration
+                if (os.getenv('NUBCODERS_ENABLED', '1') == '1'
+                        and os.getenv('NUBCODERS_API_TOKEN')):
+                    async def nub_for_link():
+                        await asyncio.sleep(0.35)
+                        source_id = youtube_id(song.source)
+                        if not source_id:
+                            raise ValueError('Not a direct YouTube video ID')
+                        stream = await asyncio.wait_for(resolve_nubcoders_audio(source_id), timeout=10)
+                        return stream, queue_track_title(song) + ' · NubCoders', song.duration_seconds
+                    result = await race_candidates([('vapters', preferred_relay),
+                                                    ('nubcoders', nub_for_link)])
+                    log.info('YouTube metadata resolved using parallel provider candidates')
+                    return result
                 relay = await resolve_youtube_relay(song.source)
                 log.info('YouTube metadata ready; configured audio provider selected')
                 return relay.source, relay.title, relay.duration
@@ -971,9 +989,22 @@ async def main() -> None:
             async def youtube_candidate():
                 relay = await resolve_youtube_relay(song.source)
                 return relay.source, relay.title, relay.duration
+            async def nubcoders_candidate():
+                # Give the usually-fast Vapters metadata a short head start.
+                # Avoid spending a daily NubCoders request if another provider wins first.
+                await asyncio.sleep(0.35)
+                stream = await asyncio.wait_for(resolve_nubcoders_audio(song.source), timeout=10)
+                return stream, queue_track_title(song) + ' · NubCoders', song.duration_seconds
+            candidates = []
+            if youtube_relay_enabled() and not song.skip_relay and relay_cooldown.available():
+                candidates.append(('vapters', youtube_candidate))
+            if (os.getenv('NUBCODERS_ENABLED', '1') == '1'
+                    and os.getenv('NUBCODERS_API_TOKEN')):
+                candidates.append(('nubcoders', nubcoders_candidate))
+            async def remote_candidate():
+                return await race_candidates(candidates)
             return await (lybot or ParallelSources([], clean_temp)).race(primary, song.source,
-                extra=youtube_candidate if youtube_relay_enabled() and not song.skip_relay
-                and relay_cooldown.available() else None)
+                extra=remote_candidate if candidates else None)
         try:
             return await primary.consume()
         except (asyncio.CancelledError, InterruptedError):
@@ -1294,20 +1325,48 @@ async def main() -> None:
                 "Private Group မှာ Music Bot ကို Admin + Invite Users permission "
                 "ပေးပါ။ ပြီးရင် /play ပြန်စမ်းပါ။"
             ) from exc
+        # Telegram can reject a freshly created one-use invite with
+        # InviteHashExpired. Retry once with a separate short-lived invite,
+        # then revoke every invite; never revoke the group's main link.
+        invites = [invite.invite_link]
         try:
-            await assistant.join_chat(invite.invite_link)
+            try:
+                await assistant.join_chat(invite.invite_link)
+            except Exception as exc:
+                # The join may have succeeded remotely even if the RPC timed out.
+                try:
+                    await assistant.get_chat_member(chat_id, "me")
+                    return
+                except Exception:
+                    pass
+                if type(exc).__name__ != "InviteHashExpired":
+                    raise
+                log.warning("Assistant one-use invite expired; retrying with fresh temporary link")
+                retry_invite = await bot.create_chat_invite_link(
+                    chat_id, name="Mudyar Music Assistant Retry"
+                )
+                invites.append(retry_invite.invite_link)
+                await assistant.join_chat(retry_invite.invite_link)
             await assistant.get_chat_member(chat_id, "me")
         except Exception as exc:
+            # Avoid reporting failure if Telegram applied the join before
+            # returning an error or the membership update arrived late.
+            try:
+                await assistant.get_chat_member(chat_id, "me")
+                return
+            except Exception:
+                pass
             log.warning("Assistant join failed: %s", type(exc).__name__)
             raise RuntimeError(
                 "Assistant Auto Join မရသေးဘူး။ Group Join Restriction "
                 "နဲ့ Ban Settings စစ်ပါ။"
             ) from exc
         finally:
-            try:
-                await bot.revoke_chat_invite_link(chat_id, invite.invite_link)
-            except Exception:
-                log.warning("Could not revoke temporary invite for chat %s", chat_id)
+            for link in invites:
+                try:
+                    await bot.revoke_chat_invite_link(chat_id, link)
+                except Exception:
+                    log.warning("Could not revoke temporary invite for chat %s", chat_id)
 
     async def start_idle(
         chat_id: int, player: Player, progress: Message | None = None, *, quiet: bool = False
@@ -1582,6 +1641,17 @@ async def main() -> None:
                             fallback_query = queue_track_title(song).rsplit(' · YouTube', 1)[0]
                             local_file, title, duration_seconds = await resolve_for_queue(
                                 Track(fallback_query, fallback_query, youtube=True, skip_relay=True), player.stream_enabled)
+                            song.duration_seconds, song.title = duration_seconds, title
+                            song.metadata_resolved = True
+                            source = local_file
+                        elif song.youtube and not song.video and song.title.endswith(' · NubCoders'):
+                            # A resolved HTTPS URL is not proof of native VC audio.
+                            # Recover through the known YouTube provider on startup failure.
+                            log.warning("NubCoders audio unavailable in VC (%s); recovering through YouTube relay",
+                                        type(live_exc).__name__)
+                            relay_cooldown.require_available()
+                            relay = await resolve_youtube_relay(song.source)
+                            local_file, title, duration_seconds = relay.source, relay.title, relay.duration
                             song.duration_seconds, song.title = duration_seconds, title
                             song.metadata_resolved = True
                             source = local_file

@@ -974,6 +974,9 @@ async def main() -> None:
                 relay = await resolve_youtube_relay(song.source)
                 return relay.source, relay.title, relay.duration
             async def nubcoders_candidate():
+                # Give the usually-fast Vapters metadata a short head start.
+                # Avoid spending a daily NubCoders request if another provider wins first.
+                await asyncio.sleep(0.35)
                 stream = await asyncio.wait_for(resolve_nubcoders_audio(song.source), timeout=10)
                 return stream, queue_track_title(song) + ' · NubCoders', song.duration_seconds
             candidates = []
@@ -1622,6 +1625,17 @@ async def main() -> None:
                             fallback_query = queue_track_title(song).rsplit(' · YouTube', 1)[0]
                             local_file, title, duration_seconds = await resolve_for_queue(
                                 Track(fallback_query, fallback_query, youtube=True, skip_relay=True), player.stream_enabled)
+                            song.duration_seconds, song.title = duration_seconds, title
+                            song.metadata_resolved = True
+                            source = local_file
+                        elif song.youtube and not song.video and song.title.endswith(' · NubCoders'):
+                            # A resolved HTTPS URL is not proof of native VC audio.
+                            # Recover through the known YouTube provider on startup failure.
+                            log.warning("NubCoders audio unavailable in VC (%s); recovering through YouTube relay",
+                                        type(live_exc).__name__)
+                            relay_cooldown.require_available()
+                            relay = await resolve_youtube_relay(song.source)
+                            local_file, title, duration_seconds = relay.source, relay.title, relay.duration
                             song.duration_seconds, song.title = duration_seconds, title
                             song.metadata_resolved = True
                             source = local_file

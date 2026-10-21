@@ -53,6 +53,8 @@ from voice_transport import (clear_stale_voice, ensure_native_sender,
 from source_race import ParallelSources
 from provider_race import race_candidates
 from nubcoders_source import resolve as resolve_nubcoders_audio
+from nubcoders_audio import (NubCodersAudioStream, is_nubcoders_stream,
+                             verify_nubcoders_audio)
 from effect_exports import EffectExports
 from track_metadata import remember_metadata, lookup_metadata
 from queue_receipts import acknowledge_queued, schedule_receipts
@@ -187,6 +189,8 @@ def ended_early(elapsed: float, duration_seconds: float | None) -> bool:
 
 
 def audio_stream(source: str, quality=AudioQuality.HIGH, *, settings=None):
+    if is_nubcoders_stream(source):
+        return NubCodersAudioStream(source, settings)
     if relay_source_id(source):
         return RelayAudioStream(source, settings)
     if settings is not None and settings != AudioSettings():
@@ -956,6 +960,8 @@ async def main() -> None:
                         if not source_id:
                             raise ValueError('Not a direct YouTube video ID')
                         stream = await asyncio.wait_for(resolve_nubcoders_audio(source_id), timeout=10)
+                        if not await verify_nubcoders_audio(stream):
+                            raise RuntimeError('NubCoders audio sample did not decode')
                         return stream, queue_track_title(song) + ' · NubCoders', song.duration_seconds
                     result = await race_candidates([('vapters', preferred_relay),
                                                     ('nubcoders', nub_for_link)])
@@ -994,6 +1000,8 @@ async def main() -> None:
                 # Avoid spending a daily NubCoders request if another provider wins first.
                 await asyncio.sleep(0.35)
                 stream = await asyncio.wait_for(resolve_nubcoders_audio(song.source), timeout=10)
+                if not await verify_nubcoders_audio(stream):
+                    raise RuntimeError('NubCoders audio sample did not decode')
                 return stream, queue_track_title(song) + ' · NubCoders', song.duration_seconds
             candidates = []
             if youtube_relay_enabled() and not song.skip_relay and relay_cooldown.available():
@@ -1644,14 +1652,21 @@ async def main() -> None:
                             song.duration_seconds, song.title = duration_seconds, title
                             song.metadata_resolved = True
                             source = local_file
-                        elif song.youtube and not song.video and song.title.endswith(' · NubCoders'):
-                            # A resolved HTTPS URL is not proof of native VC audio.
-                            # Recover through the known YouTube provider on startup failure.
-                            log.warning("NubCoders audio unavailable in VC (%s); recovering through YouTube relay",
+                        elif is_nubcoders_stream(source):
+                            # Do not send the signed URL into logs or retry the same failed
+                            # native source. Race ordinary sources without Vapters/NubCoders.
+                            log.warning("NubCoders native VC audio unavailable (%s); trying independent providers",
                                         type(live_exc).__name__)
-                            relay_cooldown.require_available()
-                            relay = await resolve_youtube_relay(song.source)
-                            local_file, title, duration_seconds = relay.source, relay.title, relay.duration
+                            fallback_query = queue_track_title(song).rsplit(' · NubCoders', 1)[0]
+                            if is_youtube_url(fallback_query):
+                                fallback_query = await youtube_title(fallback_query)
+                            fallback = Track(fallback_query, fallback_query, youtube=True, skip_relay=True)
+                            backup = PreparedAudio(fallback, download_song, clean_temp,
+                                                   prefer_stream=player.stream_enabled,
+                                                   publish_metadata=False)
+                            local_file, title, duration_seconds = await (
+                                lybot or ParallelSources([], clean_temp)
+                            ).race(backup, fallback_query)
                             song.duration_seconds, song.title = duration_seconds, title
                             song.metadata_resolved = True
                             source = local_file
@@ -1722,7 +1737,12 @@ async def main() -> None:
                     if isinstance(exc, (TimeoutError, asyncio.TimeoutError)):
                         cancel_signal.set()
                     clean_temp(local_file)
-                    log.exception("Could not play track in chat %s", chat_id)
+                    if is_nubcoders_stream(source):
+                        # The native exception embeds a signed URL in its message.
+                        log.error("Could not play track in chat %s (type=%s; sensitive remote URL hidden)",
+                                  chat_id, type(exc).__name__)
+                    else:
+                        log.exception("Could not play track in chat %s", chat_id)
                     if isinstance(exc, StreamOnlyPlaybackError):
                         error_message = "📡 Direct streaming မအောင်မြင်ဘူး။ ဒီစမ်းသပ်မှုမှာ Download နဲ့ file cache ကို ပိတ်ထားတယ်။"
                     elif isinstance(exc, BotSourceUnavailable):

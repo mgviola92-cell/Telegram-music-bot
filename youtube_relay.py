@@ -71,6 +71,9 @@ def sender_startup_timeout(stream):
     our fixed marker, with bounded traversal, never arbitrary request URLs.
     """
     for _ in range(4):
+        from nubcoders_audio import is_nubcoders_stream
+        if is_nubcoders_stream(getattr(stream, 'source_url', None)):
+            return 8
         if source_id(getattr(stream, 'relay_source', None)):
             # A deadline, not a sleep: native capture can finish immediately.
             # Cold provider streams must not be cancelled at the old 8s mark.

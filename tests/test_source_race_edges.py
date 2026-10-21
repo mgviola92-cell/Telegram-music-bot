@@ -15,6 +15,12 @@ class SourceRaceEdges(unittest.IsolatedAsyncioTestCase):
     async def test_failed_first_transfer_uses_second_without_extra_download(self):
         first,second=self.source('first'),self.source('second')
         first.download.side_effect=RuntimeError('temporary transfer failed')
+        async def wait_for_first(_):
+            while first.download.await_count == 0:
+                await asyncio.sleep(0)
+            return second.candidate
+        second.candidate=Obj(source=second,label='second',duration=160)
+        second.find.side_effect=wait_for_first
         result=await asyncio.wait_for(ParallelSources([first,second],Mock()).race(None,'music'),2)
         self.assertEqual(result[0],'second.mp3')
         self.assertEqual(first.download.await_count,1)

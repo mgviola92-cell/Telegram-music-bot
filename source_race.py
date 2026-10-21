@@ -58,10 +58,15 @@ class ParallelSources:
                                 downloading = None
                             continue
                         if tasks[task] != 'metadata':
+                            if not result or not isinstance(result, (tuple, list)) or len(result) < 2 or not result[0]:
+                                if task is downloading:
+                                    downloading = None
+                                continue
                             winner = task
                             LOG.info('Parallel audio winner: %s', result[1].rsplit(' · ',1)[-1][:60])
                             return result
-                        candidates.append(result)
+                        if result is not None and getattr(result, 'source', None) is not None:
+                            candidates.append(result)
                     if downloading is None and candidates:
                         candidate = candidates.pop(0)
                         downloading = add(candidate.source.download(candidate), 'download')

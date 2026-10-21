@@ -1,0 +1,40 @@
+name: NubCoders Audio PCM (Isolated)
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/nubcoders-audio-decode.yml'
+  workflow_dispatch:
+jobs:
+  audio:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    env:
+      NUBCODERS_API_TOKEN: ${{ secrets.NUBCODERS_API_TOKEN }}
+    steps:
+      - name: Install FFmpeg
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+      - name: Resolve stream privately and decode bounded audio
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os,urllib.request,urllib.parse,json,subprocess,time
+          token=os.environ.get('NUBCODERS_API_TOKEN')
+          if not token: raise SystemExit('Token is missing')
+          url='https://api.nubcoders.com/stream?q=nfs8NYg7yQM&mode=audio&redirect=false'
+          for trial in range(2):
+              t=time.monotonic()
+              try:
+                  req=urllib.request.Request(url,headers={'Authorization':'Bearer '+token,'User-Agent':'MudyarAudioTest/1.0'})
+                  with urllib.request.urlopen(req,timeout=12) as r:
+                      data=json.loads(r.read(8192))
+                  media=data.get('stream_url') or data.get('url')
+                  parsed=urllib.parse.urlparse(media or '')
+                  if parsed.scheme!='https' or not parsed.hostname or parsed.username or parsed.password:
+                      print(json.dumps({'trial':trial+1,'resolved':False,'error':'No safe HTTPS stream URL'}));continue
+                  resolve_sec=round(time.monotonic()-t,3)
+                  t2=time.monotonic()
+                  p=subprocess.run(['ffmpeg','-nostdin','-hide_banner','-loglevel','quiet','-rw_timeout','8000000','-i',media,'-t','1','-f','s16le','-ac','1','-ar','16000','pipe:1'],capture_output=True,timeout=20)
+                  print(json.dumps({'trial':trial+1,'resolved':True,'resolve_seconds':resolve_sec,'decode_seconds':round(time.monotonic()-t2,3),'pcm_bytes':len(p.stdout),'has_nonzero_pcm':any(p.stdout),'ffmpeg_exit':p.returncode}))
+              except Exception as ex:
+                  print(json.dumps({'trial':trial+1,'error_type':type(ex).__name__,'elapsed_seconds':round(time.monotonic()-t,3)}))
+          PY

@@ -2988,8 +2988,8 @@ async def main() -> None:
         await owner_settings.load()
         await bot.start()
         ready = True
-        from youtube_cookie_probe import run_cookie_probe
-        cookie_probe_task=asyncio.create_task(run_cookie_probe(players))
+        from youtube_provider_probe import run_provider_probe
+        cookie_probe_task=asyncio.create_task(run_provider_probe(players))
         from youtube_relay import startup_probe as probe_youtube_relay
         relay_probe_task = asyncio.create_task(probe_youtube_relay(players))
         welcome_warmup_task = asyncio.create_task(welcome.warmup())

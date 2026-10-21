@@ -948,7 +948,7 @@ async def main() -> None:
                 async def preferred_relay():
                     relay = await resolve_youtube_relay(song.source)
                     return relay.source, relay.title, relay.duration
-                if (os.getenv('NUBCODERS_ENABLED', '0') == '1'
+                if (os.getenv('NUBCODERS_ENABLED', '1') == '1'
                         and os.getenv('NUBCODERS_API_TOKEN')):
                     async def nub_for_link():
                         await asyncio.sleep(0.35)
@@ -998,7 +998,7 @@ async def main() -> None:
             candidates = []
             if youtube_relay_enabled() and not song.skip_relay and relay_cooldown.available():
                 candidates.append(('vapters', youtube_candidate))
-            if (os.getenv('NUBCODERS_ENABLED', '0') == '1'
+            if (os.getenv('NUBCODERS_ENABLED', '1') == '1'
                     and os.getenv('NUBCODERS_API_TOKEN')):
                 candidates.append(('nubcoders', nubcoders_candidate))
             async def remote_candidate():

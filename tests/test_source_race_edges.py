@@ -48,3 +48,15 @@ class SourceRaceEdges(unittest.IsolatedAsyncioTestCase):
         prepared.discard.assert_called_once()
         source.find.assert_not_awaited()
         extra.assert_not_awaited()
+
+    async def test_empty_primary_result_does_not_beat_ready_bot_audio(self):
+        source=self.source('bot')
+        prepared=Obj(consume=AsyncMock(return_value=None),discard=Mock())
+        result=await asyncio.wait_for(ParallelSources([source],Mock()).race(prepared,'music'),2)
+        self.assertEqual(result[0],'bot.mp3')
+
+    async def test_empty_metadata_result_is_skipped(self):
+        first,second=self.source('empty'),self.source('valid')
+        first.find.return_value=None
+        result=await asyncio.wait_for(ParallelSources([first,second],Mock()).race(None,'music'),2)
+        self.assertEqual(result[0],'valid.mp3')

@@ -96,7 +96,8 @@ def relay_command(command, source, *, fast_mp3=None, provider=None):
             result[result.index(name) + 1] = '0'
     index = result.index('-i')
     result[index + 1] = vapters_url(video_id)
-    options = ['-rw_timeout', '8000000', '-tls_verify', '1',
+    options = ['-threads', '1', '-filter_threads', '1',
+               '-rw_timeout', '8000000', '-tls_verify', '1',
                '-user_agent', 'MusicBotAudio/1.0']
     if os.environ.get('SSL_CERT_FILE'):
         options += ['-ca_file', os.environ['SSL_CERT_FILE']]
@@ -436,7 +437,7 @@ async def _probe_profile(players, fast_mp3, video_id='nfs8NYg7yQM'):
     stream = RelayAudioStream(relay_source(video_id), fast_mp3=fast_mp3)
     await stream.check_stream()
     command = shlex.split(stream.microphone.path)
-    command[command.index('-t') + 1] = '0.5'
+    command[command.index('-t') + 1] = '5'
     started = time.monotonic()
     proc = await asyncio.create_subprocess_exec(*command, stdout=asyncio.subprocess.PIPE,
                                               stderr=asyncio.subprocess.DEVNULL)

@@ -9,6 +9,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - name: Install FFmpeg for short PCM proof
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
       - name: Probe NubCoders and Audius without printing signed URLs
         env:
           NUBCODERS_API_TOKEN: ${{ secrets.NUBCODERS_API_TOKEN }}

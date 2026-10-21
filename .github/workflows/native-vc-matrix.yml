@@ -1,0 +1,37 @@
+name: Native VC Compatibility Matrix
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/native-vc-matrix.yml'
+  workflow_dispatch:
+jobs:
+  native:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    strategy:
+      fail-fast: false
+      matrix:
+        version: ['2.3.3','3.0.0']
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install isolated native libraries
+        run: python -m pip install "py-tgcalls==${{ matrix.version }}" 'pyrogrammod==2.4.1'
+      - name: Inspect concrete native API contract without connecting Telegram
+        run: |
+          python - <<'PY'
+          import json,inspect,importlib.metadata as md
+          from pytgcalls import PyTgCalls
+          from pytgcalls.types import MediaStream,GroupCallConfig
+          from ntgcalls import ConnectionMode
+          row={'version':md.version('py-tgcalls'),'native_version':md.version('ntgcalls')}
+          for method in ('play','resume','unmute','leave_call','pause','mute'):
+              obj=getattr(PyTgCalls,method,None)
+              row[method]={'exists':obj is not None,'async':inspect.iscoroutinefunction(obj),'signature':str(inspect.signature(obj))[:180] if obj else None}
+          for thing,obj in [('MediaStream',MediaStream),('GroupCallConfig',GroupCallConfig)]:
+              row[thing]=str(inspect.signature(obj))[:250]
+          for value in ('RTC','STREAM'):
+              row['mode_'+value]=hasattr(ConnectionMode,value)
+          print(json.dumps(row,default=str))
+          PY

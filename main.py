@@ -1294,20 +1294,48 @@ async def main() -> None:
                 "Private Group မှာ Music Bot ကို Admin + Invite Users permission "
                 "ပေးပါ။ ပြီးရင် /play ပြန်စမ်းပါ။"
             ) from exc
+        # Telegram can reject a freshly created one-use invite with
+        # InviteHashExpired. Retry once with a separate short-lived invite,
+        # then revoke every invite; never revoke the group's main link.
+        invites = [invite.invite_link]
         try:
-            await assistant.join_chat(invite.invite_link)
+            try:
+                await assistant.join_chat(invite.invite_link)
+            except Exception as exc:
+                # The join may have succeeded remotely even if the RPC timed out.
+                try:
+                    await assistant.get_chat_member(chat_id, "me")
+                    return
+                except Exception:
+                    pass
+                if type(exc).__name__ != "InviteHashExpired":
+                    raise
+                log.warning("Assistant one-use invite expired; retrying with fresh temporary link")
+                retry_invite = await bot.create_chat_invite_link(
+                    chat_id, name="Mudyar Music Assistant Retry"
+                )
+                invites.append(retry_invite.invite_link)
+                await assistant.join_chat(retry_invite.invite_link)
             await assistant.get_chat_member(chat_id, "me")
         except Exception as exc:
+            # Avoid reporting failure if Telegram applied the join before
+            # returning an error or the membership update arrived late.
+            try:
+                await assistant.get_chat_member(chat_id, "me")
+                return
+            except Exception:
+                pass
             log.warning("Assistant join failed: %s", type(exc).__name__)
             raise RuntimeError(
                 "Assistant Auto Join မရသေးဘူး။ Group Join Restriction "
                 "နဲ့ Ban Settings စစ်ပါ။"
             ) from exc
         finally:
-            try:
-                await bot.revoke_chat_invite_link(chat_id, invite.invite_link)
-            except Exception:
-                log.warning("Could not revoke temporary invite for chat %s", chat_id)
+            for link in invites:
+                try:
+                    await bot.revoke_chat_invite_link(chat_id, link)
+                except Exception:
+                    log.warning("Could not revoke temporary invite for chat %s", chat_id)
 
     async def start_idle(
         chat_id: int, player: Player, progress: Message | None = None, *, quiet: bool = False

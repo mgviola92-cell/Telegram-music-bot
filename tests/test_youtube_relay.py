@@ -46,8 +46,8 @@ class RelaySafety(unittest.TestCase):
     def test_fast_mp3_profile_is_input_only_and_optional(self):
         source = relay_source('jNQXAC9IVRw')
         original = ['ffmpeg', '-i', 'placeholder', '-f', 's16le', 'pipe:1']
-        baseline = relay_command(original, source, fast_mp3=False)
-        fast = relay_command(original, source, fast_mp3=True)
+        baseline = relay_command(original, source, fast_mp3=False, provider='legacy')
+        fast = relay_command(original, source, fast_mp3=True, provider='legacy')
         self.assertNotIn('-probesize', baseline)
         self.assertLess(fast.index('-probesize'), fast.index('-i'))
         self.assertEqual(fast[fast.index('-f') + 1], 'mp3')
@@ -64,7 +64,7 @@ class RelaySafety(unittest.TestCase):
 
     def test_native_pcm_and_filters_survive_post_injection(self):
         command = relay_command(['ffmpeg', '-reconnect_at_eof', '1', '-i', 'placeholder',
-                                 '-f', 's16le', 'pipe:1'], relay_source('jNQXAC9IVRw'))
+                                 '-f', 's16le', 'pipe:1'], relay_source('jNQXAC9IVRw'), provider='legacy')
         self.assertEqual(command[command.index('-reconnect_at_eof') + 1], '0')
         data = json.loads(bytes.fromhex(command[command.index('-post_data') + 1]))
         self.assertEqual(data, {'url': 'https://www.youtube.com/watch?v=jNQXAC9IVRw', 'type': 'audio'})
@@ -113,18 +113,18 @@ class RelayIntegration(unittest.IsolatedAsyncioTestCase):
         from types import SimpleNamespace as N
         from youtube_relay import sender_startup_timeout
         source = RelayAudioStream(relay_source('jNQXAC9IVRw'))
-        self.assertEqual(sender_startup_timeout(N(original=N(original=source))), 16)
+        self.assertEqual(sender_startup_timeout(N(original=N(original=source))), 8)
         self.assertEqual(sender_startup_timeout(object()), 4)
         async def slow_resume(chat):
             await asyncio.sleep(.06)
         calls = N(play=AsyncMock(), leave_call=AsyncMock(), resume=AsyncMock(side_effect=slow_resume),
                   unmute=AsyncMock(), _binding=N(get_connection_mode=AsyncMock(return_value=ConnectionMode.RTC),
                                                get_state=AsyncMock(return_value=N(muted=False))))
-        # Scale 4s/16s to .04s/.16s. The .06s first audio must exceed the old
+        # Scale 4s/8s to .04s/.08s. The .06s first audio must exceed the old
         # budget yet succeed once with the relay-specific budget.
         real_wait_for = asyncio.wait_for
         async def scaled_wait_for(awaitable, timeout):
-            return await real_wait_for(awaitable, timeout / 100 if timeout in (4, 16) else timeout)
+            return await real_wait_for(awaitable, timeout / 100 if timeout in (4, 8) else timeout)
         with patch('voice_transport.asyncio.wait_for', side_effect=scaled_wait_for):
             await play_with_reconnect(calls, -100, source)
         calls.play.assert_awaited_once()
@@ -191,7 +191,8 @@ class RelayIntegration(unittest.IsolatedAsyncioTestCase):
         await site.start()
         port = site._server.sockets[0].getsockname()[1]
         try:
-            stream = RelayAudioStream(relay_source('jNQXAC9IVRw'), AudioSettings(effect='tiny'))
+            with patch.dict('os.environ', {'YOUTUBE_AUDIO_PROVIDER': 'legacy'}):
+                stream = RelayAudioStream(relay_source('jNQXAC9IVRw'), AudioSettings(effect='tiny'))
             await stream.check_stream()
             self.assertIsNone(stream.camera)
             command = shlex.split(stream.microphone.path)

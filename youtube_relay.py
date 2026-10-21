@@ -1,7 +1,8 @@
-"""Opt-in YouTube trial: fixed public relay, POST input, no local media file.
+"""YouTube metadata and fixed provider streaming, without local media files.
 
 Only a validated YouTube ID reaches the relay. No account cookies, bot token,
-assistant session or user identifiers are sent. Normal named /play is unchanged.
+assistant session or user identifiers are sent. The original POST relay remains
+available by explicit configuration only; Vapters is the default audio backend.
 """
 import asyncio
 import json
@@ -23,17 +24,32 @@ from music_search import youtube_id, youtube_title
 
 LOG = logging.getLogger('telegram_music')
 ENDPOINT = 'https://cold-lemming-3841.alexainc.deno.net/download'
+# Keep the internal ID marker stable for queues, caches and export identities.
 _MARKER = ENDPOINT + '#video_id='
+VAPTERS_ENDPOINT = 'https://vapters.site/stream/'
 _ID = re.compile(r'[A-Za-z0-9_-]{11}\Z')
 _CACHE = {}
 _ALIASES = {}
 _DIRECT_BACKOFF = 0.0
 _INFLIGHT = {}
 STARTUP_PROBE_UNTIL = 1792507124  # One owner-requested exact-query diagnostic.
+VAPTERS_PROBE_UNTIL = 1792594359  # Temporary owner-authorized integration trial.
 
 
 def enabled():
-    return os.getenv('YOUTUBE_RELAY_ENABLED', '1') == '1'
+    return (os.getenv('YOUTUBE_RELAY_ENABLED', '1') == '1'
+            and audio_provider() in {'vapters', 'legacy'})
+
+
+def audio_provider():
+    """The legacy relay is parked, never an automatic fallback or parallel job."""
+    return os.getenv('YOUTUBE_AUDIO_PROVIDER', 'vapters').strip().lower()
+
+
+def vapters_url(video_id):
+    if not isinstance(video_id, str) or not _ID.fullmatch(video_id):
+        raise ValueError('Invalid YouTube ID')
+    return VAPTERS_ENDPOINT + video_id + '?vid=false&quality=128'
 
 
 def source_id(source):
@@ -50,21 +66,47 @@ def relay_source(video_id):
 
 
 def sender_startup_timeout(stream):
-    """Cold POST audio may need >4s; keep ordinary streams' original budget.
+    """Allow the selected remote provider to start; keep ordinary streams' budget.
 
     WelcomeStream and CheckedAudioStream wrap the actual source. Inspect only
     our fixed marker, with bounded traversal, never arbitrary request URLs.
     """
     for _ in range(4):
         if source_id(getattr(stream, 'relay_source', None)):
-            return 16
+            return 16 if getattr(stream, 'provider', audio_provider()) == 'legacy' else 8
         stream = getattr(stream, 'original', None)
         if stream is None:
             break
     return 4
 
 
-def relay_command(command, source, *, fast_mp3=None):
+def relay_command(command, source, *, fast_mp3=None, provider=None):
+    """Route both playback and effect exports; never POST to legacy by default."""
+    provider = audio_provider() if provider is None else provider
+    if provider == 'legacy':
+        return _legacy_relay_command(command, source, fast_mp3=fast_mp3)
+    if provider != 'vapters':
+        raise ValueError('YouTube audio provider is disabled or unknown')
+    video_id = source_id(source)
+    if not video_id:
+        raise ValueError('Invalid YouTube source')
+    result = list(command)
+    for name in ('-reconnect', '-reconnect_at_eof', '-reconnect_streamed'):
+        if name in result:
+            result[result.index(name) + 1] = '0'
+    index = result.index('-i')
+    result[index + 1] = vapters_url(video_id)
+    options = ['-rw_timeout', '8000000', '-tls_verify', '1',
+               '-user_agent', 'MusicBotAudio/1.0']
+    if os.environ.get('SSL_CERT_FILE'):
+        options += ['-ca_file', os.environ['SSL_CERT_FILE']]
+    result[index:index] = options
+    # The provider returns MP3 or AAC/M4A depending on the song. Autodetect;
+    # legacy fast_mp3 must not force the wrong container here.
+    return result
+
+
+def _legacy_relay_command(command, source, *, fast_mp3=None):
     """Preserve native PCM/output filters; replace only the HTTP input."""
     video_id = source_id(source)
     if not video_id:
@@ -95,17 +137,21 @@ class RelayAudioStream(MediaStream):
             raise ValueError('Invalid relay source')
         self.settings = settings or AudioSettings()
         self.relay_source = source
+        self.provider = audio_provider()
+        if self.provider not in {'vapters', 'legacy'}:
+            raise ValueError('YouTube audio provider is disabled or unknown')
         self.fast_mp3 = fast_mp3
         super().__init__(source, self.settings.parameters,
                          video_flags=MediaStream.Flags.IGNORE,
                          audio_flags=MediaStream.Flags.REQUIRED)
 
     async def check_stream(self):
-        # MP3 input is verified in the isolated live probe and by native frame
-        # checks at playback. A separate FFprobe would POST/download twice.
+        # Native frame checks verify playback. Avoid a second FFprobe request
+        # which would open another provider stream before the real decoder.
         command = build_command('ffmpeg', None, ENDPOINT, self._audio_parameters,
                                 is_livestream=True)
-        command = relay_command(command, self.relay_source, fast_mp3=self.fast_mp3)
+        command = relay_command(command, self.relay_source, fast_mp3=self.fast_mp3,
+                                provider=self.provider)
         command[-1:-1] = ['-t', str(600 / self.settings.speed)]
         self.microphone.path = shlex.join(apply_filters(command, self.settings))
 
@@ -386,8 +432,8 @@ def _busy(players):
                or (p.loading_task and not p.loading_task.done()) for p in players.values())
 
 
-async def _probe_profile(players, fast_mp3):
-    stream = RelayAudioStream(relay_source('nfs8NYg7yQM'), fast_mp3=fast_mp3)
+async def _probe_profile(players, fast_mp3, video_id='nfs8NYg7yQM'):
+    stream = RelayAudioStream(relay_source(video_id), fast_mp3=fast_mp3)
     await stream.check_stream()
     command = shlex.split(stream.microphone.path)
     command[command.index('-t') + 1] = '0.5'
@@ -409,6 +455,7 @@ async def _probe_profile(players, fast_mp3):
             await asyncio.wait({result}, timeout=.25)
         pcm, first_audio = await result
         LOG.info('YouTube relay probe: %s', json.dumps({'ok': proc.returncode == 0 and bool(pcm),
+                 'provider': stream.provider, 'video_id': video_id,
                  'pcm_bytes': len(pcm), 'nonzero': any(pcm),
                  'profile': 'mp3_tuned' if fast_mp3 else 'baseline',
                  'first_audio_seconds': round(first_audio, 2),
@@ -422,6 +469,20 @@ async def _probe_profile(players, fast_mp3):
 
 async def startup_probe(players):
     """Owner's exact failing query; idle-only, metadata only, no chat or VC."""
+    if enabled() and audio_provider() == 'vapters' and 0 < VAPTERS_PROBE_UNTIL - time.time() <= 1800:
+        try:
+            os.close(os.open('/tmp/mudyar_vapters_integration_20261021.once',
+                             os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600))
+        except FileExistsError:
+            return
+        await asyncio.sleep(8)
+        for video_id in ('nfs8NYg7yQM', 'qtYb7nV4814', '2Vv-BfVoq4g'):
+            if _busy(players) or time.time() >= VAPTERS_PROBE_UNTIL:
+                return
+            await _probe_profile(players, False, video_id=video_id)
+            await asyncio.sleep(2)
+        LOG.info('Vapters integrated command probe complete; no VC joins or source changes')
+        return
     if not enabled() or not 0 < STARTUP_PROBE_UNTIL - time.time() <= 1800:
         return
     await asyncio.sleep(8)

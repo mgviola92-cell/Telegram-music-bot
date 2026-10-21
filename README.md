@@ -39,6 +39,18 @@ Optional variables:
 - `MAX_ACTIVE_GROUPS`: default 6 simultaneous voice streams, bounded at 8 in code. The number of groups that can add the bot is not limited by this setting.
 - `ALLOWED_STREAM_HOSTS`: comma-separated allowlist of exact trusted HTTPS audio hostnames; empty by default.
 - `PORT`: set automatically by Render; the code listens on 0.0.0.0.
+- `YOUTUBE_AUDIO_PROVIDER`: `vapters` by default. YouTube metadata still races
+  SoundCloud and Telegram bot sources; this setting changes only the YouTube
+  audio input. Vapters is streamed by HTTPS GET, with no full local download.
+  Its public quota and concurrent-stream limit are unverified.
+  The original POST relay remains in code but is disabled during normal use:
+  only explicitly setting this variable to `legacy` selects it again. It is
+  never tried automatically when Vapters fails; existing music sources handle
+  playback fallback. `off` disables this YouTube candidate.
+- `YOUTUBE_RELAY_ENABLED`: existing overall YouTube candidate switch (`1` by
+  default), retained for compatibility. `0` disables either configured provider.
+- `YOUTUBE_RELAY_FAST_MP3`: applies only to the parked legacy backend. Vapters
+  autodetects MP3 and AAC/M4A containers, including for effect exports.
 
 ### Assistant session
 

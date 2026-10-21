@@ -39,7 +39,7 @@ from stream_probe import probe_audio_url
 from network_audio import DirectAudioStream
 from youtube_relay import (RelayAudioStream, resolve_request as resolve_youtube_relay,
                            source_id as relay_source_id, enabled as youtube_relay_enabled,
-                           sender_startup_timeout)
+                           sender_startup_timeout, audio_provider)
 from relay_cooldown import relay_cooldown, upstream_failure
 from audio_options import AudioSettings, ProcessedAudioStream, EFFECTS, EFFECT_LABELS
 from music_search import collect_choices, SearchSessions, youtube_title, related_query, choose_related, title_key, restricted_error, block_source, source_blocked
@@ -244,7 +244,7 @@ async def _play_with_reconnect(calls: PyTgCalls, chat_id: int, stream: MediaStre
         reason = type(exc).__name__
         if reason in {"NoActiveGroupCall", "NoAudioSourceFound"}:
             raise
-        if sender_startup_timeout(stream) == 16 and upstream_failure(exc):
+        if sender_startup_timeout(stream) in (8, 16) and upstream_failure(exc):
             # Rejoining Telegram cannot repair a confirmed remote HTTP failure.
             # Let the existing source fallback handle it without another POST.
             raise
@@ -938,7 +938,7 @@ async def main() -> None:
             try:
                 relay_cooldown.require_available()
                 relay = await resolve_youtube_relay(song.source)
-                log.info('YouTube relay metadata ready; direct POST audio selected')
+                log.info('YouTube metadata ready; configured audio provider selected')
                 return relay.source, relay.title, relay.duration
             except (asyncio.CancelledError, InterruptedError):
                 raise
@@ -1566,6 +1566,7 @@ async def main() -> None:
                             await wait_for_audio_frames(calls, chat_id)
                         if relay_source_id(source):
                             relay_cooldown.success()
+                            log.info('YouTube audio backend verified provider=%s', audio_provider())
                     except Exception as live_exc:
                         if isinstance(live_exc, AudioTransportUnavailable):
                             raise
@@ -2988,6 +2989,8 @@ async def main() -> None:
         await owner_settings.load()
         await bot.start()
         ready = True
+        log.info('YouTube audio provider=%s; legacy POST active=%s',
+                 audio_provider(), youtube_relay_enabled() and audio_provider() == 'legacy')
         from youtube_cookie_probe import run_cookie_probe
         cookie_probe_task=asyncio.create_task(run_cookie_probe(players))
         from youtube_relay import startup_probe as probe_youtube_relay

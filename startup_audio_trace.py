@@ -18,8 +18,11 @@ _IDS = itertools.count(1)
 
 def source_kind(stream):
     from youtube_relay import source_id
+    from nubcoders_audio import is_nubcoders_stream
     from player_visuals import allowed_audio_cdn
     for _ in range(5):
+        if is_nubcoders_stream(getattr(stream, 'source_url', None)):
+            return 'nubcoders_audio'
         if source_id(getattr(stream, 'relay_source', None)):
             return 'youtube_relay'
         path = getattr(stream, '_audio_path', None) or getattr(stream, '_media_path', None)

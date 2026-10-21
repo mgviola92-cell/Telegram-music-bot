@@ -60,3 +60,22 @@ class SourceRaceEdges(unittest.IsolatedAsyncioTestCase):
         first.find.return_value=None
         result=await asyncio.wait_for(ParallelSources([first,second],Mock()).race(None,'music'),2)
         self.assertEqual(result[0],'valid.mp3')
+
+    async def test_provider_cooldown_skips_only_unhealthy_source(self):
+        from provider_health import ProviderHealth
+        health=ProviderHealth(threshold=1,cooldown_seconds=45)
+        bad,good=self.source('bad'),self.source('good')
+        health.failure(bad)
+        result=await ParallelSources([bad,good],Mock(),health=health).race(None,'music')
+        self.assertEqual(result[0],'good.mp3')
+        bad.find.assert_not_awaited()
+
+    async def test_provider_lookup_failure_records_health(self):
+        from provider_health import ProviderHealth
+        health=ProviderHealth(threshold=1,cooldown_seconds=45)
+        bad,good=self.source('bad'),self.source('good')
+        bad.find.side_effect=RuntimeError('temporarily unavailable')
+        result=await ParallelSources([bad,good],Mock(),health=health).race(None,'music')
+        self.assertEqual(result[0],'good.mp3')
+        self.assertFalse(health.available(bad))
+        self.assertTrue(health.available(good))

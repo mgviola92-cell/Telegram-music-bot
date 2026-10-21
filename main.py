@@ -51,6 +51,8 @@ from lybot_source import LyBotSource, BotSourceUnavailable, resolve_with_fallbac
 from voice_transport import (clear_stale_voice, ensure_native_sender,
                              AudioTransportUnavailable, AudioStartupTimeout)
 from source_race import ParallelSources
+from provider_race import race_candidates
+from nubcoders_source import resolve as resolve_nubcoders_audio
 from effect_exports import EffectExports
 from track_metadata import remember_metadata, lookup_metadata
 from queue_receipts import acknowledge_queued, schedule_receipts
@@ -971,9 +973,19 @@ async def main() -> None:
             async def youtube_candidate():
                 relay = await resolve_youtube_relay(song.source)
                 return relay.source, relay.title, relay.duration
+            async def nubcoders_candidate():
+                stream = await asyncio.wait_for(resolve_nubcoders_audio(song.source), timeout=10)
+                return stream, queue_track_title(song) + ' · NubCoders', song.duration_seconds
+            candidates = []
+            if youtube_relay_enabled() and not song.skip_relay and relay_cooldown.available():
+                candidates.append(('vapters', youtube_candidate))
+            if (os.getenv('NUBCODERS_ENABLED', '0') == '1'
+                    and os.getenv('NUBCODERS_API_TOKEN')):
+                candidates.append(('nubcoders', nubcoders_candidate))
+            async def remote_candidate():
+                return await race_candidates(candidates)
             return await (lybot or ParallelSources([], clean_temp)).race(primary, song.source,
-                extra=youtube_candidate if youtube_relay_enabled() and not song.skip_relay
-                and relay_cooldown.available() else None)
+                extra=remote_candidate if candidates else None)
         try:
             return await primary.consume()
         except (asyncio.CancelledError, InterruptedError):

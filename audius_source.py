@@ -11,6 +11,8 @@ import re
 import shutil
 import tempfile
 import threading
+import time
+from urllib.error import HTTPError
 from pathlib import Path
 from urllib.parse import urlencode, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
@@ -21,6 +23,15 @@ MAX_TRACK_SECONDS = 600
 MAX_STREAM_BYTES = 24 * 1024 * 1024
 MAX_RESULTS = 5
 ALLOWED_STREAM_SUFFIXES = (".audius.co", ".audius.org", ".audiusindex.org")
+_BACKOFF_UNTIL = 0.0
+
+
+def _headers(accept):
+    result = {"Accept": accept, "User-Agent": "MudyarMusicBot/1.0"}
+    token = os.getenv("AUDIUS_BEARER_TOKEN", "").strip()
+    if token:
+        result["Authorization"] = "Bearer " + token
+    return result
 
 
 def safe_audius_url(value: str) -> bool:
@@ -53,21 +64,29 @@ class AudiusOnlyRedirect(HTTPRedirectHandler):
 
 def find_audius_tracks(query: str, *, opener=None) -> list[dict]:
     """Return public, accessible tracks from the Audius REST search endpoint."""
-    if not query.strip() or len(query) > 120:
+    global _BACKOFF_UNTIL
+    if not query.strip() or len(query) > 120 or time.monotonic() < _BACKOFF_UNTIL:
         return []
     opener = opener or build_opener(AudiusOnlyRedirect())
     params = {"query": query, "limit": MAX_RESULTS, "app_name": "mudyar-music"}
     if os.getenv("AUDIUS_API_KEY"):
         params["api_key"] = os.environ["AUDIUS_API_KEY"]
     url = API_BASE + "/tracks/search?" + urlencode(params)
-    request = Request(url, headers={"Accept": "application/json", "User-Agent": "MudyarMusicBot/1.0"})
-    with opener.open(request, timeout=12) as response:
-        if int(response.status) != 200:
-            raise ValueError("Audius search returned HTTP error")
-        raw = response.read(512 * 1024 + 1)
-        if len(raw) > 512 * 1024:
-            raise ValueError("Audius search result exceeded safe limit")
-        payload = json.loads(raw)
+    request = Request(url, headers=_headers("application/json"))
+    try:
+        with opener.open(request, timeout=12) as response:
+            if int(response.status) != 200:
+                raise ValueError("Audius search returned HTTP error")
+            raw = response.read(512 * 1024 + 1)
+            if len(raw) > 512 * 1024:
+                raise ValueError("Audius search result exceeded safe limit")
+            payload = json.loads(raw)
+    except HTTPError as error:
+        if error.code in (401, 403, 429, 503):
+            _BACKOFF_UNTIL = time.monotonic() + 90
+        LOG.info("Audius search API returned HTTP status=%s; backoff=%s", error.code,
+                 error.code in (401, 403, 429, 503))
+        return []
     return payload.get("data", []) if isinstance(payload, dict) and isinstance(payload.get("data"), list) else []
 
 
@@ -115,7 +134,7 @@ def fetch_audius_audio(
         target = directory / "audius.mp3"
         try:
             request = Request(
-                url, headers={"Accept": "audio/mpeg", "User-Agent": "MudyarMusicBot/1.0"}
+                url, headers=_headers("audio/mpeg")
             )
             with opener.open(request, timeout=18) as response:
                 if not safe_audius_url(response.url if isinstance(response.url, str) else response.geturl()):

@@ -247,12 +247,12 @@ async def _play_with_reconnect(calls: PyTgCalls, chat_id: int, stream: MediaStre
         reason = type(exc).__name__
         if reason in {"NoActiveGroupCall", "NoAudioSourceFound"}:
             raise
-        if sender_startup_timeout(stream) == 16 and isinstance(exc, AudioStartupTimeout):
+        if sender_startup_timeout(stream) == 8 and isinstance(exc, AudioStartupTimeout):
             # A remote decoder deadline is not evidence of a stale Telegram
             # connection. Keep the VC and let the existing source fallback run.
             log.warning('Remote audio startup deadline exceeded in chat %s; keeping VC for source fallback', chat_id)
             raise
-        if sender_startup_timeout(stream) == 16 and upstream_failure(exc):
+        if sender_startup_timeout(stream) == 8 and upstream_failure(exc):
             # Rejoining Telegram cannot repair a confirmed remote HTTP failure.
             # Let the existing source fallback handle it without another POST.
             raise
@@ -1628,7 +1628,7 @@ async def main() -> None:
                                           audio_stream(source, settings=settings))
                         await play_with_reconnect(calls, chat_id, stream)
                         if not song.video:
-                            await wait_for_audio_frames(calls, chat_id)
+                            await wait_for_audio_frames(calls, chat_id, timeout=4 if relay_source_id(source) else 8)
                         if relay_source_id(source):
                             relay_cooldown.success()
                             log.info('YouTube audio backend verified provider=%s', audio_provider())

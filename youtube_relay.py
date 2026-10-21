@@ -33,7 +33,6 @@ _ALIASES = {}
 _DIRECT_BACKOFF = 0.0
 _INFLIGHT = {}
 STARTUP_PROBE_UNTIL = 1792507124  # One owner-requested exact-query diagnostic.
-VAPTERS_PROBE_UNTIL = 1792594359  # Temporary owner-authorized integration trial.
 
 
 def enabled():
@@ -470,20 +469,6 @@ async def _probe_profile(players, fast_mp3, video_id='nfs8NYg7yQM'):
 
 async def startup_probe(players):
     """Owner's exact failing query; idle-only, metadata only, no chat or VC."""
-    if enabled() and audio_provider() == 'vapters' and 0 < VAPTERS_PROBE_UNTIL - time.time() <= 1800:
-        try:
-            os.close(os.open('/tmp/mudyar_vapters_integration_20261021.once',
-                             os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600))
-        except FileExistsError:
-            return
-        await asyncio.sleep(8)
-        for video_id in ('nfs8NYg7yQM', 'qtYb7nV4814', '2Vv-BfVoq4g'):
-            if _busy(players) or time.time() >= VAPTERS_PROBE_UNTIL:
-                return
-            await _probe_profile(players, False, video_id=video_id)
-            await asyncio.sleep(2)
-        LOG.info('Vapters integrated command probe complete; no VC joins or source changes')
-        return
     if not enabled() or not 0 < STARTUP_PROBE_UNTIL - time.time() <= 1800:
         return
     await asyncio.sleep(8)

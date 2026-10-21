@@ -66,10 +66,10 @@ class VaptersCommand(unittest.IsolatedAsyncioTestCase):
         command = shlex.split(stream.microphone.path)
         self.assertIn(vapters_url('nfs8NYg7yQM'), command)
         self.assertNotIn('-post_data', command)
-        self.assertEqual(sender_startup_timeout(N(original=N(original=stream))), 16)
+        self.assertEqual(sender_startup_timeout(N(original=N(original=stream))), 8)
         with patch.dict('os.environ', {'YOUTUBE_AUDIO_PROVIDER': 'legacy'}):
             legacy = RelayAudioStream(relay_source('nfs8NYg7yQM'))
-        self.assertEqual(sender_startup_timeout(legacy), 16)
+        self.assertEqual(sender_startup_timeout(legacy), 8)
         self.assertEqual(sender_startup_timeout(object()), 4)
 
     async def test_real_native_get_command_decodes_mp3_and_m4a_with_effects(self):

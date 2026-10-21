@@ -113,18 +113,18 @@ class RelayIntegration(unittest.IsolatedAsyncioTestCase):
         from types import SimpleNamespace as N
         from youtube_relay import sender_startup_timeout
         source = RelayAudioStream(relay_source('jNQXAC9IVRw'))
-        self.assertEqual(sender_startup_timeout(N(original=N(original=source))), 16)
+        self.assertEqual(sender_startup_timeout(N(original=N(original=source))), 8)
         self.assertEqual(sender_startup_timeout(object()), 4)
         async def slow_resume(chat):
             await asyncio.sleep(.06)
         calls = N(play=AsyncMock(), leave_call=AsyncMock(), resume=AsyncMock(side_effect=slow_resume),
                   unmute=AsyncMock(), _binding=N(get_connection_mode=AsyncMock(return_value=ConnectionMode.RTC),
                                                get_state=AsyncMock(return_value=N(muted=False))))
-        # Scale 4s/16s to .04s/.16s. The .06s first audio must exceed the old
+        # Scale 4s/8s to .04s/.08s. The .06s first audio must exceed the old
         # budget yet succeed once with the relay-specific budget.
         real_wait_for = asyncio.wait_for
         async def scaled_wait_for(awaitable, timeout):
-            return await real_wait_for(awaitable, timeout / 100 if timeout in (4, 16) else timeout)
+            return await real_wait_for(awaitable, timeout / 100 if timeout in (4, 8) else timeout)
         with patch('voice_transport.asyncio.wait_for', side_effect=scaled_wait_for):
             await play_with_reconnect(calls, -100, source)
         calls.play.assert_awaited_once()

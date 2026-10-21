@@ -15,11 +15,15 @@ import time
 
 LOG = logging.getLogger('telegram_music')
 PROBE_UNTIL = 1792582200  # 2026-10-21 11:30 UTC, never a recurring task.
-MARKER = Path('/tmp/mudyar_provider_comparison_20261021.started')
+MARKER = Path('/tmp/mudyar_provider_sustained_20261021.started')
 VIDEOS = ('nfs8NYg7yQM', 'qtYb7nV4814', '2Vv-BfVoq4g')
 PROVIDERS = ('vapters', 'tomatofist', 'legacy_relay')
+RUN_PROVIDERS = ('vapters',)
+SAMPLE_SECONDS = 10
+STREAM_REALTIME = True
 FIELDS = {'provider', 'video_id', 'result', 'error', 'first_pcm_seconds',
-          'total_seconds', 'pcm_bytes', 'duration_seconds', 'title', 'phase'}
+          'total_seconds', 'pcm_bytes', 'duration_seconds', 'title', 'phase',
+          'ffmpeg_returncode', 'sample_seconds'}
 
 
 def busy(players):
@@ -59,13 +63,16 @@ def classify(stderr):
 
 
 def probe(provider, video_id, timeout=28):
-    row = {'provider': provider, 'video_id': video_id, 'result': 'failed', 'pcm_bytes': 0}
+    row = {'provider': provider, 'video_id': video_id, 'result': 'failed',
+           'pcm_bytes': 0, 'sample_seconds': SAMPLE_SECONDS}
     command = ['ffmpeg', '-nostdin', '-hide_banner', '-v', 'info', '-rw_timeout',
                '10000000', '-tls_verify', '1']
     if os.environ.get('SSL_CERT_FILE'):
         command += ['-ca_file', os.environ['SSL_CERT_FILE']]
+    if STREAM_REALTIME:
+        command += ['-re']
     command += input_options(provider, video_id)
-    command += ['-t', '1', '-vn', '-threads', '1', '-filter_threads', '1',
+    command += ['-t', str(SAMPLE_SECONDS), '-vn', '-threads', '1', '-filter_threads', '1',
                 '-ac', '1', '-ar', '16000', '-flush_packets', '1',
                 '-f', 's16le', 'pipe:1']
     started = time.monotonic()
@@ -90,13 +97,15 @@ def probe(provider, video_id, timeout=28):
                     row['pcm_bytes'] += len(data)
                 elif len(stderr) < 16384:
                     stderr.extend(data[:16384 - len(stderr)])
-            if row['pcm_bytes'] > 65536:
+            if row['pcm_bytes'] > SAMPLE_SECONDS * 32000 * 2:
                 row['error'] = 'sample_budget_exceeded'
                 break
         if selector.get_map() and process.poll() is None:
             process.kill()
         process.wait(timeout=2)
-        if process.returncode == 0 and row['pcm_bytes'] >= 32000:
+        row['ffmpeg_returncode'] = process.returncode
+        # AAC priming may produce slightly less than the requested PCM duration.
+        if process.returncode == 0 and row['pcm_bytes'] >= SAMPLE_SECONDS * 32000 * .95:
             row['result'] = 'decoded_audio'
         else:
             row.setdefault('error', classify(bytes(stderr)))
@@ -173,7 +182,7 @@ async def run_provider_probe(players, until=None):
         return
     successful = []
     # Test every provider even if an earlier one succeeded. One stream at a time.
-    for provider in PROVIDERS:
+    for provider in RUN_PROVIDERS:
         for video_id in VIDEOS if provider != 'legacy_relay' else VIDEOS[:1]:
             if busy(players) or time.time() >= until:
                 LOG.info('YouTube provider comparison: stopped_for_playback_or_expiry')

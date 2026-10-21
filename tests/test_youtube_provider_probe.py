@@ -35,7 +35,8 @@ class StreamProbeTests(TestCase):
                 "import sys,time;time.sleep(.12);"
                 "sys.stderr.write('Duration: 00:03:51.00\\n    title : Attention\\n');"
                 "sys.stdout.buffer.write(bytes(32000))"], **kwargs)
-        with patch.object(probe.subprocess, 'Popen', side_effect=spawn):
+        with patch.object(probe.subprocess, 'Popen', side_effect=spawn), \
+             patch.object(probe, 'SAMPLE_SECONDS', 1):
             row = probe.probe('vapters', probe.VIDEOS[0], timeout=3)
         self.assertEqual(row['result'], 'decoded_audio')
         self.assertEqual(row['pcm_bytes'], 32000)
@@ -43,6 +44,17 @@ class StreamProbeTests(TestCase):
         self.assertEqual(row['duration_seconds'], 231)
         self.assertEqual(row['title'], 'Attention')
         self.assertNotIn('https://', json.dumps(row))
+
+    def test_small_aac_priming_trim_is_not_falsely_rejected(self):
+        original = subprocess.Popen
+        def spawn(command, **kwargs):
+            return original([sys.executable, '-c',
+                             'import sys;sys.stdout.buffer.write(bytes(31760))'], **kwargs)
+        with patch.object(probe.subprocess, 'Popen', side_effect=spawn), \
+             patch.object(probe, 'SAMPLE_SECONDS', 1):
+            row = probe.probe('vapters', probe.VIDEOS[0], timeout=3)
+        self.assertEqual(row['result'], 'decoded_audio')
+        self.assertEqual(row['ffmpeg_returncode'], 0)
 
     def test_stalled_ffmpeg_is_killed_and_reaped(self):
         original = subprocess.Popen
@@ -86,6 +98,7 @@ class RunnerTests(IsolatedAsyncioTestCase):
                     'result': 'failed' if provider == 'legacy_relay' else 'decoded_audio'}
         with tempfile.TemporaryDirectory() as folder, \
              patch.object(probe, 'MARKER', Path(folder) / 'started'), \
+             patch.object(probe, 'RUN_PROVIDERS', probe.PROVIDERS), \
              patch.object(probe.asyncio, 'sleep', AsyncMock()), \
              patch.object(probe, 'attempt', side_effect=attempt):
             await probe.run_provider_probe({}, until=time.time() + 600)

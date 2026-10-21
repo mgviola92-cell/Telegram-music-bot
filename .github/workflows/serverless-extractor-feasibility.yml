@@ -1,0 +1,35 @@
+name: Serverless Extractor Feasibility (Isolated)
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/serverless-extractor-feasibility.yml'
+  workflow_dispatch:
+jobs:
+  extractor_probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install isolated yt-dlp
+        run: python -m pip install --quiet 'yt-dlp>=2025.1.15,<2027'
+      - name: Check external extraction only (no downloads)
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json,subprocess,time
+          url='https://www.youtube.com/watch?v=nfs8NYg7yQM'
+          clients=['android_vr','web_safari']
+          for client in clients:
+              start=time.monotonic()
+              cmd=['python','-m','yt_dlp','--no-playlist','--skip-download','--no-warnings',
+                   '--no-check-certificates','--socket-timeout','7','--retries','0',
+                   '--extractor-args',f'youtube:player_client={client}',
+                   '--print','%(id)s|%(ext)s|%(duration)s',url]
+              try:
+                  p=subprocess.run(cmd,text=True,capture_output=True,timeout=24)
+                  print(json.dumps({'client':client,'ok':p.returncode==0,'seconds':round(time.monotonic()-start,3),'returncode':p.returncode,'error_type':(p.stderr.splitlines()[-1][:160] if p.stderr.strip() else ''),'metadata_only':True}))
+              except subprocess.TimeoutExpired:
+                  print(json.dumps({'client':client,'ok':False,'seconds':round(time.monotonic()-start,3),'error_type':'TimeoutExpired','metadata_only':True}))
+          PY

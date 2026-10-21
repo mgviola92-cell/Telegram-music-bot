@@ -121,7 +121,7 @@ class ProcessAndScheduleTests(unittest.IsolatedAsyncioTestCase):
             count = len(commands)
             await matrix.run_client_matrix({}, until=time.time() + 600)
         self.assertEqual(len(commands), count)
-        self.assertEqual(count, 11)  # Ten ordered samples and one temporary install.
+        self.assertEqual(count, len(matrix.CASES) * len(matrix.VIDEOS) + 1)
         samples = [c for c, env in commands if '--client' in c]
         clients = [c[c.index('--client') + 1] for c in samples]
         self.assertEqual(clients, [case[1] for case in matrix.CASES for _ in matrix.VIDEOS])

@@ -19,11 +19,12 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
+from urllib.parse import urlsplit
 
 LOG = logging.getLogger('telegram_music')
 # This diagnostic release is deliberately inert after this fixed UTC deadline.
 PROBE_UNTIL = 1792579200  # 2026-10-21 10:40 UTC
-PROBE_MARKER = Path('/tmp/mudyar_client_matrix_20261021.started')
+PROBE_MARKER = Path('/tmp/mudyar_client_matrix_extended_20261021.started')
 CASES = (
     ('yt-dlp', 'web_embedded', True),
     ('yt-dlp', 'tv', True),
@@ -31,11 +32,12 @@ CASES = (
     ('yt-dlp', 'android', False),
     ('yt-dlp', 'android_vr', False),
 )
-VIDEOS = ('nfs8NYg7yQM', 'qtYb7nV4814')
+VIDEOS = ('nfs8NYg7yQM',)
 FIELDS = {'adapter', 'client', 'video_id', 'result', 'error', 'cookie_result',
           'cookies_used', 'audio_only', 'audio_formats', 'format_id',
           'extract_seconds', 'decode_seconds', 'decoded_pcm_bytes', 'seconds',
-          'media_status', 'media_kind', 'ffmpeg_error', 'version'}
+          'media_status', 'media_kind', 'ffmpeg_error', 'version', 'last_stage',
+          'diagnostic_note'}
 RESULTS = {'decoded_audio', 'decode_failed', 'extract_failed', 'no_formats',
            'cookie_unavailable', 'probe_timeout', 'aborted_for_playback',
            'probe_process_failed', 'dependency_unavailable', 'setup_ok',
@@ -58,6 +60,7 @@ def error_kind(error):
                          (('requested format is not available',), 'no_formats'),
                          (('innertube_context',), 'missing_player_context'),
                          (('reload',), 'reload_required'),
+                         (('failed to extract any player response',), 'no_player_response'),
                          (('invalid data',), 'invalid_media'),
                          (('resolve',), 'network')):
         if all(term in text for term in terms):
@@ -144,17 +147,33 @@ def decode_media(url, headers):
     return row
 
 
-def extract_ytdlp(client, video_id, cookie_file):
+def extract_ytdlp(client, video_id, cookie_file, profile):
     from yt_dlp import YoutubeDL
     from yt_dlp.version import __version__
 
     class Silent:
-        def debug(self, *args): pass
-        def warning(self, *args): pass
+        def debug(self, message):
+            text = str(message).lower()
+            for phrase, label in (('downloading webpage', 'webpage'),
+                                  ('player api json', 'player_api'),
+                                  ('downloading player', 'player_js'),
+                                  ('solving js challenges', 'js_challenge'),
+                                  ('downloading m3u8', 'hls_manifest')):
+                if phrase in text:
+                    profile['last_stage'] = label
+                    break
+        def warning(self, message):
+            text = str(message).lower()
+            for phrase, label in (('po token', 'po_token_warning'),
+                                  ('challenge', 'js_challenge_warning'),
+                                  ('does not support cookies', 'cookies_unsupported'),
+                                  ('drm', 'drm_warning')):
+                if phrase in text:
+                    profile['diagnostic_note'] = label
         def error(self, *args): pass
 
     options = dict(quiet=True, logger=Silent(), noplaylist=True, skip_download=True,
-                   format='bestaudio/best', socket_timeout=6, retries=0,
+                   format='bestaudio/best', socket_timeout=20, retries=0,
                    extractor_retries=0, cachedir=False,
                    extractor_args={'youtube': {'player_client': [client]}})
     if cookie_file:
@@ -175,12 +194,23 @@ def extract_ytdlp(client, video_id, cookie_file):
                              for f in info.get('formats', []))}
 
 
-def extract_pytubefix(client, video_id):
-    from pytubefix import YouTube, __version__
+def extract_pytubefix(client, video_id, profile):
+    from pytubefix import YouTube, __version__, request
     from pytubefix.innertube import _default_clients
     youtube = YouTube('https://www.youtube.com/watch?v=' + video_id, client=client,
                       use_oauth=False, allow_oauth_cache=False)
-    streams = youtube.streams
+    original = request._execute_request
+    def measured(url, *args, **kwargs):
+        path = urlsplit(url).path
+        profile['last_stage'] = ('player_api' if '/youtubei/' in path
+                                 else 'player_js' if '/s/player/' in path
+                                 else 'webpage')
+        return original(url, *args, **kwargs)
+    request._execute_request = measured
+    try:
+        streams = youtube.streams
+    finally:
+        request._execute_request = original
     stream = streams.get_audio_only()
     if stream is None:
         raise ValueError('requested format is not available')
@@ -191,15 +221,16 @@ def extract_pytubefix(client, video_id):
 
 def probe(adapter, client, video_id, folder, cookie_file=None):
     import socket
-    socket.setdefaulttimeout(6)
+    socket.setdefaulttimeout(20)
     started = time.monotonic()
     row = {'adapter': adapter, 'client': client, 'video_id': video_id,
            'cookies_used': bool(cookie_file), 'result': 'extract_failed'}
+    profile = {}
     try:
         if adapter == 'yt-dlp':
-            url, headers, metadata = extract_ytdlp(client, video_id, cookie_file)
+            url, headers, metadata = extract_ytdlp(client, video_id, cookie_file, profile)
         else:
-            url, headers, metadata = extract_pytubefix(client, video_id)
+            url, headers, metadata = extract_pytubefix(client, video_id, profile)
         row.update(metadata, extract_seconds=round(time.monotonic() - started, 3))
         if not isinstance(url, str) or not url.startswith('https://'):
             row['result'] = 'no_formats'
@@ -209,6 +240,7 @@ def probe(adapter, client, video_id, folder, cookie_file=None):
         row.update(result='dependency_unavailable', error='dependency_unavailable')
     except Exception as error:
         row['error'] = error_kind(error)
+    row.update(profile)
     row['seconds'] = round(time.monotonic() - started, 3)
     return row
 
@@ -294,7 +326,7 @@ async def run_client_matrix(players, until=None):
                 LOG.info('YouTube client matrix: attempt %s %s %s cookies=%s',
                          adapter, client, video_id, cookies)
                 output, status = await guarded_process(command, players,
-                                                      min(48, until - time.time()), env=env)
+                                                      min(90, until - time.time()), env=env)
                 row = {'adapter': adapter, 'client': client, 'video_id': video_id,
                        'result': status if status != 'completed' else 'probe_process_failed'}
                 if output:

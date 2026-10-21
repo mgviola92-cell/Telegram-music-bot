@@ -22,7 +22,7 @@ class NubCodersAudioTests(unittest.IsolatedAsyncioTestCase):
     async def test_native_stream_uses_ffmpeg_input_without_head_probe(self):
         stream = NubCodersAudioStream(VALID)
         with patch('nubcoders_audio.build_command',
-                   return_value=['ffmpeg','-i','placeholder','-f','s16le','pipe:1']):
+                   return_value=['ffmpeg','-i',VALID,'-f','s16le','pipe:1']):
             await stream.check_stream()
         self.assertIn('api.nubcoders.com/stream/resolver/sample-signed-id',
                       stream.microphone.path)
@@ -31,7 +31,7 @@ class NubCodersAudioTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_probe_accepts_real_pcm(self):
         process=SimpleNamespace(returncode=0,
-                                communicate=AsyncMock(return_value=(b'\\x00'*4800,b'')))
+                                communicate=AsyncMock(return_value=(bytes(4800),b'')))
         with patch('nubcoders_audio.asyncio.create_subprocess_exec',
                    new=AsyncMock(return_value=process)) as start:
             result=await verify_nubcoders_audio(VALID)

@@ -51,7 +51,17 @@ jobs:
                                   # Whitelist only non-sensitive numerical quota fields.
                                   data={k:v for k,v in obj.items() if k in ('limit','remaining','used','daily_limit','requests_remaining') and type(v) is int}
                           except Exception: pass
-                      print(json.dumps({'test':name,'status':r.status,'content_type':typ,'bytes':len(body),'duration_s':round(time.monotonic()-t,3),'quota':data}))
+                      if 'json' in typ and name in ('info','stream'):
+                          try:
+                              obj=json.loads(body)
+                              if isinstance(obj,dict):
+                                  # Never print response values: may contain signed URLs or IDs.
+                                  data={'fields':sorted(k for k in obj if k.lower() not in ('token','secret','key','authorization'))[:25],
+                                        'has_stream_url':any(k in obj for k in ('url','stream_url','audio_url','stream')),
+                                        'success_flag':obj.get('success') if type(obj.get('success')) is bool else None}
+                                  if type(obj.get('status')) is int: data['api_status']=obj['status']
+                          except Exception: pass
+                      print(json.dumps({'test':name,'status':r.status,'content_type':typ,'bytes':len(body),'duration_s':round(time.monotonic()-t,3),'safe_shape':data}))
               except urllib.error.HTTPError as e:
                   print(json.dumps({'test':name,'status':e.code,'duration_s':round(time.monotonic()-t,3),'redirect_blocked':e.code in (301,302,303,307,308)}))
               except Exception as e:

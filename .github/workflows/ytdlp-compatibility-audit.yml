@@ -1,0 +1,29 @@
+name: yt-dlp compatibility audit
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/ytdlp-compatibility-audit.yml'
+  workflow_dispatch:
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install current production-range extraction tools
+        run: python -m pip install 'yt-dlp>=2025.1.15,<2027' 'yt-dlp-ejs==0.8.0' 'deno==2.9.7'
+      - name: Inspect current versions and extractor metadata without downloading
+        shell: bash
+        run: |
+          python - <<'PY'
+          import importlib.metadata as m
+          import subprocess, json
+          for name in ('yt-dlp','yt-dlp-ejs','deno'):
+              print('package',name,m.version(name))
+          p=subprocess.run(['python','-m','yt_dlp','--version'],capture_output=True,text=True,timeout=8)
+          print('cli_ok',p.returncode==0,'version',p.stdout.strip()[:50])
+          p=subprocess.run(['python','-m','yt_dlp','--list-extractors'],capture_output=True,text=True,timeout=12)
+          print('extractor_list_ok',p.returncode==0,'extractor_count',len(p.stdout.splitlines()))
+          PY

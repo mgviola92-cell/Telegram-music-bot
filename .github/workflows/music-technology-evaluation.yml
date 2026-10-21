@@ -1,0 +1,112 @@
+name: Music Technology Evaluation (Isolated)
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/music-technology-evaluation.yml'
+  workflow_dispatch:
+jobs:
+  compatibility:
+    strategy:
+      fail-fast: false
+      matrix:
+        pytgcalls: ['2.3.3','3.0.0']
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install library versions in isolated runner
+        run: python -m pip install "py-tgcalls==${{ matrix.pytgcalls }}" "pyrogrammod==2.4.1" "yt-dlp>=2025.1.15,<2027"
+      - name: Verify API imports and versions
+        run: |
+          python - <<'PY'
+          import importlib.metadata as m, json
+          row={'pytgcalls':m.version('py-tgcalls'),'pyrogrammod':m.version('pyrogrammod'),'yt_dlp':m.version('yt-dlp')}
+          try:
+              from pyrogram import Client
+              from pytgcalls import PyTgCalls
+              from pytgcalls.types import MediaStream, StreamEnded, GroupCallConfig
+              from pytgcalls.ffmpeg import build_command
+              row['bot_current_imports']=True
+          except Exception as exc:
+              row['bot_current_imports']=False
+              row['error']=type(exc).__name__+': '+str(exc)[:120]
+          print(json.dumps(row))
+          PY
+  public_catalogs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Test public catalogs and project repository availability without tokens
+        run: |
+          python - <<'PY'
+          import urllib.request,urllib.error,time,json
+          urls=[
+            ('audius_hosts','https://api.audius.co',8192),
+            ('audius_search','https://discoveryprovider.audius.co/v1/tracks/search?query=electronic&limit=1&app_name=MudyarMusicResearch',4096),
+            ('jamendo_tracks_no_client','https://api.jamendo.com/v3.0/tracks/?format=json&limit=1',2048),
+            ('yukki_repo','https://api.github.com/repos/TeamYukki/YukkiMusicBot',1024),
+            ('nub_music_repo','https://api.github.com/repos/nub-coders/music-bot',1024),
+            ('yt_dlp_latest','https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest',1024),
+          ]
+          for name,url,limit in urls:
+              t=time.monotonic()
+              try:
+                  req=urllib.request.Request(url,headers={'User-Agent':'MudyarMusicResearch/1.0'})
+                  with urllib.request.urlopen(req,timeout=9) as res:
+                      chunk=res.read(limit)
+                      print(json.dumps(dict(name=name,status=res.status,content_type=res.headers.get('Content-Type'),bytes=len(chunk),seconds=round(time.monotonic()-t,2))))
+              except Exception as ex:
+                  print(json.dumps(dict(name=name,error=type(ex).__name__,code=getattr(ex,'code',None),seconds=round(time.monotonic()-t,2))))
+          PY
+
+  catalog_payload_validation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Validate catalog results and stream response without full media download
+        run: |
+          python - <<'PY'
+          import urllib.request, urllib.error, json, time
+          def query(url):
+              req=urllib.request.Request(url,headers={'User-Agent':'MudyarMusicResearch/1.0'})
+              with urllib.request.urlopen(req,timeout=10) as r:
+                  return json.loads(r.read(150000))
+          try:
+              hosts=query('https://api.audius.co')
+              host=(hosts.get('data') or [None])[0]
+              print('audius_host_found',bool(host))
+              if host:
+                  catalog=query(host.rstrip('/')+'/v1/tracks/search?query=electronic&limit=1&app_name=MudyarMusicResearch')
+                  tracks=catalog.get('data') or []
+                  print('audius_results',len(tracks),'first_track_id_present',bool(tracks and tracks[0].get('id')))
+                  if tracks:
+                      tid=tracks[0]['id']
+                      stream=host.rstrip('/')+'/v1/tracks/'+tid+'/stream?app_name=MudyarMusicResearch'
+                      req=urllib.request.Request(stream,headers={'User-Agent':'MudyarMusicResearch/1.0','Range':'bytes=0-4095'})
+                      try:
+                          with urllib.request.urlopen(req,timeout=10) as r:
+                              data=r.read(4096)
+                              print('audius_stream_status',r.status,'type',r.headers.get('content-type'),'bytes',len(data))
+                      except Exception as ex:
+                          print('audius_stream_error',type(ex).__name__,getattr(ex,'code',None))
+          except Exception as ex: print('audius_error',type(ex).__name__,str(ex)[:100])
+          try:
+              j=query('https://api.jamendo.com/v3.0/tracks/?format=json&limit=1')
+              print('jamendo_status',j.get('headers',{}).get('status'),'jamendo_message',str(j.get('headers',{}).get('error_message',''))[:120],'track_count',len(j.get('results',[])))
+          except Exception as ex: print('jamendo_error',type(ex).__name__,str(ex)[:100])
+          PY
+
+  source_regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Run source-race cancellation and fallback tests
+        run: |
+          python -m pip install 'py-tgcalls==2.3.3' 'pyrogrammod==2.4.1' 'aiohttp>=3.10,<4'
+          python -m unittest -v tests.test_source_race tests.test_source_race_edges tests.test_provider_health tests.test_nubcoders_source tests.test_provider_race

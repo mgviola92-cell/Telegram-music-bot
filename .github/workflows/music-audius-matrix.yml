@@ -1,0 +1,43 @@
+name: Audius Bounded Matrix (Research Only)
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/music-audius-matrix.yml'
+  workflow_dispatch:
+jobs:
+  search_and_decode:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Install FFmpeg
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+      - name: Search diverse queries and compare bounded decoding
+        shell: bash
+        run: |
+          python - <<'PY'
+          import urllib.request, urllib.parse, json, subprocess, time, concurrent.futures
+          def get(url):
+              req=urllib.request.Request(url,headers={'User-Agent':'MudyarResearch/1.0'})
+              with urllib.request.urlopen(req,timeout=9) as r: return json.loads(r.read(200000))
+          host=get('https://api.audius.co')['data'][0].rstrip('/')
+          queries=['electronic','ambient','Myanmar song','Burmese music']
+          tasks=[]
+          for query in queries:
+              t=time.monotonic()
+              try:
+                  q=urllib.parse.urlencode({'query':query,'limit':2,'app_name':'MudyarResearch'})
+                  rows=get(host+'/v1/tracks/search?'+q).get('data',[])
+                  print(json.dumps({'query':query,'results':len(rows),'search_sec':round(time.monotonic()-t,3),'titles':[str(x.get('title',''))[:65] for x in rows]}))
+                  if rows and query in ('electronic','ambient'):
+                      tasks.append((query,host+'/v1/tracks/'+rows[0]['id']+'/stream?app_name=MudyarResearch'))
+              except Exception as e: print(json.dumps({'query':query,'error':type(e).__name__}))
+          def decode(item):
+              name,url=item; t=time.monotonic()
+              try:
+                  p=subprocess.run(['ffmpeg','-hide_banner','-nostdin','-loglevel','error','-rw_timeout','8000000','-i',url,'-t','1','-f','s16le','-ac','1','-ar','16000','pipe:1'],capture_output=True,timeout=20)
+                  return {'query':name,'seconds':round(time.monotonic()-t,3),'pcm_bytes':len(p.stdout),'nonzero':any(p.stdout),'exit':p.returncode}
+              except Exception as e: return {'query':name,'error':type(e).__name__}
+          print('sequential',json.dumps([decode(x) for x in tasks]))
+          with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+              print('concurrent',json.dumps(list(pool.map(decode,tasks))))
+          PY

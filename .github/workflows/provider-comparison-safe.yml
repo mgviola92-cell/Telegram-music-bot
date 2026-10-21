@@ -1,0 +1,38 @@
+name: Provider Comparison Safe
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/provider-comparison-safe.yml'
+  workflow_dispatch:
+jobs:
+  comparison:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    env:
+      NUBCODERS_API_TOKEN: ${{ secrets.NUBCODERS_API_TOKEN }}
+    steps:
+      - name: Install ffmpeg
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+      - name: Run matched one-second PCM trials
+        run: |
+          python - <<'PY'
+          import os,json,time,subprocess,urllib.request,urllib.parse
+          token=os.environ.get('NUBCODERS_API_TOKEN')
+          if not token: raise SystemExit('Missing token')
+          video='nfs8NYg7yQM'
+          for round_number in (1,2):
+              for provider in (('nub','vapters') if round_number==2 else ('vapters','nub')):
+                  start=time.monotonic()
+                  try:
+                      if provider=='nub':
+                          request=urllib.request.Request('https://api.nubcoders.com/stream?q='+video+'&mode=audio&redirect=false',headers={'Authorization':'Bearer '+token})
+                          with urllib.request.urlopen(request,timeout=12) as response: data=json.loads(response.read(10000))
+                          stream=data.get('stream_url') or data.get('url')
+                      else: stream='https://vapters.site/stream/'+video+'?vid=false&quality=128'
+                      parsed=urllib.parse.urlsplit(stream)
+                      if parsed.scheme!='https' or not parsed.hostname or parsed.username or parsed.password:raise ValueError('Invalid HTTPS URL')
+                      resolve=round(time.monotonic()-start,3)
+                      proc=subprocess.run(['ffmpeg','-hide_banner','-nostdin','-loglevel','quiet','-rw_timeout','8000000','-i',stream,'-t','1','-f','s16le','-ac','1','-ar','16000','pipe:1'],capture_output=True,timeout=20)
+                      print(json.dumps({'provider':provider,'round':round_number,'resolve_s':resolve,'total_s':round(time.monotonic()-start,3),'pcm_bytes':len(proc.stdout),'nonzero':any(proc.stdout),'exit':proc.returncode}))
+                  except Exception as e: print(json.dumps({'provider':provider,'round':round_number,'error':type(e).__name__,'elapsed_s':round(time.monotonic()-start,3)}))
+          PY

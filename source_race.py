@@ -8,8 +8,9 @@ LOG = logging.getLogger('telegram_music')
 
 
 class ParallelSources:
-    def __init__(self, sources, cleanup):
+    def __init__(self, sources, cleanup, *, health=None):
         self.sources, self.cleanup = sources, cleanup
+        self.health = health
 
     def cached(self, query):
         for source in self.sources:
@@ -28,11 +29,14 @@ class ParallelSources:
                 prepared.discard()
             return cached
         tasks, pending, candidates = {}, set(), []
+        owners = {}
         winner = None
         downloading = None
-        def add(coroutine, kind):
+        def add(coroutine, kind, *, owner=None):
             task = asyncio.create_task(coroutine)
             tasks[task] = kind
+            if owner is not None:
+                owners[task] = owner
             pending.add(task)
             return task
         async def primary():
@@ -41,7 +45,9 @@ class ParallelSources:
         if extra is not None:
             add(extra(), 'primary_extra')
         for source in self.sources:
-            add(source.find(query), 'metadata')
+            if self.health is not None and not self.health.available(source):
+                continue
+            add(source.find(query), 'metadata', owner=source)
         try:
             async with asyncio.timeout(30):
                 while pending:
@@ -56,6 +62,8 @@ class ParallelSources:
                                      re.sub(r'https?://\S+', '<url>', str(exc))[:200])
                             if task is downloading:
                                 downloading = None
+                            if self.health is not None and task in owners:
+                                self.health.failure(owners[task])
                             continue
                         if tasks[task] != 'metadata':
                             if not result or not isinstance(result, (tuple, list)) or len(result) < 2 or not result[0]:
@@ -63,13 +71,17 @@ class ParallelSources:
                                     downloading = None
                                 continue
                             winner = task
+                            if self.health is not None and task in owners:
+                                self.health.success(owners[task])
                             LOG.info('Parallel audio winner: %s', result[1].rsplit(' · ',1)[-1][:60])
                             return result
                         if result is not None and getattr(result, 'source', None) is not None:
-                            candidates.append(result)
+                            if self.health is not None and task in owners:
+                            self.health.success(owners[task])
+                        candidates.append(result)
                     if downloading is None and candidates:
                         candidate = candidates.pop(0)
-                        downloading = add(candidate.source.download(candidate), 'download')
+                        downloading = add(candidate.source.download(candidate), 'download', owner=candidate.source)
                 raise BotSourceUnavailable('No matching playable audio from the music sources')
         except TimeoutError:
             raise BotSourceUnavailable('Music sources did not return playable audio in time') from None

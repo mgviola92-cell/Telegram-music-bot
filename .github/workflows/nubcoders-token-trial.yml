@@ -1,0 +1,59 @@
+name: NubCoders Authenticated Trial (Isolated)
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/nubcoders-token-trial.yml'
+  workflow_dispatch:
+jobs:
+  token_probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      NUBCODERS_API_TOKEN: ${{ secrets.NUBCODERS_API_TOKEN }}
+    steps:
+      - name: Verify secret presence without printing its value
+        shell: bash
+        run: |
+          if [ -z "$NUBCODERS_API_TOKEN" ]; then
+            echo "MISSING_SECRET: NUBCODERS_API_TOKEN"
+            exit 1
+          fi
+          echo "Secret configured"
+      - name: Probe quota, video info, and bounded stream bytes with bearer authentication
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json,os,time,urllib.request,urllib.error
+          base='https://api.nubcoders.com'
+          token=os.environ['NUBCODERS_API_TOKEN']
+          # Do not print secret, signed URLs, response bodies, or request headers.
+          tests=[
+            ('quota','/rate-limit-status',8192),
+            ('info','/info?q=nfs8NYg7yQM&mode=audio&redirect=false',65536),
+            ('stream','/stream?q=nfs8NYg7yQM&mode=audio&redirect=false',4096),
+          ]
+          class StopRedirect(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self,req,fp,code,msg,headers,newurl):
+                  return None
+          opener=urllib.request.build_opener(StopRedirect)
+          for name,path,limit in tests:
+              t=time.monotonic()
+              req=urllib.request.Request(base+path,headers={'Authorization':'Bearer '+token,'User-Agent':'MudyarMusicDiagnostic/1.0'})
+              try:
+                  with opener.open(req,timeout=13) as r:
+                      body=r.read(limit)
+                      typ=r.headers.get('Content-Type','').split(';')[0]
+                      data={}
+                      if name=='quota' and 'json' in typ:
+                          try:
+                              obj=json.loads(body)
+                              if isinstance(obj,dict):
+                                  # Whitelist only non-sensitive numerical quota fields.
+                                  data={k:v for k,v in obj.items() if k in ('limit','remaining','used','daily_limit','requests_remaining') and type(v) is int}
+                          except Exception: pass
+                      print(json.dumps({'test':name,'status':r.status,'content_type':typ,'bytes':len(body),'duration_s':round(time.monotonic()-t,3),'quota':data}))
+              except urllib.error.HTTPError as e:
+                  print(json.dumps({'test':name,'status':e.code,'duration_s':round(time.monotonic()-t,3),'redirect_blocked':e.code in (301,302,303,307,308)}))
+              except Exception as e:
+                  print(json.dumps({'test':name,'error':type(e).__name__,'duration_s':round(time.monotonic()-t,3)}))
+          PY

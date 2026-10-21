@@ -97,3 +97,16 @@ jobs:
               print('jamendo_status',j.get('headers',{}).get('status'),'jamendo_message',str(j.get('headers',{}).get('error_message',''))[:120],'track_count',len(j.get('results',[])))
           except Exception as ex: print('jamendo_error',type(ex).__name__,str(ex)[:100])
           PY
+
+  source_regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Run source-race cancellation and fallback tests
+        run: |
+          python -m pip install 'py-tgcalls==2.3.3' 'pyrogrammod==2.4.1' 'aiohttp>=3.10,<4'
+          python -m unittest -v tests.test_source_race tests.test_source_race_edges

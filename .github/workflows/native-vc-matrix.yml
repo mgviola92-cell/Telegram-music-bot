@@ -40,4 +40,6 @@ jobs:
       - name: Run current VC transport unit tests under native version
         run: |
           python -m pip install 'aiohttp>=3.10,<4' 'yt-dlp>=2025.1.15,<2027' 'edge-tts>=7.2,<8' 'TgCrypto==1.2.5'
-          python -m unittest -v tests.test_voice_transport tests.test_source_race tests.test_provider_health
+          python -m unittest discover -s tests -p 'test_voice_transport.py' -v
+          python -m unittest discover -s tests -p 'test_source_race.py' -v
+          python -m unittest discover -s tests -p 'test_provider_health.py' -v

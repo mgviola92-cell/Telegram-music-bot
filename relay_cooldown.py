@@ -78,3 +78,54 @@ class RelayCooldown:
 
 
 relay_cooldown = RelayCooldown()
+
+
+class RelayPlaybackHealth:
+    """Short health gate for repeated *native* YouTube audio stalls.
+
+    Unlike upstream HTTP failures, stalled RTC output is observed after a
+    provider has already won the URL race. Two failures close the lane briefly
+    so other providers can win without repeating the same dead setup.
+    This does not affect SoundCloud, NubCoders or Telegram bot media.
+    """
+
+    FAILURE_NAMES = frozenset({"AudioFramesStalled", "AudioStartupTimeout", "NoAudioSourceFound"})
+
+    def __init__(self, *, clock=time.monotonic, threshold=2, window=120, cooldown=60):
+        self.clock = clock
+        self.threshold = threshold
+        self.window = window
+        self.cooldown = cooldown
+        self.failures = deque(maxlen=threshold)
+        self.until = 0.0
+
+    def available(self):
+        now = self.clock()
+        if self.until and now >= self.until:
+            self.until = 0.0
+            self.failures.clear()
+            LOG.info("YouTube native audio recovery window ended")
+        return now >= self.until
+
+    def failure(self, error):
+        if type(error).__name__ not in self.FAILURE_NAMES:
+            return False
+        now = self.clock()
+        if now < self.until:
+            return False
+        while self.failures and self.failures[0] <= now - self.window:
+            self.failures.popleft()
+        self.failures.append(now)
+        if len(self.failures) >= self.threshold:
+            self.until = now + self.cooldown
+            LOG.warning("YouTube native audio stalled repeatedly; using independent sources for %ss",
+                        self.cooldown)
+        return True
+
+    def success(self):
+        if self.clock() >= self.until:
+            self.failures.clear()
+            self.until = 0.0
+
+
+relay_playback_health = RelayPlaybackHealth()

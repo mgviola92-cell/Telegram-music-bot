@@ -1665,6 +1665,8 @@ async def main() -> None:
                             relay_cooldown.require_available()
                             if not relay_playback_health.available():
                                 raise RuntimeError('YouTube native audio is cooling down')
+                            if not silent_relay_videos.available(source):
+                                raise RuntimeError('This YouTube media was recently silent; use fallback')
                         if song.video:
                             stream = MediaStream(
                                 source, AudioQuality.MEDIUM, VideoQuality.SD_360p,

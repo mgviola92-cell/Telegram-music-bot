@@ -1620,8 +1620,12 @@ async def main() -> None:
                         except Exception as stale_exc:
                             log.info("Previous VC participation check unavailable (%s)", type(stale_exc).__name__)
                         fresh_voice_chats.add(chat_id)
-                    log.info("VC play requested chat %s (direct=%s, source_ready=%.2fs)",
-                             chat_id, allowed_audio_cdn(source), time.monotonic() - resolve_started)
+                    source_label = ("vapters" if relay_source_id(source) else
+                                    "nubcoders" if is_nubcoders_stream(source) else
+                                    "soundcloud_direct" if allowed_audio_cdn(source) else
+                                    "file_or_other")
+                    log.info("VC play requested chat %s (source=%s, source_ready=%.2fs)",
+                             chat_id, source_label, time.monotonic() - resolve_started)
                     connection_started = time.monotonic()
                     try:
                         # Stream construction may probe a remote URL and fail.
@@ -1704,7 +1708,12 @@ async def main() -> None:
                                   audio_stream(source, settings=settings))
                         await play_with_reconnect(calls, chat_id, stream)
                         await wait_for_audio_frames(calls, chat_id)
-                    log.info("VC play success chat %s (connection_and_frame_check=%.2fs)", chat_id, time.monotonic() - connection_started)
+                    final_source = ("vapters" if relay_source_id(source) else
+                                    "nubcoders" if is_nubcoders_stream(source) else
+                                    "soundcloud_direct" if allowed_audio_cdn(source) else
+                                    "file_or_other")
+                    log.info("VC play success chat %s (source=%s, connection_and_frame_check=%.2fs)",
+                             chat_id, final_source, time.monotonic() - connection_started)
                     song.output_speed = settings.speed if not song.video else 1.0
                     player.playing_settings = settings
                     if song.youtube or song.original_duration_seconds is None:

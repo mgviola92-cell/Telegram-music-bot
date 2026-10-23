@@ -29,7 +29,7 @@ jobs:
           folder.mkdir(parents=True, exist_ok=True)
           (folder / 'ffmpeg').symlink_to(source)
           with open(os.environ['GITHUB_PATH'], 'a', encoding='utf-8') as out:
-              out.write(str(folder) + '\\n')
+              out.write(str(folder) + '\n')
           print('FFmpeg ready for real decode tests:', source.name)
           PY
       - name: Test media download and source filtering

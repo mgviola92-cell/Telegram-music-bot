@@ -40,7 +40,7 @@ from network_audio import DirectAudioStream
 from youtube_relay import (RelayAudioStream, resolve_request as resolve_youtube_relay,
                            source_id as relay_source_id, enabled as youtube_relay_enabled,
                            sender_startup_timeout, audio_provider)
-from relay_cooldown import relay_cooldown, upstream_failure
+from relay_cooldown import relay_cooldown, relay_playback_health, upstream_failure
 from audio_options import AudioSettings, ProcessedAudioStream, EFFECTS, EFFECT_LABELS
 from music_search import collect_choices, SearchSessions, youtube_title, related_query, choose_related, title_key, restricted_error, block_source, source_blocked, youtube_id
 from music_stats import record_play, stats_text, stats_popup
@@ -948,10 +948,13 @@ async def main() -> None:
         strict = stream_only_enabled()
         if song.relay_requested:
             try:
-                relay_cooldown.require_available()
-                async def preferred_relay():
-                    relay = await resolve_youtube_relay(song.source)
-                    return relay.source, relay.title, relay.duration
+                candidates = []
+                if (youtube_relay_enabled() and not song.skip_relay
+                        and relay_cooldown.available() and relay_playback_health.available()):
+                    async def preferred_relay():
+                        relay = await resolve_youtube_relay(song.source)
+                        return relay.source, relay.title, relay.duration
+                    candidates.append(('vapters', preferred_relay))
                 if (os.getenv('NUBCODERS_ENABLED', '1') == '1'
                         and os.getenv('NUBCODERS_API_TOKEN')):
                     async def nub_for_link():
@@ -963,13 +966,13 @@ async def main() -> None:
                         if not await verify_nubcoders_audio(stream):
                             raise RuntimeError('NubCoders audio sample did not decode')
                         return stream, queue_track_title(song) + ' · NubCoders', song.duration_seconds
-                    result = await race_candidates([('vapters', preferred_relay),
-                                                    ('nubcoders', nub_for_link)])
-                    log.info('YouTube metadata resolved using parallel provider candidates')
-                    return result
-                relay = await resolve_youtube_relay(song.source)
-                log.info('YouTube metadata ready; configured audio provider selected')
-                return relay.source, relay.title, relay.duration
+                    candidates.append(('nubcoders', nub_for_link))
+                if not candidates:
+                    raise LookupError('No ready direct YouTube audio provider')
+                result = (await candidates[0][1]() if len(candidates) == 1
+                          else await race_candidates(candidates))
+                log.info('YouTube metadata resolved using an eligible audio provider')
+                return result
             except (asyncio.CancelledError, InterruptedError):
                 raise
             except Exception as exc:
@@ -1004,7 +1007,8 @@ async def main() -> None:
                     raise RuntimeError('NubCoders audio sample did not decode')
                 return stream, queue_track_title(song) + ' · NubCoders', song.duration_seconds
             candidates = []
-            if youtube_relay_enabled() and not song.skip_relay and relay_cooldown.available():
+            if (youtube_relay_enabled() and not song.skip_relay
+                    and relay_cooldown.available() and relay_playback_health.available()):
                 candidates.append(('vapters', youtube_candidate))
             if (os.getenv('NUBCODERS_ENABLED', '1') == '1'
                     and os.getenv('NUBCODERS_API_TOKEN')):
@@ -1616,14 +1620,20 @@ async def main() -> None:
                         except Exception as stale_exc:
                             log.info("Previous VC participation check unavailable (%s)", type(stale_exc).__name__)
                         fresh_voice_chats.add(chat_id)
-                    log.info("VC play requested chat %s (direct=%s, source_ready=%.2fs)",
-                             chat_id, allowed_audio_cdn(source), time.monotonic() - resolve_started)
+                    source_label = ("vapters" if relay_source_id(source) else
+                                    "nubcoders" if is_nubcoders_stream(source) else
+                                    "soundcloud_direct" if allowed_audio_cdn(source) else
+                                    "file_or_other")
+                    log.info("VC play requested chat %s (source=%s, source_ready=%.2fs)",
+                             chat_id, source_label, time.monotonic() - resolve_started)
                     connection_started = time.monotonic()
                     try:
                         # Stream construction may probe a remote URL and fail.
                         # Include it in the same fallback as calls.play().
                         if relay_source_id(source):
                             relay_cooldown.require_available()
+                            if not relay_playback_health.available():
+                                raise RuntimeError('YouTube native audio is cooling down')
                         if song.video:
                             stream = MediaStream(
                                 source, AudioQuality.MEDIUM, VideoQuality.SD_360p,
@@ -1639,12 +1649,14 @@ async def main() -> None:
                             await wait_for_audio_frames(calls, chat_id, timeout=4 if relay_source_id(source) else 8)
                         if relay_source_id(source):
                             relay_cooldown.success()
+                            relay_playback_health.success()
                             log.info('YouTube audio backend verified provider=%s', audio_provider())
                     except Exception as live_exc:
                         if isinstance(live_exc, AudioTransportUnavailable):
                             raise
                         if relay_source_id(source):
                             relay_cooldown.failure(live_exc)
+                            relay_playback_health.failure(live_exc)
                             log.warning('YouTube relay VC audio unavailable (%s); trying existing sources', type(live_exc).__name__)
                             fallback_query = queue_track_title(song).rsplit(' · YouTube', 1)[0]
                             local_file, title, duration_seconds = await resolve_for_queue(
@@ -1696,7 +1708,12 @@ async def main() -> None:
                                   audio_stream(source, settings=settings))
                         await play_with_reconnect(calls, chat_id, stream)
                         await wait_for_audio_frames(calls, chat_id)
-                    log.info("VC play success chat %s (connection_and_frame_check=%.2fs)", chat_id, time.monotonic() - connection_started)
+                    final_source = ("vapters" if relay_source_id(source) else
+                                    "nubcoders" if is_nubcoders_stream(source) else
+                                    "soundcloud_direct" if allowed_audio_cdn(source) else
+                                    "file_or_other")
+                    log.info("VC play success chat %s (source=%s, connection_and_frame_check=%.2fs)",
+                             chat_id, final_source, time.monotonic() - connection_started)
                     song.output_speed = settings.speed if not song.video else 1.0
                     player.playing_settings = settings
                     if song.youtube or song.original_duration_seconds is None:

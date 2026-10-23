@@ -1217,8 +1217,7 @@ async def main() -> None:
     async def announce_now_playing(
         chat_id: int, player: Player, song: Track, progress: Message | None
     ) -> None:
-        """Publishing UI never blocks playback locks or a /skip request."""
-        admin_muted = await ensure_voice_audio(calls, chat_id, identity.id)
+        """Publish a text playing card immediately; artwork never restarts audio."""
         if player.current is not song:
             return
         image = artwork_for(song.source) if not song.video else None
@@ -1228,14 +1227,37 @@ async def main() -> None:
             paused=player.paused, requester=song.requester, requester_id=song.requester_id,
             html_mode=True,actor=song.control_actor,actor_id=song.control_actor_id,
         )
-        if admin_muted:
-            title += "\n\n🔇 VC Admin က Assistant ကို mute ထားတယ်။ Unmute / Allow to Speak ပေးပါ။"
         buttons = player_controls(
             chat_id, paused=player.paused, loop=player.loop_current,
             title=song.title, normalize=player.audio_settings.normalize,
             quality=player.audio_settings.quality, effect=player.audio_settings.effect,
             menu=player.control_menu, queue_items=list(player.queue),
         )
+        # The source is already verified and playing. Don't hide the status
+        # behind the network participant check and one or two artwork uploads.
+        early_panel = None
+        if progress is not None:
+            try:
+                early_panel = await asyncio.wait_for(
+                    progress.edit_text(title, reply_markup=buttons, parse_mode=ParseMode.HTML),
+                    timeout=2,
+                )
+                log.info("Playing text status ready chat %s", chat_id)
+            except (asyncio.CancelledError,):
+                raise
+            except Exception as exc:
+                log.info("Early playing status unavailable chat %s (%s)",
+                         chat_id, type(exc).__name__)
+        admin_muted = await ensure_voice_audio(calls, chat_id, identity.id)
+        if player.current is not song:
+            if early_panel is not None:
+                try:
+                    await early_panel.delete()
+                except Exception:
+                    pass
+            return
+        if admin_muted:
+            title += "\n\n🔇 VC Admin က Assistant ကို mute ထားတယ်။ Unmute / Allow to Speak ပေးပါ။"
         previous = player.panel_id
         panel = None
         is_photo = False
@@ -1257,11 +1279,15 @@ async def main() -> None:
                 except Exception as exc:
                     log.info("Default artwork unavailable (%s)",type(exc).__name__)
             if panel is None:
-                if progress is not None:
+                if early_panel is not None and not admin_muted:
+                    # The progress message is already the final text panel.
+                    # Re-editing an identical message would fail and duplicate it.
+                    panel = early_panel
+                elif progress is not None:
                     try:
                         panel = await progress.edit_text(title, reply_markup=buttons,parse_mode=ParseMode.HTML)
                     except Exception:
-                        panel = None
+                        panel = early_panel
                 if panel is None:
                     panel = await bot.send_message(chat_id, title, reply_markup=buttons,parse_mode=ParseMode.HTML)
             if player.current is not song:
@@ -1646,7 +1672,7 @@ async def main() -> None:
                                           audio_stream(source, settings=settings))
                         await play_with_reconnect(calls, chat_id, stream)
                         if not song.video:
-                            await wait_for_audio_frames(calls, chat_id, timeout=4 if relay_source_id(source) else 8)
+                            await wait_for_audio_frames(calls, chat_id, timeout=8)
                         if relay_source_id(source):
                             relay_cooldown.success()
                             relay_playback_health.success()

@@ -1,11 +1,12 @@
 import asyncio
+import os
 from collections import deque
 from types import SimpleNamespace as N
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
 
 import main
-from relay_cooldown import RelayCooldown, RelayCoolingDown, upstream_failure
+from relay_cooldown import RelayCooldown, RelayCoolingDown, RelayPlaybackHealth, upstream_failure
 from shared_audio import SharedAudio
 from youtube_relay import RelayAudioStream, relay_source
 
@@ -132,3 +133,84 @@ class RecoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(cancelled.is_set())
         self.assertIsNone(player.prepared)
         notify.assert_not_called()
+
+
+class NativePlaybackBackoffTests(unittest.TestCase):
+    def setUp(self):
+        self.now = 100
+        self.health = RelayPlaybackHealth(clock=lambda: self.now, threshold=2,
+                                          window=120, cooldown=60)
+
+    def test_first_stall_does_not_disable_provider(self):
+        self.assertTrue(self.health.failure(main.AudioFramesStalled("no clock")))
+        self.assertTrue(self.health.available())
+
+    def test_two_real_native_stalls_temporarily_skip_provider(self):
+        self.assertTrue(self.health.failure(main.AudioFramesStalled("no clock")))
+        self.assertTrue(self.health.failure(main.AudioStartupTimeout("native timeout")))
+        self.assertFalse(self.health.available())
+        self.now += 59
+        self.assertFalse(self.health.available())
+        self.now += 1
+        self.assertTrue(self.health.available())
+        self.assertFalse(self.health.failures)
+
+    def test_unrelated_telegram_audio_transport_or_song_restriction_ignored(self):
+        for bad in [main.AudioTransportUnavailable("muted"), TimeoutError("network"),
+                    RuntimeError("DRM protected"), RuntimeError("No matching track")]:
+            self.assertFalse(self.health.failure(bad))
+        self.assertTrue(self.health.available())
+
+    def test_success_resets_streak_before_window_closed(self):
+        self.health.failure(main.AudioFramesStalled("stalled"))
+        self.health.success()
+        self.health.failure(main.AudioFramesStalled("stalled"))
+        self.assertTrue(self.health.available())
+
+    def test_old_stall_does_not_accumulate(self):
+        self.health.failure(main.AudioFramesStalled("stalled"))
+        self.now += 121
+        self.health.failure(main.AudioFramesStalled("stalled"))
+        self.assertTrue(self.health.available())
+
+    def test_no_audio_source_counts_as_nonplayable(self):
+        err = type("NoAudioSourceFound", (Exception,), {})("bad input")
+        self.health.failure(err); self.health.failure(err)
+        self.assertFalse(self.health.available())
+
+
+class DirectLinkHealthRoutingTests(unittest.IsolatedAsyncioTestCase):
+    async def test_explicit_youtube_link_uses_nubcoders_during_vapters_stall_cooldown(self):
+        from test_music_extensions import closure
+        guard = N(available=Mock(return_value=False))
+        link = "https://youtu.be/jNQXAC9IVRw"
+        signed = "https://api.nubcoders.com/stream/resolver/fixture"
+        named = main.Track("Sample", link, youtube=True, relay_requested=True)
+        ns = dict(vars(main))
+        ns.update(relay_playback_health=guard,
+                  relay_cooldown=N(available=Mock(return_value=True)),
+                  youtube_relay_enabled=lambda: True,
+                  resolve_youtube_relay=AsyncMock(),
+                  resolve_nubcoders_audio=AsyncMock(return_value=signed),
+                  verify_nubcoders_audio=AsyncMock(return_value=True))
+        handler = closure("resolve_for_queue", ns)
+        with patch.dict(os.environ, {"NUBCODERS_ENABLED": "1", "NUBCODERS_API_TOKEN": "fixture"}):
+            result = await handler(named, True)
+        self.assertEqual(result[0], signed)
+        ns["resolve_youtube_relay"].assert_not_awaited()
+        ns["resolve_nubcoders_audio"].assert_awaited_once()
+
+    async def test_named_youtube_candidate_skipped_during_native_stalls(self):
+        from test_music_extensions import closure
+        race = N(race=AsyncMock(return_value=("fallback.mp3", "Fallback", 30)))
+        ns = dict(vars(main))
+        ns.update(lybot=race, relay_cooldown=N(available=Mock(return_value=True)),
+                  relay_playback_health=N(available=Mock(return_value=False)),
+                  stream_only_enabled=lambda: False,
+                  youtube_relay_enabled=lambda: True,
+                  PreparedAudio=Mock(), resolve_youtube_relay=AsyncMock())
+        handler = closure("resolve_for_queue", ns)
+        with patch.dict(os.environ, {"NUBCODERS_API_TOKEN": "", "NUBCODERS_ENABLED": "0"}):
+            await handler(main.Track("Attention", "Attention", youtube=True), True)
+        self.assertIsNone(race.race.call_args.kwargs["extra"])
+        ns["resolve_youtube_relay"].assert_not_awaited()

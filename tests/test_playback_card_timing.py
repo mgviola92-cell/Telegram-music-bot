@@ -44,6 +44,7 @@ class PlayingCardTimingTests(unittest.IsolatedAsyncioTestCase):
             send_default_photo=AsyncMock(side_effect=photo),
             ensure_voice_audio=AsyncMock(side_effect=voice_check),
             artwork_for=Mock(return_value=None),
+            elapsed_for=lambda player: 0.0,
         )
         fn = closure('announce_now_playing', ns)
         await fn(-100, player, song, progress)

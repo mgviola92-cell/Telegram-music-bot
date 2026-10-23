@@ -41,6 +41,7 @@ from youtube_relay import (RelayAudioStream, resolve_request as resolve_youtube_
                            source_id as relay_source_id, enabled as youtube_relay_enabled,
                            sender_startup_timeout, audio_provider)
 from relay_cooldown import relay_cooldown, relay_playback_health, upstream_failure
+from relay_failure_memory import silent_relay_videos
 from audio_options import AudioSettings, ProcessedAudioStream, EFFECTS, EFFECT_LABELS
 from music_search import collect_choices, SearchSessions, youtube_title, related_query, choose_related, title_key, restricted_error, block_source, source_blocked, youtube_id
 from music_stats import record_play, stats_text, stats_popup
@@ -953,6 +954,8 @@ async def main() -> None:
                         and relay_cooldown.available() and relay_playback_health.available()):
                     async def preferred_relay():
                         relay = await resolve_youtube_relay(song.source)
+                        if not silent_relay_videos.available(relay.source):
+                            raise LookupError("Previously silent YouTube media; choose another audio source")
                         return relay.source, relay.title, relay.duration
                     candidates.append(('vapters', preferred_relay))
                 if (os.getenv('NUBCODERS_ENABLED', '1') == '1'
@@ -997,6 +1000,8 @@ async def main() -> None:
         if not song.video and not song.source.startswith(("http://", "https://")) and not strict:
             async def youtube_candidate():
                 relay = await resolve_youtube_relay(song.source)
+                if not silent_relay_videos.available(relay.source):
+                    raise LookupError("Previously silent YouTube media; choose another audio source")
                 return relay.source, relay.title, relay.duration
             async def nubcoders_candidate():
                 # Give the usually-fast Vapters metadata a short head start.
@@ -1660,6 +1665,8 @@ async def main() -> None:
                             relay_cooldown.require_available()
                             if not relay_playback_health.available():
                                 raise RuntimeError('YouTube native audio is cooling down')
+                            if not silent_relay_videos.available(source):
+                                raise RuntimeError('This YouTube media was recently silent; use fallback')
                         if song.video:
                             stream = MediaStream(
                                 source, AudioQuality.MEDIUM, VideoQuality.SD_360p,
@@ -1676,6 +1683,7 @@ async def main() -> None:
                         if relay_source_id(source):
                             relay_cooldown.success()
                             relay_playback_health.success()
+                            silent_relay_videos.success(source)
                             log.info('YouTube audio backend verified provider=%s', audio_provider())
                     except Exception as live_exc:
                         if isinstance(live_exc, AudioTransportUnavailable):
@@ -1683,13 +1691,17 @@ async def main() -> None:
                         if relay_source_id(source):
                             relay_cooldown.failure(live_exc)
                             relay_playback_health.failure(live_exc)
+                            silent_relay_videos.failure(source, live_exc)
                             log.warning('YouTube relay VC audio unavailable (%s); trying existing sources', type(live_exc).__name__)
+                            fallback_started = time.monotonic()
                             fallback_query = queue_track_title(song).rsplit(' · YouTube', 1)[0]
                             local_file, title, duration_seconds = await resolve_for_queue(
                                 Track(fallback_query, fallback_query, youtube=True, skip_relay=True), player.stream_enabled)
                             song.duration_seconds, song.title = duration_seconds, title
                             song.metadata_resolved = True
                             source = local_file
+                            log.info("YouTube native fallback ready chat %s after %.2fs",
+                                     chat_id, time.monotonic() - fallback_started)
                         elif is_nubcoders_stream(source):
                             # Do not send the signed URL into logs or retry the same failed
                             # native source. Race ordinary sources without Vapters/NubCoders.

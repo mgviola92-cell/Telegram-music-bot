@@ -17,8 +17,11 @@ jobs:
         run: python -m pip install -r requirements.txt
       - name: Verify optional MTProto crypto acceleration is installed
         run: python -c "import tgcrypto; print('TgCrypto acceleration available')"
-      - name: Install FFmpeg for real audio decode tests
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - name: Install FFmpeg and ffprobe for real audio decode tests
+        run: |
+          sudo timeout 100s apt-get install -y ffmpeg
+          ffmpeg -hide_banner -version | head -n 1
+          ffprobe -hide_banner -version | head -n 1
       - name: Test media download and source filtering
         run: python -m unittest discover -s tests -v
       - name: Verify PyTgCalls / Pyrogram compatibility

@@ -42,6 +42,7 @@ from youtube_relay import (RelayAudioStream, resolve_request as resolve_youtube_
                            sender_startup_timeout, audio_provider)
 from relay_cooldown import relay_cooldown, relay_playback_health, upstream_failure
 from relay_failure_memory import silent_relay_videos
+from vc_memory_guard import allow_prefetch, container_memory, need_idle_reclamation, reclaim_oldest_idle
 from audio_options import AudioSettings, ProcessedAudioStream, EFFECTS, EFFECT_LABELS
 from music_search import collect_choices, SearchSessions, youtube_title, related_query, choose_related, title_key, restricted_error, block_source, source_blocked, youtube_id
 from music_stats import record_play, stats_text, stats_popup
@@ -386,7 +387,8 @@ def prepare_next_song(player: Player) -> None:
         player.autoplay_prepare()
     if (upcoming is not None and player.current is not None
             and upcoming.youtube and not upcoming.video
-            and os.getenv("MUSIC_PREFETCH_ENABLED", "1") != "0"):
+            and os.getenv("MUSIC_PREFETCH_ENABLED", "1") != "0"
+            and allow_prefetch()):
         if player.resolver is not None:
             player.prepared = AsyncPreparedAudio(upcoming, player.resolver, clean_temp,
                                                  prefer_stream=player.stream_enabled)
@@ -1502,6 +1504,26 @@ async def main() -> None:
         except Exception:
             pass
         return voice_slot_count(players) < max_groups
+
+    async def safeguard_container_memory() -> None:
+        """Favor uninterrupted real audio over idle VCs and speculative FFmpeg."""
+        last_warning = 0.
+        while True:
+            await asyncio.sleep(20)
+            memory = container_memory()
+            if memory is None:
+                continue
+            if memory.ratio >= .80:
+                for player in list(players.values()):
+                    if player.current is not None and player.prepared is not None:
+                        discard_prepared(player)
+            if not need_idle_reclamation(memory):
+                continue
+            released = await reclaim_oldest_idle(players, calls, welcome, bot)
+            if released is None and time.monotonic() - last_warning >= 180:
+                log.warning("High container RAM %.0f/%.0f MiB; no safe idle VC available",
+                            memory.used / 1048576, memory.limit / 1048576)
+                last_warning = time.monotonic()
 
     async def advance(chat_id: int, progress: Message | None = None, *, repeat: bool = False) -> None:
         """Caller holds this chat's lock. Move to next track or idle VC."""
@@ -3205,6 +3227,7 @@ async def main() -> None:
         cleanup_task = asyncio.create_task(housekeeping(
             protected_media_paths, maintain_cache))
         watchdog_task = asyncio.create_task(watch_voice_connections())
+        memory_guard_task = asyncio.create_task(safeguard_container_memory())
         from bandwidth_saver import EmptyRoomSaver
         bandwidth_saver=EmptyRoomSaver(calls,players,identity.id,welcome,update_player_panel)
         bandwidth_task=asyncio.create_task(bandwidth_saver.run())
@@ -3240,6 +3263,8 @@ async def main() -> None:
         if watchdog_task is not None:
             watchdog_task.cancel()
             await asyncio.gather(watchdog_task, return_exceptions=True)
+        memory_guard_task.cancel()
+        await asyncio.gather(memory_guard_task, return_exceptions=True)
         loading_tasks = []
         for player in players.values():
             if player.loading_task is not None and not player.loading_task.done():

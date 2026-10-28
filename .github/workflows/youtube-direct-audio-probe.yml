@@ -1,0 +1,26 @@
+name: Direct YouTube PCM Feasibility
+on:
+  pull_request:
+    paths:
+      - 'tools/probe_youtube_direct_audio.py'
+      - '.github/workflows/youtube-direct-audio-probe.yml'
+  workflow_dispatch:
+jobs:
+  bounded_extract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 9
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install matched yt-dlp, EJS and runtime
+        run: python -m pip install -q 'yt-dlp[default]==2026.10.26' 'deno==2.9.7'
+      - name: Install FFmpeg and verify diagnostic syntax
+        run: |
+          sudo timeout 100s apt-get install -y ffmpeg
+          command -v ffmpeg
+          ffmpeg -hide_banner -version | head -n 1
+          python -m py_compile tools/probe_youtube_direct_audio.py
+      - name: Probe no-download public sample across official YouTube clients
+        run: python tools/probe_youtube_direct_audio.py

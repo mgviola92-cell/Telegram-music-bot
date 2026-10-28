@@ -80,6 +80,11 @@ class RoutingAfterSilentRelayTests(unittest.IsolatedAsyncioTestCase):
                   relay_cooldown=N(available=Mock(return_value=True)),
                   relay_playback_health=N(available=Mock(return_value=True)),
                   youtube_relay_enabled=lambda: True)
+        async def verified_remote(prepared, query, **kwargs):
+            return await kwargs['extra']()
+        ns.update(lybot=N(race=AsyncMock(side_effect=verified_remote)),
+                  youtube_title=AsyncMock(return_value='Test Song'),
+                  PreparedAudio=Mock())
         with patch.dict(os.environ,{'NUBCODERS_API_TOKEN':'fixture','NUBCODERS_ENABLED':'1'}):
             result=await closure('resolve_for_queue',ns)(song,True)
         self.assertEqual(result[0],signed)

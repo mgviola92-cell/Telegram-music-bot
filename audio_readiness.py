@@ -7,6 +7,7 @@ Never log command lines, URLs, tokens or FFmpeg stderr.
 import asyncio
 import logging
 import time
+import weakref
 from pathlib import Path
 
 from playback_prepare import decoder_slots
@@ -15,6 +16,15 @@ from nubcoders_audio import is_nubcoders_stream
 from youtube_relay import source_id as relay_source_id, vapters_url
 
 LOG = logging.getLogger('telegram_music')
+_CANDIDATE_SLOTS = weakref.WeakKeyDictionary()
+
+
+def candidate_decoder_slots():
+    """At most one speculative music decoder; all metadata searches stay parallel."""
+    loop = asyncio.get_running_loop()
+    if loop not in _CANDIDATE_SLOTS:
+        _CANDIDATE_SLOTS[loop] = asyncio.Semaphore(1)
+    return _CANDIDATE_SLOTS[loop]
 
 
 async def _short_pcm(source, *, headers=None, timeout=6):
@@ -27,7 +37,7 @@ async def _short_pcm(source, *, headers=None, timeout=6):
     command += ['-i', source, '-t', '0.15', '-vn', '-f', 's16le',
                 '-ar', '16000', '-ac', '1', 'pipe:1']
     process = None
-    async with decoder_slots():
+    async with decoder_slots(), candidate_decoder_slots():
         try:
             process = await asyncio.create_subprocess_exec(
                 *command, stdout=asyncio.subprocess.PIPE,

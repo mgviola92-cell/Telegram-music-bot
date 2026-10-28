@@ -41,6 +41,28 @@ jobs:
                     'elapsed_s':round(time.monotonic()-started,2)}),flush=True)
           PY
 
+      - name: Install FFmpeg for actual short PCM decode
+        run: sudo timeout 100s apt-get install -y ffmpeg
+      - name: Check Audius read-only catalog availability
+        run: |
+          python - <<'PY'
+          import urllib.request,urllib.error,time,json
+          started=time.monotonic()
+          try:
+              url='https://api.audius.co/v1/tracks/search?query=electronic&limit=1&app_name=mudyar-music'
+              with urllib.request.urlopen(urllib.request.Request(url,headers={
+                  'Accept':'application/json','User-Agent':'MudyarMusicBot/1.0'}),timeout=9) as response:
+                  data=json.load(response)
+                  print(json.dumps({'audius_status':response.status,
+                     'tracks_count':len(data.get('data',[])),
+                     'elapsed_s':round(time.monotonic()-started,2)}))
+          except urllib.error.HTTPError as error:
+              print(json.dumps({'audius_status':error.code,
+                  'elapsed_s':round(time.monotonic()-started,2)}))
+          except Exception as error:
+              print(json.dumps({'audius_error_type':type(error).__name__,
+                  'elapsed_s':round(time.monotonic()-started,2)}))
+          PY
       - name: Check optional authenticated NubCoders with bounded PCM sample
         env:
           NUBCODERS_API_TOKEN: ${{ secrets.NUBCODERS_API_TOKEN }}

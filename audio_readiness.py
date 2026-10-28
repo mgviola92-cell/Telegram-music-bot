@@ -75,8 +75,14 @@ async def verify_candidate_audio(result, *, timeout=6):
         return True
     if allowed_audio_cdn(source):
         return await _short_pcm(source, headers=stream_headers_for(source), timeout=timeout)
-    # File transfers are owned by the bot and must exist locally.
-    path = Path(source)
-    if not path.is_file() or not path.stat().st_size:
+    # File transfers are owned by the bot and must exist locally. Never
+    # interpret another URL scheme as a filesystem candidate.
+    if len(source) > 4096 or '://' in source:
+        return False
+    try:
+        path = Path(source)
+        if not path.is_file() or not path.stat().st_size:
+            return False
+    except (OSError, ValueError):
         return False
     return await _short_pcm(str(path), timeout=timeout)

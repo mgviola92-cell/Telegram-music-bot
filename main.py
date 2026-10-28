@@ -978,12 +978,40 @@ async def main() -> None:
                                 raise RuntimeError('NubCoders audio sample did not decode')
                         return stream, queue_track_title(song) + ' · NubCoders', song.duration_seconds
                     candidates.append(('nubcoders', nub_for_link))
-                if not candidates:
+                if not candidates and strict:
                     raise LookupError('No ready direct YouTube audio provider')
-                result = (await candidates[0][1]() if len(candidates) == 1
-                          else await race_candidates(candidates))
-                log.info('YouTube metadata resolved using an eligible audio provider')
-                return result
+                # Direct YouTube links use the exact linked video for remote
+                # resolvers AND search the public song title concurrently on
+                # independent SoundCloud/Telegram sources. No fixed winner.
+                remote_task = (asyncio.create_task(race_candidates(candidates))
+                               if candidates else None)
+                try:
+                    if strict:
+                        return await remote_task
+                    try:
+                        query = await asyncio.wait_for(youtube_title(song.source), timeout=4)
+                    except (OSError, TimeoutError, LookupError, ValueError):
+                        if remote_task is not None:
+                            return await remote_task
+                        raise
+                    if not query or query.startswith(('http://', 'https://')):
+                        if remote_task is not None:
+                            return await remote_task
+                        raise LookupError('Unable to identify linked song')
+                    independent = Track(query, query, youtube=True, skip_relay=True)
+                    prepared = PreparedAudio(independent, download_song, clean_temp,
+                                             prefer_stream=prefer_stream, publish_metadata=False)
+                    async def remote_candidate():
+                        return await remote_task
+                    return await (lybot or ParallelSources([], clean_temp)).race(
+                        prepared, query,
+                        extra=remote_candidate if remote_task is not None else None,
+                        verify=verify_candidate_audio,
+                    )
+                finally:
+                    if remote_task is not None and not remote_task.done():
+                        remote_task.cancel()
+                        await asyncio.gather(remote_task, return_exceptions=True)
             except (asyncio.CancelledError, InterruptedError):
                 raise
             except Exception as exc:

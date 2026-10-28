@@ -136,7 +136,7 @@ class VaptersCommand(unittest.IsolatedAsyncioTestCase):
         lookup = AsyncMock(return_value=track)
         calls = []
         class Race:
-            async def race(self, primary, query, *, extra):
+            async def race(self, primary, query, *, extra, verify=None):
                 calls.append((primary, query))
                 return await extra()
         primary = Mock()
@@ -144,7 +144,9 @@ class VaptersCommand(unittest.IsolatedAsyncioTestCase):
                          lybot=Race(), PreparedAudio=Mock(return_value=primary),
                          youtube_relay_enabled=lambda: True,
                          relay_cooldown=N(available=lambda: True),
-                         resolve_youtube_relay=lookup)
+                         resolve_youtube_relay=lookup,
+                         verify_vapters_audio=AsyncMock(return_value=True),
+                         silent_relay_videos=N(available=Mock(return_value=True)))
         result = await closure('resolve_for_queue', namespace)(main.Track('Attention', 'Attention', youtube=True), True)
         self.assertEqual(calls, [(primary, 'Attention')])
         lookup.assert_awaited_once_with('Attention')

@@ -179,6 +179,48 @@ class NativePlaybackBackoffTests(unittest.TestCase):
         self.assertFalse(self.health.available())
 
 
+class ProductionNativeHealthWindowTests(unittest.TestCase):
+    """Actual Oct 27–28 playback attempts were tens of minutes apart."""
+
+    def setUp(self):
+        self.now=1000
+        self.health=RelayPlaybackHealth(clock=lambda: self.now)
+
+    def fail(self):
+        return self.health.failure(main.AudioFramesStalled('No native output'))
+
+    def test_two_failures_fifty_minutes_apart_skip_vapters_thirty_minutes(self):
+        self.fail()
+        self.now+=50*60
+        self.assertTrue(self.health.available())
+        self.fail()
+        self.assertFalse(self.health.available())
+        self.now+=29*60
+        self.assertFalse(self.health.available())
+        self.now+=60
+        self.assertTrue(self.health.available())
+        self.assertFalse(self.health.failures)
+
+    def test_good_native_play_resets_observed_stalls(self):
+        self.fail()
+        self.now+=1800
+        self.health.success()
+        self.fail()
+        self.assertTrue(self.health.available())
+        self.assertEqual(len(self.health.failures),1)
+
+    def test_expired_old_failure_not_counted(self):
+        self.fail()
+        self.now+=3601
+        self.fail()
+        self.assertTrue(self.health.available())
+
+    def test_unrelated_external_vc_error_keeps_vapters_eligible(self):
+        for _ in range(3):
+            self.assertFalse(self.health.failure(main.AudioTransportUnavailable('call kicked')))
+        self.assertTrue(self.health.available())
+
+
 class DirectLinkHealthRoutingTests(unittest.IsolatedAsyncioTestCase):
     async def test_explicit_youtube_link_uses_nubcoders_during_vapters_stall_cooldown(self):
         from test_music_extensions import closure

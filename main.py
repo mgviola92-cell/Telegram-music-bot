@@ -54,7 +54,7 @@ from voice_transport import (clear_stale_voice, ensure_native_sender,
                              AudioTransportUnavailable, AudioStartupTimeout)
 from source_race import ParallelSources
 from provider_race import race_candidates
-from audio_readiness import verify_candidate_audio, verify_vapters_audio
+from audio_readiness import candidate_decoder_slots, verify_candidate_audio, verify_vapters_audio
 from nubcoders_source import resolve as resolve_nubcoders_audio
 from nubcoders_audio import (NubCodersAudioStream, is_nubcoders_stream,
                              verify_nubcoders_audio)
@@ -973,7 +973,7 @@ async def main() -> None:
                         if not source_id:
                             raise ValueError('Not a direct YouTube video ID')
                         stream = await asyncio.wait_for(resolve_nubcoders_audio(source_id), timeout=10)
-                        async with decoder_slots():
+                        async with decoder_slots(), candidate_decoder_slots():
                             if not await verify_nubcoders_audio(stream):
                                 raise RuntimeError('NubCoders audio sample did not decode')
                         return stream, queue_track_title(song) + ' · NubCoders', song.duration_seconds
@@ -1047,7 +1047,7 @@ async def main() -> None:
             async def nubcoders_candidate():
                 # No provider has a head start; fastest confirmed PCM wins.
                 stream = await asyncio.wait_for(resolve_nubcoders_audio(song.source), timeout=10)
-                async with decoder_slots():
+                async with decoder_slots(), candidate_decoder_slots():
                     if not await verify_nubcoders_audio(stream):
                         raise RuntimeError('NubCoders audio sample did not decode')
                 return stream, queue_track_title(song) + ' · NubCoders', song.duration_seconds

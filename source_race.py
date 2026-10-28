@@ -22,7 +22,7 @@ class ParallelSources:
     async def resolve(self, query):
         return await self.race(None, query)
 
-    async def race(self, prepared, query, *, extra=None):
+    async def race(self, prepared, query, *, extra=None, verify=None):
         cached = self.cached(query)
         if cached:
             if prepared:
@@ -32,6 +32,7 @@ class ParallelSources:
         owners = {}
         winner = None
         downloading = None
+        verification_origin = {}
         def add(coroutine, kind, *, owner=None):
             task = asyncio.create_task(coroutine)
             tasks[task] = kind
@@ -41,6 +42,15 @@ class ParallelSources:
             return task
         async def primary():
             return await asyncio.wait_for(prepared.consume(), timeout=12)
+        async def verified(result):
+            try:
+                return bool(await verify(result))
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                LOG.info('Candidate audio validation unavailable (%s)',
+                         type(exc).__name__)
+                return False
         primary_task = add(primary(), 'primary') if prepared else None
         if extra is not None:
             add(extra(), 'primary_extra')
@@ -65,10 +75,27 @@ class ParallelSources:
                             if self.health is not None and task in owners:
                                 self.health.failure(id(owners[task]))
                             continue
+                        if tasks[task] == 'verification':
+                            origin = verification_origin[task]
+                            if not result:
+                                if self.health is not None and origin in owners:
+                                    self.health.failure(id(owners[origin]))
+                                continue
+                            winner = origin
+                            confirmed = origin.result()
+                            if self.health is not None and origin in owners:
+                                self.health.success(id(owners[origin]))
+                            LOG.info('Parallel playable audio winner: %s',
+                                     confirmed[1].rsplit(' · ',1)[-1][:60])
+                            return confirmed
                         if tasks[task] != 'metadata':
                             if not result or not isinstance(result, (tuple, list)) or len(result) < 2 or not result[0]:
                                 if task is downloading:
                                     downloading = None
+                                continue
+                            if verify is not None:
+                                check = add(verified(result), 'verification')
+                                verification_origin[check] = task
                                 continue
                             winner = task
                             if self.health is not None and task in owners:

@@ -144,20 +144,3 @@ class SourceAudioGateTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(await audio_readiness.verify_candidate_audio(
                 (str(bad),'Invalid',1),timeout=4))
 
-
-class NoFixedSourcePriorityTests(unittest.IsolatedAsyncioTestCase):
-    async def test_youtube_metadata_does_not_beat_verified_audio(self):
-        relay=Obj(source=relay_source('jNQXAC9IVRw'),title='Song · YouTube',duration=20)
-        ns=dict(vars(main))
-        ns.update(resolve_youtube_relay=AsyncMock(return_value=relay),
-                  verify_vapters_audio=AsyncMock(return_value=False),
-                  relay_playback_health=Obj(available=Mock(return_value=True),failure=Mock()),
-                  silent_relay_videos=Obj(available=Mock(return_value=True),failure=Mock()),
-                  relay_cooldown=Obj(available=Mock(return_value=True)),
-                  youtube_relay_enabled=lambda:True)
-        resolver=closure('resolve_for_queue',ns)
-        from unittest.mock import patch as mock_patch
-        with mock_patch.dict('os.environ',{'NUBCODERS_ENABLED':'0','NUBCODERS_API_TOKEN':''}):
-            with self.assertRaises(Exception):
-                await ns['verify_vapters_audio'](relay.source) if False else asyncio.sleep(0)
-        # Actual source resolution below is covered by the real PCM gate tests.

@@ -101,3 +101,35 @@ jobs:
                    'status':getattr(error,'code',None),
                    'elapsed_s':round(time.monotonic()-started,2)}))
           PY
+
+      - name: Decode short public Audius stream without saving the track
+        run: |
+          python - <<'PY'
+          import urllib.request,urllib.parse,json,subprocess,time
+          started=time.monotonic()
+          try:
+              lookup='https://api.audius.co/v1/tracks/search?'+urllib.parse.urlencode({
+                  'query':'electronic','limit':5,'app_name':'mudyar-music'})
+              with urllib.request.urlopen(lookup,timeout=9) as response:
+                  tracks=json.load(response).get('data',[])
+              found=False
+              for track in tracks[:5]:
+                  if not isinstance(track,dict) or track.get('is_stream_gated') or not track.get('is_streamable',True):
+                      continue
+                  track_id=str(track.get('id',''))
+                  if not track_id or not all(c.isalnum() or c in '-_' for c in track_id):
+                      continue
+                  url='https://api.audius.co/v1/tracks/'+track_id+'/stream?app_name=mudyar-music'
+                  done=subprocess.run(['ffmpeg','-hide_banner','-nostdin','-loglevel','quiet',
+                      '-rw_timeout','7000000','-i',url,'-t','0.15','-vn',
+                      '-ac','1','-ar','16000','-f','s16le','pipe:1'],
+                      capture_output=True,timeout=16)
+                  print(json.dumps({'audius_pcm_bytes':len(done.stdout),
+                     'ffmpeg_exit':done.returncode,'total_s':round(time.monotonic()-started,2)}))
+                  found=True
+                  break
+              if not found:print('audius_no_public_ungated_sample')
+          except Exception as exc:
+              print(json.dumps({'audius_stream_error':type(exc).__name__,
+                  'elapsed_s':round(time.monotonic()-started,2)}))
+          PY

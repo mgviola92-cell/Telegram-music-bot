@@ -235,6 +235,11 @@ class DirectLinkHealthRoutingTests(unittest.IsolatedAsyncioTestCase):
                   resolve_youtube_relay=AsyncMock(),
                   resolve_nubcoders_audio=AsyncMock(return_value=signed),
                   verify_nubcoders_audio=AsyncMock(return_value=True))
+        async def verified_remote(prepared, query, **kwargs):
+            return await kwargs["extra"]()
+        ns.update(lybot=N(race=AsyncMock(side_effect=verified_remote)),
+                  youtube_title=AsyncMock(return_value="Sample Song"),
+                  PreparedAudio=Mock())
         handler = closure("resolve_for_queue", ns)
         with patch.dict(os.environ, {"NUBCODERS_ENABLED": "1", "NUBCODERS_API_TOKEN": "fixture"}):
             result = await handler(named, True)

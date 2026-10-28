@@ -117,6 +117,22 @@ class WelcomeChecks(unittest.IsolatedAsyncioTestCase):
             finally:pipe.close()
             self.assertFalse(pipe.path.exists())
 
+    def test_welcome_ducking_paces_music_input_to_preserve_song_duration(self):
+        base=['ffmpeg','-nostdin','-i','/tmp/music.wav','-t','3',
+              '-ar','48000','-ac','2','-f','s16le','pipe:1']
+        mixed=mixing_command(base,'/tmp/voice.fifo')
+        self.assertEqual(mixed[mixed.index('-readrate')+1],'1')
+        self.assertLess(mixed.index('-readrate'),mixed.index('-i'))
+        self.assertEqual(mixed.count('-readrate'),1)
+        # Existing source pacing must never be duplicated.
+        paced=mixing_command(['ffmpeg','-re']+base[2:],'/tmp/voice.fifo')
+        self.assertEqual(paced.count('-re'),1)
+        self.assertNotIn('-readrate',paced)
+        # Actual live device/pipe input should not be paced artificially.
+        live=mixing_command(['ffmpeg','-i','pipe:0','-f','s16le','pipe:1'],
+                            '/tmp/voice.fifo')
+        self.assertNotIn('-readrate',live)
+
     def test_output_filter_order_and_quality_preserved(self):
         cmd=mixing_command(['ffmpeg','-headers','User-Agent: Test\r\n','-i','https://x',
                   '-af','bass=g=6','-ar','24000','-ac','1','-f','s16le','pipe:1'],'/tmp/fifo')

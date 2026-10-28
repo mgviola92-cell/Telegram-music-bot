@@ -77,6 +77,8 @@ class ParallelSources:
                             continue
                         if tasks[task] == 'verification':
                             origin = verification_origin[task]
+                            if task is downloading:
+                                downloading = None
                             if not result:
                                 if self.health is not None and origin in owners:
                                     self.health.failure(id(owners[origin]))
@@ -96,6 +98,8 @@ class ParallelSources:
                             if verify is not None:
                                 check = add(verified(result), 'verification')
                                 verification_origin[check] = task
+                                if task is downloading:
+                                    downloading = check
                                 continue
                             winner = task
                             if self.health is not None and task in owners:

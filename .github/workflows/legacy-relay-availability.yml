@@ -1,0 +1,42 @@
+name: Bounded Legacy Relay Availability Probe
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/legacy-relay-availability.yml'
+  workflow_dispatch:
+jobs:
+  relay_probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Check legacy relay GET/POST and Vapters, without downloading media
+        run: |
+          python - <<'PY'
+          import json,urllib.request,urllib.error,time,socket
+          base='https://cold-lemming-3841.alexainc.deno.net'
+          video='https://www.youtube.com/watch?v=jNQXAC9IVRw'
+          requests=[
+            ('legacy_health',urllib.request.Request(base+'/health',headers={'Accept':'application/json'})),
+            ('legacy_download_GET',urllib.request.Request(base+'/download',headers={'Accept':'application/json'})),
+            ('legacy_download_POST',urllib.request.Request(base+'/download',
+                data=json.dumps({'url':video,'type':'audio'},separators=(',',':')).encode(),
+                headers={'Content-Type':'application/json','Accept':'audio/*'})),
+            ('vapters_sample',urllib.request.Request(
+                'https://vapters.site/stream/jNQXAC9IVRw?vid=false&quality=128',
+                headers={'User-Agent':'MusicBotAudio/1.0','Accept':'audio/*'})),
+          ]
+          for name,request in requests:
+            started=time.monotonic()
+            try:
+              with urllib.request.urlopen(request,timeout=9) as response:
+                contenttype=response.headers.get('Content-Type','').split(';')[0]
+                sample=response.read(1536)
+                print(json.dumps({'name':name,'status':response.status,'content_type':contenttype,
+                    'bytes':len(sample),'first_byte_s':round(time.monotonic()-started,2)}),flush=True)
+            except urllib.error.HTTPError as error:
+              print(json.dumps({'name':name,'http_status':error.code,
+                    'elapsed_s':round(time.monotonic()-started,2)}),flush=True)
+            except Exception as error:
+              print(json.dumps({'name':name,'error_type':type(error).__name__,
+                    'elapsed_s':round(time.monotonic()-started,2)}),flush=True)
+          PY

@@ -50,6 +50,15 @@ def mixing_command(command, fifo):
         i = result.index('-af')
         chain = result[i+1]
         del result[i:i+2]
+    # The greeting FIFO generates PCM in real time. An unpaced prerecorded
+    # music input can outrun its sidechain, causing the mixer to EOF early
+    # (reproduced: 3s file -> 2.0-2.8s output with FFmpeg exit code 0).
+    # Pace only normal file / on-demand HTTP audio. Real live capture sources
+    # already have their own clock and must not be throttled.
+    first_input = result[result.index('-i') + 1]
+    live_capture = first_input.startswith(('pipe:', 'fd:', 'udp:', 'rtp:', 'rtsp:', 'alsa:', 'pulse:'))
+    if not live_capture and '-re' not in result and '-readrate' not in result:
+        result[result.index('-i'):result.index('-i')] = ['-readrate', '1']
     # Output options (-ar/-ac/-f) must stay after BOTH inputs.
     i = result.index('-i') + 2
     result[i:i] = ['-thread_queue_size','2','-analyzeduration','1','-probesize','32','-f','s16le','-ar',str(RATE),'-ac',str(CHANNELS),

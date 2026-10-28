@@ -77,7 +77,18 @@ def one(client):
         observed['total_s'] = round(time.monotonic()-started, 2)
         print(json.dumps(observed),flush=True)
     except BaseException as exc:
+        # Do not emit yt-dlp's raw error; it can contain signed media URLs.
+        reason = str(exc).lower()
+        category = ('bot_or_login_check' if ('sign in to confirm' in reason
+                     or 'not a bot' in reason or 'login required' in reason)
+                    else 'http_403' if ('http error 403' in reason or '403 forbidden' in reason)
+                    else 'no_audio_formats' if ('requested format is not available' in reason
+                                                or 'no video formats found' in reason)
+                    else 'video_unavailable' if 'video unavailable' in reason
+                    else 'js_challenge' if 'challenge' in reason or 'js runtime' in reason
+                    else 'unclassified')
         print(json.dumps({'client': client, 'error': type(exc).__name__,
+                          'category': category,
                           'seconds': round(time.monotonic()-started, 2)}),flush=True)
 
 

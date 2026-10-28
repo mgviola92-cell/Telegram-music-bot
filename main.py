@@ -34,7 +34,7 @@ from lyrics_service import LyricsUI
 from youtube_health import youtube_guard
 from archive_source import get_archive_audio
 from prefetch import PreparedAudio, AsyncPreparedAudio
-from playback_prepare import warm_voice
+from playback_prepare import warm_voice, decoder_slots
 from stream_probe import probe_audio_url
 from network_audio import DirectAudioStream
 from youtube_relay import (RelayAudioStream, resolve_request as resolve_youtube_relay,
@@ -54,6 +54,7 @@ from voice_transport import (clear_stale_voice, ensure_native_sender,
                              AudioTransportUnavailable, AudioStartupTimeout)
 from source_race import ParallelSources
 from provider_race import race_candidates
+from audio_readiness import verify_candidate_audio, verify_vapters_audio
 from nubcoders_source import resolve as resolve_nubcoders_audio
 from nubcoders_audio import (NubCodersAudioStream, is_nubcoders_stream,
                              verify_nubcoders_audio)
@@ -958,18 +959,23 @@ async def main() -> None:
                         relay = await resolve_youtube_relay(song.source)
                         if not silent_relay_videos.available(relay.source):
                             raise LookupError("Previously silent YouTube media; choose another audio source")
+                        if not await verify_vapters_audio(relay.source):
+                            silent = AudioFramesStalled('Vapters did not decode usable audio')
+                            relay_playback_health.failure(silent)
+                            silent_relay_videos.failure(relay.source, silent)
+                            raise LookupError('Vapters audio could not be decoded')
                         return relay.source, relay.title, relay.duration
                     candidates.append(('vapters', preferred_relay))
                 if (os.getenv('NUBCODERS_ENABLED', '1') == '1'
                         and os.getenv('NUBCODERS_API_TOKEN')):
                     async def nub_for_link():
-                        await asyncio.sleep(0.35)
                         source_id = youtube_id(song.source)
                         if not source_id:
                             raise ValueError('Not a direct YouTube video ID')
                         stream = await asyncio.wait_for(resolve_nubcoders_audio(source_id), timeout=10)
-                        if not await verify_nubcoders_audio(stream):
-                            raise RuntimeError('NubCoders audio sample did not decode')
+                        async with decoder_slots():
+                            if not await verify_nubcoders_audio(stream):
+                                raise RuntimeError('NubCoders audio sample did not decode')
                         return stream, queue_track_title(song) + ' · NubCoders', song.duration_seconds
                     candidates.append(('nubcoders', nub_for_link))
                 if not candidates:
@@ -1004,14 +1010,18 @@ async def main() -> None:
                 relay = await resolve_youtube_relay(song.source)
                 if not silent_relay_videos.available(relay.source):
                     raise LookupError("Previously silent YouTube media; choose another audio source")
+                if not await verify_vapters_audio(relay.source):
+                    silent = AudioFramesStalled('Vapters did not decode usable audio')
+                    relay_playback_health.failure(silent)
+                    silent_relay_videos.failure(relay.source, silent)
+                    raise LookupError('Vapters audio could not be decoded')
                 return relay.source, relay.title, relay.duration
             async def nubcoders_candidate():
-                # Give the usually-fast Vapters metadata a short head start.
-                # Avoid spending a daily NubCoders request if another provider wins first.
-                await asyncio.sleep(0.35)
+                # No provider has a head start; fastest confirmed PCM wins.
                 stream = await asyncio.wait_for(resolve_nubcoders_audio(song.source), timeout=10)
-                if not await verify_nubcoders_audio(stream):
-                    raise RuntimeError('NubCoders audio sample did not decode')
+                async with decoder_slots():
+                    if not await verify_nubcoders_audio(stream):
+                        raise RuntimeError('NubCoders audio sample did not decode')
                 return stream, queue_track_title(song) + ' · NubCoders', song.duration_seconds
             candidates = []
             if (youtube_relay_enabled() and not song.skip_relay
@@ -1023,7 +1033,7 @@ async def main() -> None:
             async def remote_candidate():
                 return await race_candidates(candidates)
             return await (lybot or ParallelSources([], clean_temp)).race(primary, song.source,
-                extra=remote_candidate if candidates else None)
+                extra=remote_candidate if candidates else None, verify=verify_candidate_audio)
         try:
             return await primary.consume()
         except (asyncio.CancelledError, InterruptedError):

@@ -40,3 +40,42 @@ jobs:
               print(json.dumps({'name':name,'error_type':type(error).__name__,
                     'elapsed_s':round(time.monotonic()-started,2)}),flush=True)
           PY
+
+      - name: Check optional authenticated NubCoders with bounded PCM sample
+        env:
+          NUBCODERS_API_TOKEN: ${{ secrets.NUBCODERS_API_TOKEN }}
+        run: |
+          python - <<'PY'
+          import os,json,urllib.request,urllib.parse,urllib.error,subprocess,time
+          token=os.environ.get('NUBCODERS_API_TOKEN')
+          if not token:
+              print('nubcoders_token_present false');quit()
+          print('nubcoders_token_present true')
+          url='https://api.nubcoders.com/stream?'+urllib.parse.urlencode({
+              'q':'jNQXAC9IVRw','mode':'audio','redirect':'false'})
+          started=time.monotonic()
+          try:
+              request=urllib.request.Request(url,headers={
+                  'Authorization':'Bearer '+token,'Accept':'application/json'})
+              with urllib.request.urlopen(request,timeout=10) as response:
+                  obj=json.load(response)
+                  status=response.status
+              signed=obj.get('stream_url') or obj.get('url')
+              print(json.dumps({'nub_api_status':status,
+                  'has_signed_stream':isinstance(signed,str),
+                  'resolve_s':round(time.monotonic()-started,2)}))
+              if isinstance(signed,str) and signed.startswith('https://'):
+                  from urllib.parse import urlsplit
+                  if urlsplit(signed).hostname != 'api.nubcoders.com':
+                      raise ValueError('unexpected signed source host')
+                  command=['ffmpeg','-hide_banner','-nostdin','-loglevel','quiet',
+                      '-rw_timeout','7000000','-i',signed,'-t','0.15',
+                      '-vn','-ac','1','-ar','16000','-f','s16le','pipe:1']
+                  out=subprocess.run(command,capture_output=True,timeout=15)
+                  print(json.dumps({'nub_pcm_bytes':len(out.stdout),'ffmpeg_exit':out.returncode,
+                      'decoder_s':round(time.monotonic()-started,2)}))
+          except Exception as error:
+              print(json.dumps({'nub_api_failure_type':type(error).__name__,
+                   'status':getattr(error,'code',None),
+                   'elapsed_s':round(time.monotonic()-started,2)}))
+          PY

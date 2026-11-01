@@ -3,14 +3,19 @@ import asyncio
 import copy
 import secrets
 import time
+import logging
 from pyrogram import filters
 from pyrogram.enums import ParseMode
 from pyrogram.types import InlineKeyboardButton as B, InlineKeyboardMarkup as K
+
+LOG=logging.getLogger('telegram_music')
+
 
 class OwnerBroadcast:
     def __init__(self,ui):
         self.ui=ui;self.bot=ui.bot;self.store=ui.store
         self.waiting=False;self.selection=None;self.review=None
+        self.temporary_source=None
         self.task=None;self.cancel=asyncio.Event();self.progress=None
         self.counts=(0,0,0)
     def groups(self):
@@ -18,11 +23,16 @@ class OwnerBroadcast:
         return {int(k):v for k,v in d.items()}
     def targets(self):
         g=self.groups();return sorted(g if self.selection is None else set(g)&self.selection)
+    def source(self):
+        return self.temporary_source or self.store.data.get('broadcast')
     async def menu(self,msg,page=0,pick=False):
         def b(t,a):return B(t,callback_data='bc:'+a)
         rows=[];g=self.groups();targets=self.targets()
         text=f'📣 Broadcast\nမှတ်တမ်းရ Group: {len(g)} · ရွေးထားတာ: {len(targets)}\n'
-        text+='ကြေညာစာ: '+('သိမ်းထားပြီး' if self.store.data.get('broadcast') else 'မရွေးရသေးဘူး')
+        status=('ယာယီသိမ်းထားပြီး (Restart ဖြစ်ရင်ပျောက်နိုင်တယ်)' if self.temporary_source
+                else 'သိမ်းထားပြီး' if self.store.data.get('broadcast')
+                else 'မရွေးရသေးဘူး')
+        text+='ကြေညာစာ: '+status
         if pick:
             entries=list(g.items());page=max(0,min(page,max(0,(len(entries)-1)//6)))
             for cid,title in entries[page*6:page*6+6]:rows.append([b(('✓ ' if cid in targets else '')+title[:45],f'toggle:{cid}:{page}')])
@@ -102,11 +112,18 @@ class OwnerBroadcast:
                 self.review=None
                 if a=='new':
                     self.waiting=True
+                    # A new draft needs an explicit All / per-group choice.
+                    self.selection=set()
                     await cb.message.edit_text('📣 ကြေညာစာအဖြစ် ပို့ချင်တဲ့ စာ/ပုံ/ဗီဒီယို/အသံဖိုင် တစ်စောင်ကို ဒီ private chat ထဲ ပို့ပါ။ Forward လုပ်ပို့လည်း ရတယ်။',
                         reply_markup=K([[B('↩ မပို့တော့ဘူး',callback_data='bc:home')]]));return
                 if a=='preview':
-                    source=self.store.data.get('broadcast')
-                    if source:await self.bot.copy_message(uid,source['chat_id'],source['message_id'])
+                    source=self.source()
+                    if source:
+                        try:
+                            await self.bot.copy_message(uid,source['chat_id'],source['message_id'])
+                        except Exception as exc:
+                            LOG.warning('Broadcast preview failed (%s)',type(exc).__name__)
+                            await self.bot.send_message(uid,'⚠️ ဒီစာကို Telegram က Copy မလုပ်ပေးနိုင်ဘူး။ စာအသစ် ပြန်ပို့ပါ။')
                 elif a=='all':self.selection=None
                 elif a=='none':self.selection=set()
                 elif a=='toggle':
@@ -118,17 +135,26 @@ class OwnerBroadcast:
                     await self.menu(cb.message,int(action[2]),True);return
                 elif a=='pick':await self.menu(cb.message,int(action[1]),True);return
                 elif a=='review':
-                    source=copy.deepcopy(self.store.data.get('broadcast'));targets=self.targets()
+                    source=copy.deepcopy(self.source());targets=self.targets()
                     if not source or not targets:
                         await cb.message.edit_text('ကြေညာစာနဲ့ Group ကို အရင်ရွေးပါ။',reply_markup=K([[B('↩ Broadcast',callback_data='bc:home')]]));return
-                    await self.bot.copy_message(uid,source['chat_id'],source['message_id'])
+                    try:
+                        await self.bot.copy_message(uid,source['chat_id'],source['message_id'])
+                    except Exception as exc:
+                        LOG.warning('Broadcast review copy failed (%s)',type(exc).__name__)
+                        await cb.message.edit_text(
+                            '⚠️ ဒီစာကို Copy မလုပ်နိုင်သေးဘူး။ Forward/စာသားအသစ် ပြန်ပို့ပါ။',
+                            reply_markup=K([[b('↩ Broadcast','home')]]))
+                        return
                     token=secrets.token_hex(8)
                     self.review={'token':token,'source':source,'targets':targets,'until':time.monotonic()+300}
                     await cb.message.edit_text(f'📣 အပေါ်က ကြေညာစာကို Group {len(targets)} ခုဆီ ပို့မယ်။',
                         reply_markup=K([[B('✅ အခု ပို့မယ်',callback_data='bc:confirm:'+token)],
                                         [B('↩ မပို့သေးဘူး',callback_data='bc:home')]]));return
                 await self.menu(cb.message)
-            except Exception:
+            except Exception as exc:
+                LOG.warning('Broadcast callback failed action=%s error=%s',
+                            action[0] if action else 'unknown',type(exc).__name__)
                 await self.bot.send_message(uid,'⚠️ Broadcast ပြင်ဆင်မှု မအောင်မြင်ဘူး။ /owner ပြန်သုံးပါ။')
         @self.bot.on_message(filters.private,group=-5)
         async def broadcast_draft(_,msg):
@@ -142,12 +168,43 @@ class OwnerBroadcast:
                 await msg.reply_text('Copy ပို့လို့ရတဲ့ စာ/ပုံ/ဗီဒီယို/အသံဖိုင် ပို့ပါ။');msg.stop_propagation();return
             self.ui.busy=True
             try:
-                await self.bot.copy_message(uid,uid,msg.id)
-                await self.store.set_broadcast(uid,msg.id)
+                # This incoming bot-private message is already a valid source.
+                # Do not require a redundant copy-to-self before saving its ID.
+                # The database stores only the source message reference, not media.
+                persisted=True
+                try:
+                    await self.store.set_broadcast(uid,msg.id)
+                except Exception as exc:
+                    persisted=False
+                    LOG.warning('Broadcast draft persistence unavailable (%s); keeping session-only source',
+                                type(exc).__name__)
+                if persisted:
+                    self.temporary_source=None
+                else:
+                    # Owner can still send this draft during an MTProto outage;
+                    # never pretend the in-memory reference survives a restart.
+                    self.temporary_source={'chat_id':uid,'message_id':msg.id}
                 self.waiting=False;self.review=None
-                panel=await msg.reply_text('📣 ကြေညာစာ သိမ်းပြီးပြီ။',reply_markup=K([[B('Group ရွေးပြီး ပို့မယ်',callback_data='bc:home')]]))
+                self.selection=set()
+                status=('📣 ကြေညာစာ သိမ်းပြီးပြီ။ ဘယ် Group တွေဆီ ပို့မလဲ?'
+                        if persisted else
+                        '⚠️ Saved Messages မှာ မသိမ်းနိုင်သေးဘူး။ ဒီ Bot Session အတွက် '
+                        'ယာယီမှတ်ထားတယ်။ Restart ဖြစ်ရင် ပျောက်နိုင်တယ်။ '
+                        'ဘယ် Group တွေဆီ ပို့မလဲ?')
+                panel=await msg.reply_text(
+                    status,
+                    reply_markup=K([
+                        [B('📣 Group အားလုံး',callback_data='bc:all')],
+                        [B('🎯 Group တစ်ခုချင်းရွေးမယ်',callback_data='bc:pick:0')],
+                        [B('↩ Broadcast Menu',callback_data='bc:home')],
+                    ]))
                 self.ui.panel=panel.id
-            except Exception:await msg.reply_text('⚠️ ကြေညာစာ မသိမ်းရသေးဘူး။ ပြန်စမ်းပါ။')
+            except Exception as exc:
+                LOG.warning('Broadcast intake UI unavailable (%s)',type(exc).__name__)
+                try:
+                    await msg.reply_text('⚠️ စာလက်ခံထားပေမဲ့ Menu မပြနိုင်သေးဘူး။ /owner ပြန်ဖွင့်ပါ။')
+                except Exception:
+                    pass
             finally:self.ui.busy=False
             msg.stop_propagation()
     async def close(self):

@@ -170,24 +170,47 @@ class MusicOwnerStore:
         raw=json.dumps(data,ensure_ascii=False,separators=(',',':')).encode()
         parse_state(raw)
         f=io.BytesIO(raw);f.name=FILE
-        if self.message_id is None:
-            msg=await asyncio.wait_for(self.client.send_document('me',f,caption=TAG,parse_mode=ParseMode.DISABLED,disable_notification=True),15)
+        previous_id=self.message_id
+        if previous_id is None:
+            msg=await asyncio.wait_for(self.client.send_document(
+                'me',f,caption=TAG,parse_mode=ParseMode.DISABLED,
+                disable_notification=True),20)
             new_id=msg.id
         else:
             try:
-                # pyrogrammod 2.4.1's document edit guesses MIME from a path,
-                # even when InputMediaDocument accepts BytesIO. Stage privately.
+                # Updating the existing Saved Messages document is cheap, but
+                # Telegram may reject reupload/edit on certain MTProto sessions.
                 with tempfile.TemporaryDirectory(prefix='mudyar_owner_') as folder:
                     path=Path(folder)/FILE
                     path.write_bytes(raw)
                     path.chmod(0o600)
-                    await asyncio.wait_for(self.client.edit_message_media('me',self.message_id,
-                        InputMediaDocument(str(path),caption=TAG,parse_mode=ParseMode.DISABLED),file_name=FILE),15)
+                    await asyncio.wait_for(self.client.edit_message_media(
+                        'me',previous_id,
+                        InputMediaDocument(str(path),caption=TAG,parse_mode=ParseMode.DISABLED),
+                        file_name=FILE),20)
+                new_id=previous_id
             except Exception as exc:
-                if type(exc).__name__!='MessageNotModified':raise
-            new_id=self.message_id
+                if type(exc).__name__=='MessageNotModified':
+                    new_id=previous_id
+                else:
+                    # Preserve the old settings if this also fails. Never
+                    # delete the old document before the replacement exists.
+                    log.warning('Owner settings media edit failed (%s); trying a fresh private document',
+                                type(exc).__name__)
+                    fresh=io.BytesIO(raw);fresh.name=FILE
+                    replacement=await asyncio.wait_for(self.client.send_document(
+                        'me',fresh,caption=TAG,parse_mode=ParseMode.DISABLED,
+                        disable_notification=True),20)
+                    new_id=replacement.id
         self.data=data
         self.message_id=new_id
+        if previous_id is not None and previous_id!=new_id:
+            try:
+                await asyncio.wait_for(self.client.delete_messages('me',previous_id),8)
+            except Exception as exc:
+                # Newest matching document is loaded first after a restart.
+                log.info('Old owner settings document cleanup deferred (%s)',
+                         type(exc).__name__)
         # Entries observed while the RPC awaited still need another flush.
         for key,value in list(self.observed.items()):
             if data['groups'].get(key)==value:self.observed.pop(key,None)
